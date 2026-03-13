@@ -59,6 +59,12 @@ Or with streaming (partial content as tokens arrive):
 go run ./agent_with_stream "What's the current time and what's 17 * 23?"
 ```
 
+Or interactive conversation (CLI loop until you type `exit`, `quit`, or `bye`):
+
+```bash
+go run ./cmd
+```
+
 ## Examples
 
 | Example | Description |
