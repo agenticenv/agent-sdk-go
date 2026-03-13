@@ -1,0 +1,11 @@
+temporal:
+  host: localhost
+  port: 7233
+  namespace: default
+  taskQueue: temporal-agents-go
+
+llm:
+  type: openai
+  apiKey: ""
+  model: gpt-4o
+  baseURL: https://api.openai.com/v1
