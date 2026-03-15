@@ -9,34 +9,28 @@ import (
 
 	config "github.com/vinodvanja/temporal-agents-go/examples"
 	"github.com/vinodvanja/temporal-agents-go/pkg/agent"
-	"github.com/vinodvanja/temporal-agents-go/pkg/interfaces"
-	"github.com/vinodvanja/temporal-agents-go/pkg/llm"
-	"github.com/vinodvanja/temporal-agents-go/pkg/llm/anthropic"
-	"github.com/vinodvanja/temporal-agents-go/pkg/llm/openai"
 )
 
 func main() {
 	cfg := config.LoadFromEnv()
 
-	llmClient := newLLMClient(&llm.LLMConfig{
-		Type:    cfg.LLM.Type,
-		APIKey:  cfg.LLM.APIKey,
-		Model:   cfg.LLM.Model,
-		BaseURL: cfg.LLM.BaseURL,
-	})
+	llmClient, err := config.NewLLMClientFromConfig(cfg)
+	if err != nil {
+		log.Fatalf("failed to create LLM client: %v", err)
+	}
 
 	opts := []agent.Option{
 		agent.WithName("simple-agent"),
 		agent.WithDescription("Simple agent with built-in worker"),
 		agent.WithSystemPrompt("You are a helpful assistant that can generate text."),
 		agent.WithTemporalConfig(&agent.TemporalConfig{
-			Host:      cfg.Temporal.Host,
-			Port:      cfg.Temporal.Port,
-			Namespace: cfg.Temporal.Namespace,
-			TaskQueue: cfg.Temporal.TaskQueue,
+			Host:      cfg.Host,
+			Port:      cfg.Port,
+			Namespace: cfg.Namespace,
+			TaskQueue: cfg.TaskQueue,
 		}),
 		agent.WithLLMClient(llmClient),
-		agent.WithLogLevel(cfg.Log.Level),
+		agent.WithLogger(config.NewLoggerFromLogConfig(cfg)),
 	}
 
 	a, err := agent.NewAgent(opts...)
@@ -52,16 +46,8 @@ func main() {
 	fmt.Println("user:", prompt)
 	response, err := a.Run(context.Background(), prompt)
 	if err != nil {
-		log.Fatalf("run failed: %v", err)
+		log.Printf("agent foreground run failed: %v", err)
+		return
 	}
 	fmt.Println("assistant: ", response.Content)
-}
-
-func newLLMClient(cfg *llm.LLMConfig) interfaces.LLMClient {
-	switch cfg.Type {
-	case llm.LLMTypeAnthropic:
-		return anthropic.NewClient(cfg)
-	default:
-		return openai.NewClient(cfg)
-	}
 }

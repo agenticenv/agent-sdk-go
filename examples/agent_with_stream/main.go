@@ -10,10 +10,6 @@ import (
 
 	config "github.com/vinodvanja/temporal-agents-go/examples"
 	"github.com/vinodvanja/temporal-agents-go/pkg/agent"
-	"github.com/vinodvanja/temporal-agents-go/pkg/interfaces"
-	"github.com/vinodvanja/temporal-agents-go/pkg/llm"
-	"github.com/vinodvanja/temporal-agents-go/pkg/llm/anthropic"
-	"github.com/vinodvanja/temporal-agents-go/pkg/llm/openai"
 	"github.com/vinodvanja/temporal-agents-go/pkg/tools"
 	"github.com/vinodvanja/temporal-agents-go/pkg/tools/calculator"
 	"github.com/vinodvanja/temporal-agents-go/pkg/tools/currenttime"
@@ -27,12 +23,10 @@ import (
 func main() {
 	cfg := config.LoadFromEnv()
 
-	llmClient := newLLMClient(&llm.LLMConfig{
-		Type:    cfg.LLM.Type,
-		APIKey:  cfg.LLM.APIKey,
-		Model:   cfg.LLM.Model,
-		BaseURL: cfg.LLM.BaseURL,
-	})
+	llmClient, err := config.NewLLMClientFromConfig(cfg)
+	if err != nil {
+		log.Fatalf("failed to create LLM client: %v", err)
+	}
 
 	reg := tools.NewRegistry()
 	reg.Register(echo.New())
@@ -48,16 +42,16 @@ func main() {
 		agent.WithDescription("Agent that streams events via RunStream"),
 		agent.WithSystemPrompt("You are a helpful assistant with access to tools. Use them when appropriate: current time, weather, math, random numbers, Wikipedia, and web search."),
 		agent.WithTemporalConfig(&agent.TemporalConfig{
-			Host:      cfg.Temporal.Host,
-			Port:      cfg.Temporal.Port,
-			Namespace: cfg.Temporal.Namespace,
-			TaskQueue: cfg.Temporal.TaskQueue,
+			Host:      cfg.Host,
+			Port:      cfg.Port,
+			Namespace: cfg.Namespace,
+			TaskQueue: cfg.TaskQueue,
 		}),
 		agent.WithLLMClient(llmClient),
 		agent.WithStream(true),
 		agent.WithToolRegistry(reg),
 		agent.WithToolApprovalPolicy(agent.AutoToolApprovalPolicy()),
-		agent.WithLogLevel(cfg.Log.Level),
+		agent.WithLogger(config.NewLoggerFromLogConfig(cfg)),
 	}
 
 	a, err := agent.NewAgent(opts...)
@@ -76,7 +70,8 @@ func main() {
 
 	eventCh, err := a.RunStream(context.Background(), prompt)
 	if err != nil {
-		log.Fatalf("RunStream failed: %v", err)
+		log.Printf("RunStream failed: %v", err)
+		return
 	}
 
 	var finalContent string
@@ -127,14 +122,5 @@ func printEvent(ev *agent.AgentEvent) {
 		fmt.Printf("[complete] %s\n", ev.Content)
 	default:
 		fmt.Printf("[%s] %+v\n", ev.Type, ev)
-	}
-}
-
-func newLLMClient(cfg *llm.LLMConfig) interfaces.LLMClient {
-	switch cfg.Type {
-	case llm.LLMTypeAnthropic:
-		return anthropic.NewClient(cfg)
-	default:
-		return openai.NewClient(cfg)
 	}
 }

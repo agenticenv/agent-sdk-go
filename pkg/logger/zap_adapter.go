@@ -9,6 +9,12 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
+// ZapLoggerConfig configures a zap logger. Extensible for future options (encoding, sampling, etc.).
+type ZapLoggerConfig struct {
+	Level  string // debug, info, warn, error
+	Output string // stdout, stderr, or file path. Empty = stdout (backward compat)
+}
+
 var _ log.Logger = (*ZapAdapter)(nil)
 
 // ZapAdapter implements go.temporal.io/sdk/log.Logger using zap.
@@ -37,7 +43,7 @@ func parseLevel(s string) zapcore.Level {
 	}
 }
 
-func newZapLoggerConfig(level zapcore.Level) zap.Config {
+func newZapLoggerConfig(level zapcore.Level, output string) zap.Config {
 	encodeConfig := zapcore.EncoderConfig{
 		TimeKey:        "ts",
 		LevelKey:       "level",
@@ -57,27 +63,35 @@ func newZapLoggerConfig(level zapcore.Level) zap.Config {
 		Sampling:         nil,
 		Encoding:         "console",
 		EncoderConfig:    encodeConfig,
-		OutputPaths:      []string{"stdout"},
+		OutputPaths:      []string{output},
 		ErrorOutputPaths: []string{"stderr"},
 	}
 }
 
-// NewZapLogger returns a zap logger at debug level (legacy).
-func NewZapLogger() *zap.Logger {
-	return NewZapLoggerWithLevel("debug")
-}
-
-// NewZapLoggerWithLevel returns a zap logger at the given level (debug, info, warn, error).
-func NewZapLoggerWithLevel(level string) *zap.Logger {
-	cfg := newZapLoggerConfig(parseLevel(level))
-	l, err := cfg.Build()
+// NewZapLoggerWithConfig returns a zap logger from config. Level and Output can be extended later.
+func NewZapLoggerWithConfig(cfg ZapLoggerConfig) *zap.Logger {
+	if cfg.Output == "" {
+		cfg.Output = "stdout"
+	}
+	if cfg.Level == "" {
+		cfg.Level = "error"
+	}
+	level := parseLevel(cfg.Level)
+	output := strings.TrimSpace(cfg.Output)
+	zapCfg := newZapLoggerConfig(level, output)
+	l, err := zapCfg.Build()
 	if err != nil {
 		panic("Unable to create zap logger: " + err.Error())
 	}
 	return l
 }
 
-// NewZapAdapter returns a ZapAdapter that logs via zap. Use with NewZapLoggerWithLevel.
+// NewZapLogger returns a zap logger at debug level (legacy).
+func NewZapLogger() *zap.Logger {
+	return NewZapLoggerWithConfig(ZapLoggerConfig{Level: "debug"})
+}
+
+// NewZapAdapter returns a ZapAdapter that logs via zap. Use with NewZapLoggerWithConfig.
 func NewZapAdapter(zapLogger *zap.Logger) *ZapAdapter {
 	return &ZapAdapter{
 		zl: zapLogger.WithOptions(zap.AddCallerSkip(1)),

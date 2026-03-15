@@ -1,0 +1,101 @@
+# Examples
+
+Run examples to try the temporal-agents-go SDK.
+
+## Prerequisites
+
+**Temporal server** must be running. Start a local dev server with Docker:
+
+```bash
+docker run --rm -p 7233:7233 -p 8233:8233 temporalio/temporal:latest server start-dev --ip 0.0.0.0
+```
+
+- **Temporal service:** localhost:7233
+- **Web UI:** http://localhost:8233
+
+Or use [Temporal CLI](https://docs.temporal.io/cli/setup-cli): `temporal server start-dev`.
+
+For production or self-hosted (Docker Compose, Kubernetes): [Temporal Cloud](https://docs.temporal.io/production-deployment) | [Self-hosted deployment](https://docs.temporal.io/self-hosted-guide/deployment)
+
+The examples use `TEMPORAL_HOST`, `TEMPORAL_PORT`, `TEMPORAL_NAMESPACE` from `.env` (default: localhost, 7233, default). Adjust if your Temporal runs elsewhere.
+
+## Examples overview
+
+| Example | What it demonstrates |
+|---------|---------------------|
+| `simple_agent` | Minimal agent, no tools — Temporal config, system prompt, LLM client, single `Run()` |
+| `agent_with_tools` | Built-in tools (echo, calculator, weather, wikipedia, search) with auto-approval |
+| `agent_with_stream` | Streaming with `RunStream` + partial content (`content_delta`, `tool_call`, `complete`) |
+| `agent_with_tools_approval` | Tools + `WithApprovalHandler` — user approves or rejects each tool run |
+| `agent_with_custom_tools` | Custom tools via `WithTools` — implementing `interfaces.Tool` |
+| `multiple_agents` | Multiple agents with `WithInstanceId` — sequential or concurrent |
+| `agent_with_worker` | Agent and worker in separate processes — `DisableWorker` + `NewAgentWorker` |
+
+## Setup
+
+```bash
+cp env.sample .env
+# Edit .env: set LLM_APIKEY, LLM_MODEL (gpt-4o or claude-3-5-sonnet-20241022)
+```
+
+## Run examples
+
+### Minimal agent (no tools)
+
+```bash
+go run ./simple_agent "Hello, what can you do?"
+```
+
+### Agent with tools
+
+```bash
+go run ./agent_with_tools "What's the weather in Tokyo?"
+```
+
+### Streaming (partial content as tokens arrive)
+
+```bash
+go run ./agent_with_stream "What's the current time and what's 17 * 23?"
+```
+
+### Tools + approval, custom tools, multiple agents, worker split
+
+```bash
+go run ./agent_with_tools_approval "What is 15 + 27?"
+go run ./agent_with_custom_tools "Reverse 'hello world'"
+go run ./multiple_agents "What is 7 times 8?"
+go run ./multiple_agents concurrent "What is 7 times 8?"
+
+# Agent and worker in separate processes: start worker first, then agent
+go run ./agent_with_worker/worker &   # start worker in background
+go run ./agent_with_worker/agent "Hello from remote agent!"
+```
+
+## Logging
+
+Examples send conversation (user prompt, assistant response) to **stdout** and internal logs to **stderr**. By default only errors are logged.
+
+- **See logs while evaluating:** Set `LOG_LEVEL=info` or `LOG_LEVEL=debug` in `.env`, or run:
+  ```bash
+  LOG_LEVEL=debug go run ./simple_agent "Hello, what can you do?"
+  ```
+- **Save logs to a file:** Redirect stderr to a file:
+  ```bash
+  LOG_LEVEL=info go run ./simple_agent "Hello" 2>debug.log
+  ```
+- **Suppress logs:** Show only conversation output:
+  ```bash
+  go run ./simple_agent "Hello" 2>/dev/null
+  ```
+
+## Env vars
+
+| Env var | Description |
+|---------|-------------|
+| `TEMPORAL_HOST`, `TEMPORAL_PORT`, `TEMPORAL_NAMESPACE`, `TEMPORAL_TASKQUEUE` | Temporal connection |
+| `LLM_PROVIDER` | `openai` or `anthropic` |
+| `LLM_APIKEY` | API key |
+| `LLM_MODEL` | e.g. `gpt-4o`, `claude-3-5-sonnet-20241022` |
+| `LLM_BASEURL` | Optional (custom/proxy endpoints) |
+| `LOG_LEVEL` | `error` (default), `warn`, `info`, `debug` — logs go to stderr |
+| `SERPER_API_KEY` | For search tool |

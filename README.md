@@ -9,88 +9,16 @@ Temporal-native AI agent SDK for building agents with [Temporal](https://tempora
 ## Capabilities
 
 - **LLM integration** — OpenAI and Anthropic with tool/function calling
-- **Streaming** — Partial content and thinking deltas via `RunStream` (OpenAI, Anthropic)
-- **Tools** — Built-in tools (calculator, weather, wikipedia, search) and custom tools via `interfaces.Tool`
-- **Tool approval** — Optional approval flow before executing tools (policy: auto, allowlist, or require all)
-- **Embedded worker** — Agent and worker run in the same process
+- **Streaming** — Partial content and thinking deltas via `RunStream`
+- **Tools** — Built-in tools and custom tools via `interfaces.Tool`
+- **Tool approval** — Optional approval flow before executing tools
 - **Temporal-native** — Workflows, activities, durable execution, retries
-
-
-### What you gain with Temporal
-
-- **Durable execution** — The agent loop runs in a workflow; state is persisted. Worker crashes do not lose progress—Temporal replays and resumes automatically.
-- **Automatic retries** — LLM calls, tool execution, and event publishing use configurable retry policies (exponential backoff, up to 3 attempts by default). Transient failures are retried without re-running the whole agent.
-- **Visibility** — Runs are visible in Temporal UI; you can query workflow state, inspect history, and debug failures.
-- **Long-lived approvals** — Tool approval can wait for human input across restarts; the workflow suspends until the approval activity completes.
-
 
 ## Getting started
 
-### 1. Prerequisites
+Prerequisites: [Temporal](https://docs.temporal.io/self-hosted-guide) running, Go 1.21+.
 
-- [Temporal](https://docs.temporal.io/self-hosted-guide) running (or [Temporal Cloud](https://temporal.io/cloud))
-- Go 1.21+
-
-### 2. Setup
-
-```bash
-git clone <repo-url>
-cd temporal-agents-go
-cp env.sample .env
-# Edit .env: set LLM_APIKEY, LLM_MODEL (gpt-4o or claude-3-5-sonnet-20241022)
-```
-
-### 3. Run an example
-
-```bash
-cd examples
-go run ./simple_agent "Hello, what can you do?"
-```
-
-Or with tools:
-
-```bash
-go run ./agent_with_tools "What's the weather in Tokyo?"
-```
-
-Or with streaming (partial content as tokens arrive):
-
-```bash
-go run ./agent_with_stream "What's the current time and what's 17 * 23?"
-```
-
-Or interactive conversation (CLI loop until you type `exit`, `quit`, or `bye`):
-
-```bash
-go run ./cmd
-```
-
-## Examples
-
-| Example | Description |
-|---------|-------------|
-| `simple_agent` | Minimal agent, no tools |
-| `agent_with_tools` | Agent with built-in tools (echo, calculator, weather, wikipedia, search) |
-| `agent_with_stream` | Streaming events via RunStream; partial content and thinking deltas |
-| `agent_with_tools_approval` | Tools + user approval before each tool run |
-| `agent_with_custom_tools` | Custom tools (reverser, word count) |
-| `agent_with_worker` | Agent and worker in separate processes (not supported) |
-| `multiple_agents` | Two agents in same process; sequential (default) or concurrent by arg |
-
-```bash
-cd examples
-go run ./simple_agent
-go run ./agent_with_tools "Roll a dice"
-go run ./agent_with_stream "What's the current time?"
-go run ./agent_with_tools_approval "What is 15 + 27?"
-go run ./agent_with_custom_tools "Reverse 'hello world'"
-go run ./multiple_agents "What is 7 times 8?"
-go run ./multiple_agents concurrent "What is 7 times 8?"
-```
-
-## Usage
-
-### Basic agent (OpenAI)
+### Create an agent and run
 
 ```go
 import (
@@ -99,16 +27,18 @@ import (
     "github.com/vinodvanja/temporal-agents-go/pkg/llm/openai"
 )
 
+llmClient, _ := openai.NewClient(
+    llm.WithAPIKey("sk-..."),
+    llm.WithModel("gpt-4o"),
+)
+
 a, _ := agent.NewAgent(
     agent.WithTemporalConfig(&agent.TemporalConfig{
         Host: "localhost", Port: 7233,
         Namespace: "default", TaskQueue: "my-app",
     }),
     agent.WithSystemPrompt("You are a helpful assistant."),
-    agent.WithLLMClient(openai.NewClient(&llm.LLMConfig{
-        APIKey: "sk-...",
-        Model:  "gpt-4o",
-    })),
+    agent.WithLLMClient(llmClient),
 )
 defer a.Close()
 
@@ -116,53 +46,42 @@ result, err := a.Run(ctx, "Hello")
 // result.Content, result.AgentName, result.Model
 ```
 
-### Basic agent (Anthropic)
+[examples/simple_agent](examples/simple_agent)
+
+### Create an LLM client (OpenAI or Anthropic)
 
 ```go
-import "github.com/vinodvanja/temporal-agents-go/pkg/llm/anthropic"
-
-a, _ := agent.NewAgent(
-    agent.WithTemporalConfig(&agent.TemporalConfig{...}),
-    agent.WithSystemPrompt("You are a helpful assistant."),
-    agent.WithLLMClient(anthropic.NewClient(&llm.LLMConfig{
-        APIKey: "...",
-        Model:  "claude-3-5-sonnet-20241022",
-    })),
+// OpenAI
+llmClient, err := openai.NewClient(
+    llm.WithAPIKey("sk-..."),
+    llm.WithModel("gpt-4o"),
+    llm.WithBaseURL("https://api.openai.com/v1"),  // optional
 )
-defer a.Close()
-result, err := a.Run(ctx, "Hello")
+
+// Anthropic
+llmClient, err := anthropic.NewClient(
+    llm.WithAPIKey("..."),
+    llm.WithModel("claude-3-5-sonnet-20241022"),
+)
 ```
 
-### Streaming (RunStream)
+### Stream events (RunStream)
 
-`RunStream` returns a channel of `AgentEvent`—you receive events as the agent runs (content, tool calls, tool results, complete). This is the event-driven API.
-
-`WithStream(true)` enables **partial content** streaming: tokens arrive as `content_delta` and `thinking_delta` events as they are generated, instead of waiting for the full `content` at the end. Requires an LLM that supports streaming (OpenAI, Anthropic). Default: `false`.
+`RunStream` returns a channel of `AgentEvent`. Use `agent.WithStream(true)` for partial tokens as they arrive.
 
 ```go
 a, _ := agent.NewAgent(
     agent.WithTemporalConfig(...),
     agent.WithLLMClient(...),
-    agent.WithStream(true),  // optional: partial content (tokens as they arrive)
+    agent.WithStream(true),
 )
 defer a.Close()
 
 eventCh, err := a.RunStream(ctx, "What's 17 * 23?")
-if err != nil {
-    log.Fatal(err)
-}
-
 for ev := range eventCh {
-    if ev == nil {
-        continue
-    }
     switch ev.Type {
     case agent.AgentEventContentDelta:
-        fmt.Print(ev.Content)  // partial token, no newline
-    case agent.AgentEventThinkingDelta:
-        fmt.Print(ev.Content)  // Anthropic extended thinking
-    case agent.AgentEventContent:
-        fmt.Println(ev.Content)  // full content
+        fmt.Print(ev.Content)
     case agent.AgentEventToolCall:
         fmt.Printf("tool: %s\n", ev.ToolCall.ToolName)
     case agent.AgentEventComplete:
@@ -171,94 +90,109 @@ for ev := range eventCh {
 }
 ```
 
-**Event types:** `content`, `tool_call`, `tool_result`, `error`, `complete` (always). With `WithStream(true)` you also get `content_delta` and `thinking_delta` (partial tokens).
+[examples/agent_with_stream](examples/agent_with_stream)
 
-You can combine `WithStream(true)` with tools and approval—see `examples/agent_with_stream`.
+### Tools
 
-### Task queue
-
-TaskQueue is required in TemporalConfig and must be unique per agent:
-
-- **Single agent:** `TaskQueue: "my-agent"`
-- **Multiple agents (same process):** Use different TaskQueues or `WithInstanceId()`:
-  ```go
-  // Option A: Different TaskQueue per agent
-  agent.NewAgent(..., agent.WithTemporalConfig(&agent.TemporalConfig{..., TaskQueue: "my-agent-math"}))
-  agent.NewAgent(..., agent.WithTemporalConfig(&agent.TemporalConfig{..., TaskQueue: "my-agent-creative"}))
-
-  // Option B: Same base TaskQueue + WithInstanceId
-  cfg := &agent.TemporalConfig{..., TaskQueue: "my-agent"}
-  agent.NewAgent(..., agent.WithTemporalConfig(cfg), agent.WithInstanceId("agent-1"))
-  agent.NewAgent(..., agent.WithTemporalConfig(cfg), agent.WithInstanceId("agent-2"))
-  ```
-- **Multiple instances (e.g. scaled pods):** `WithInstanceId(os.Getenv("POD_NAME"))` — each instance gets `{TaskQueue}-{instanceId}`
-- **DisableWorker:** Not supported (use embedded worker)
-
-### With tools
+Register tools and pass to the agent. Use `agent.WithToolApprovalPolicy(agent.AutoToolApprovalPolicy())` to skip approval (or omit for default approval flow).
 
 ```go
-import (
-    "github.com/vinodvanja/temporal-agents-go/pkg/tools"
-    "github.com/vinodvanja/temporal-agents-go/pkg/tools/calculator"
-    "github.com/vinodvanja/temporal-agents-go/pkg/tools/echo"
-)
-
 reg := tools.NewRegistry()
-reg.Register(echo.New())
 reg.Register(calculator.New())
+reg.Register(weather.New())
 
 a, _ := agent.NewAgent(
     agent.WithTemporalConfig(...),
     agent.WithLLMClient(...),
     agent.WithToolRegistry(reg),
-    agent.WithToolApprovalPolicy(agent.AutoToolApprovalPolicy()), // skip approval for demos
+    agent.WithToolApprovalPolicy(agent.AutoToolApprovalPolicy()),
 )
+defer a.Close()
+
+result, _ := a.Run(ctx, "What's the weather in Tokyo?")
 ```
 
-### Custom tools
-
-Implement `interfaces.Tool`: `Name()`, `Description()`, `Parameters()`, `Execute()`.
-
-```go
-func (t *Reverser) Parameters() interfaces.JSONSchema {
-    return tools.Params(
-        map[string]interfaces.JSONSchema{
-            "text": tools.ParamString("Text to reverse"),
-        },
-        "text",
-    )
-}
-```
-
-**Built-in tools:** echo, currenttime, random (demo), calculator, weather (Open-Meteo), wikipedia, search (Serper; needs `SERPER_API_KEY`).
+[examples/agent_with_tools](examples/agent_with_tools)
 
 ### Tool approval
 
-By default, all tools require approval. Use `WithToolApprovalPolicy` to relax:
+By default tools require approval. Use `agent.WithApprovalHandler` to handle approvals:
 
 ```go
-agent.WithToolApprovalPolicy(agent.AutoToolApprovalPolicy()),           // no approval
-agent.WithToolApprovalPolicy(agent.AllowlistToolApprovalPolicy("echo")), // only echo auto
-agent.WithApprovalHandler(func(ctx context.Context, req *agent.ApprovalRequest, onApproved, onRejected agent.ApprovalSender) {
-    if userSaysYes(req) {
-        onApproved("")
-    } else {
-        onRejected("rejected")
-    }
-}),
+a, _ := agent.NewAgent(
+    agent.WithTemporalConfig(...),
+    agent.WithLLMClient(...),
+    agent.WithToolRegistry(reg),
+    agent.WithApprovalHandler(func(ctx context.Context, req *agent.ApprovalRequest, onApproval agent.ApprovalSender) {
+        // Prompt user, then call onApproval(agent.ApprovalStatusApproved) or onApproval(agent.ApprovalStatusRejected)
+    }),
+)
 ```
+
+[examples/agent_with_tools_approval](examples/agent_with_tools_approval)
+
+### Custom tools
+
+Implement `interfaces.Tool`: `Name()`, `Description()`, `Parameters()`, `Execute()`. Register with `agent.WithTools(tool1, tool2)`.
+
+[examples/agent_with_custom_tools](examples/agent_with_custom_tools)
+
+### Multiple agents
+
+Use `agent.WithInstanceId` when multiple agents share a base TaskQueue:
+
+```go
+a1, _ := agent.NewAgent(
+    agent.WithTemporalConfig(cfg),
+    agent.WithInstanceId("agent-1"),
+    ...
+)
+a2, _ := agent.NewAgent(
+    agent.WithTemporalConfig(cfg),
+    agent.WithInstanceId("agent-2"),
+    ...
+)
+```
+
+[examples/multiple_agents](examples/multiple_agents)
+
+### Agent and worker in separate processes
+
+Agent process: use `agent.DisableWorker()`. Worker process: use `agent.NewAgentWorker()` with the same config.
+
+```go
+// Worker process
+w, _ := agent.NewAgentWorker(agent.WithTemporalConfig(...), agent.WithLLMClient(...))
+defer w.Close()
+go w.Start()
+
+// Agent process
+a, _ := agent.NewAgent(
+    agent.WithTemporalConfig(...),
+    agent.WithLLMClient(...),
+    agent.DisableWorker(),
+)
+result, _ := a.Run(ctx, "Hello")
+```
+
+[examples/agent_with_worker](examples/agent_with_worker)
+
+---
 
 ## Configuration
 
-Config via env (and `.env`). Copy `env.sample` to `.env`.
+- **EnableRemoteWorkers:** Set `agent.WithEnableRemoteWorkers(true)` when using `DisableWorker` with approval or streaming.
+- **Env config:** [examples/README.md](examples/README.md) for examples; [cmd/README.md](cmd/README.md) for CLI.
 
-| Env var | Description |
-|---------|-------------|
-| `TEMPORAL_HOST`, `TEMPORAL_PORT`, `TEMPORAL_NAMESPACE`, `TEMPORAL_TASKQUEUE` | Temporal connection (TaskQueue required, unique per agent) |
-| `LLM_TYPE` | `openai` or `anthropic` |
-| `LLM_APIKEY` | API key |
-| `LLM_MODEL` | e.g. `gpt-4o`, `claude-3-5-sonnet-20241022` |
-| `LLM_BASEURL` | Optional (custom/proxy endpoints) |
-| `SERPER_API_KEY` | For search tool |
+---
 
-CLI: `go run ./cmd` or `go run ./cmd -config cmd/config.yaml`.
+## Setup and run examples
+
+```bash
+git clone <repo-url>
+cd temporal-agents-go
+cp examples/env.sample examples/.env
+# Edit examples/.env: set LLM_APIKEY, LLM_MODEL
+```
+
+See **[examples/README.md](examples/README.md)** for how to run examples and the CLI.

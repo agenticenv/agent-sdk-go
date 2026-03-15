@@ -10,30 +10,40 @@ import (
 	"github.com/openai/openai-go/v3/shared"
 	"github.com/vinodvanja/temporal-agents-go/pkg/interfaces"
 	"github.com/vinodvanja/temporal-agents-go/pkg/llm"
+	"go.uber.org/zap"
 )
 
 var _ interfaces.LLMClient = (*Client)(nil)
 
 // Client implements interfaces.LLMClient for OpenAI.
 type Client struct {
-	config *llm.LLMConfig
+	llm.LLMConfig
 	client openai.Client
 }
 
 // NewClient creates a new OpenAI LLM client.
-func NewClient(config *llm.LLMConfig) interfaces.LLMClient {
-	opts := []option.RequestOption{option.WithAPIKey(config.APIKey)}
-	if config.BaseURL != "" {
-		opts = append(opts, option.WithBaseURL(config.BaseURL))
+func NewClient(opts ...llm.Option) (*Client, error) {
+	config, err := llm.BuildConfig(opts...)
+	if err != nil {
+		return nil, err
 	}
-	return &Client{
-		config: config,
-		client: openai.NewClient(opts...),
+	c := &Client{
+		LLMConfig: *config,
 	}
+	options := []option.RequestOption{option.WithAPIKey(c.APIKey)}
+	if c.BaseURL != "" {
+		options = append(options, option.WithBaseURL(c.BaseURL))
+	}
+	c.client = openai.NewClient(options...)
+	return c, nil
 }
 
-func (c *Client) Model() string {
-	return c.config.Model
+func (c *Client) GetProvider() interfaces.LLMProvider {
+	return interfaces.LLMProviderOpenAI
+}
+
+func (c *Client) GetModel() string {
+	return c.Model
 }
 
 func (c *Client) IsStreamSupported() bool {
@@ -44,7 +54,7 @@ func (c *Client) Generate(ctx context.Context, req *interfaces.LLMRequest) (*int
 	messages := messagesToOpenAI(req)
 	params := openai.ChatCompletionNewParams{
 		Messages: messages,
-		Model:    c.config.Model,
+		Model:    c.Model,
 	}
 	if len(req.Tools) > 0 {
 		params.Tools = toolsToOpenAI(req.Tools)
@@ -52,18 +62,45 @@ func (c *Client) Generate(ctx context.Context, req *interfaces.LLMRequest) (*int
 			OfAuto: openai.String("auto"),
 		}
 	}
+	// Log safe debug info only (no messages/content to avoid leaking sensitive data)
+	c.Logger.Debug("generating openai response",
+		zap.String("model", c.Model),
+		zap.Int("messageCount", len(req.Messages)),
+		zap.Int("toolCount", len(req.Tools)),
+		zap.Bool("hasSystemMessage", req.SystemMessage != ""))
 	resp, err := c.client.Chat.Completions.New(ctx, params)
 	if err != nil {
 		return nil, err
 	}
+	var contentLen int
+	var toolNames []string
+	if len(resp.Choices) > 0 {
+		m := resp.Choices[0].Message
+		contentLen = len(m.Content)
+		toolNames = make([]string, 0, len(m.ToolCalls))
+		for _, tc := range m.ToolCalls {
+			if tc.Function.Name != "" {
+				toolNames = append(toolNames, tc.Function.Name)
+			}
+		}
+	}
+	c.Logger.Debug("openai response generated",
+		zap.String("model", resp.Model),
+		zap.Int("contentLen", contentLen),
+		zap.Int("toolCallCount", len(toolNames)),
+		zap.Strings("toolNames", toolNames))
 	return openAIResponseToLLM(resp), nil
 }
 
 func (c *Client) GenerateStream(ctx context.Context, req *interfaces.LLMRequest) (interfaces.LLMStream, error) {
+	c.Logger.Debug("starting openai stream",
+		zap.String("model", c.Model),
+		zap.Int("messageCount", len(req.Messages)),
+		zap.Int("toolCount", len(req.Tools)))
 	messages := messagesToOpenAI(req)
 	params := openai.ChatCompletionNewParams{
 		Messages: messages,
-		Model:    c.config.Model,
+		Model:    c.Model,
 	}
 	if len(req.Tools) > 0 {
 		params.Tools = toolsToOpenAI(req.Tools)

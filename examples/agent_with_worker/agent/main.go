@@ -4,57 +4,48 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"strings"
+	"time"
 
 	config "github.com/vinodvanja/temporal-agents-go/examples"
+	"github.com/vinodvanja/temporal-agents-go/examples/agent_with_worker/opts"
 	"github.com/vinodvanja/temporal-agents-go/pkg/agent"
-	"github.com/vinodvanja/temporal-agents-go/pkg/interfaces"
-	"github.com/vinodvanja/temporal-agents-go/pkg/llm"
-	"github.com/vinodvanja/temporal-agents-go/pkg/llm/anthropic"
-	"github.com/vinodvanja/temporal-agents-go/pkg/llm/openai"
 )
 
 func main() {
 	cfg := config.LoadFromEnv()
 
-	llmClient := newLLMClient(&llm.LLMConfig{
-		Type:    cfg.LLM.Type,
-		APIKey:  cfg.LLM.APIKey,
-		Model:   cfg.LLM.Model,
-		BaseURL: cfg.LLM.BaseURL,
-	})
-
-	opts := []agent.Option{
-		agent.WithName("agent"),
-		agent.WithSystemPrompt("You are a helpful assistant."),
-		agent.WithTemporalConfig(&agent.TemporalConfig{
-			Host:      cfg.Temporal.Host,
-			Port:      cfg.Temporal.Port,
-			Namespace: cfg.Temporal.Namespace,
-			TaskQueue: cfg.Temporal.TaskQueue,
-		}),
-		agent.WithLLMClient(llmClient),
-		agent.DisableWorker(),
-		agent.WithLogLevel(cfg.Log.Level),
+	llmClient, err := config.NewLLMClientFromConfig(cfg)
+	if err != nil {
+		log.Fatalf("failed to create LLM client: %v", err)
 	}
 
-	a, err := agent.NewAgent(opts...)
+	// Common opts (name, description, system prompt, Temporal, LLM, logger)
+	baseOpts := opts.Common(cfg.Host, cfg.Port, cfg.Namespace, cfg.TaskQueue, llmClient, config.NewLoggerFromLogConfig(cfg))
+	// Agent-specific: no embedded worker, use remote workers, timeout for interactive use
+	agentOpts := append(baseOpts,
+		agent.DisableWorker(),
+		agent.WithEnableRemoteWorkers(true),
+		agent.WithTimeout(3*time.Minute),
+	)
+
+	a, err := agent.NewAgent(agentOpts...)
 	if err != nil {
 		log.Fatalf("failed to create agent: %v", err)
 	}
 	defer a.Close()
 
-	response, err := a.Run(context.Background(), "Hello from remote agent!")
+	prompt := strings.Join(os.Args[1:], " ")
+	if prompt == "" {
+		prompt = "Hello, what can you do?"
+	}
+	fmt.Println("user:", prompt)
+	fmt.Println("(Ensure worker is running in another terminal. Waits up to 15s for workers.)")
+	response, err := a.Run(context.Background(), prompt)
 	if err != nil {
-		log.Fatalf("failed to run agent: %v", err)
+		log.Printf("failed to run agent: %v", err)
+		return
 	}
-	fmt.Println(response.Content)
-}
-
-func newLLMClient(cfg *llm.LLMConfig) interfaces.LLMClient {
-	switch cfg.Type {
-	case llm.LLMTypeAnthropic:
-		return anthropic.NewClient(cfg)
-	default:
-		return openai.NewClient(cfg)
-	}
+	fmt.Println("assistant: ", response.Content)
 }

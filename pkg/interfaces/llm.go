@@ -7,10 +7,18 @@ import (
 
 //go:generate mockgen -destination=./mocks/mock_llm.go -package=mocks github.com/vinodvanja/temporal-agents-go/pkg/interfaces LLMClient
 
+type LLMProvider string
+
+const (
+	LLMProviderOpenAI    LLMProvider = "openai"
+	LLMProviderAnthropic LLMProvider = "anthropic"
+)
+
 type LLMClient interface {
 	Generate(ctx context.Context, request *LLMRequest) (*LLMResponse, error)
 	GenerateStream(ctx context.Context, request *LLMRequest) (LLMStream, error)
-	Model() string
+	GetModel() string
+	GetProvider() LLMProvider
 	// IsStreamSupported returns true if the client supports streaming (e.g. OpenAI, Anthropic).
 	IsStreamSupported() bool
 }

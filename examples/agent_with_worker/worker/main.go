@@ -1,42 +1,28 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
 
 	config "github.com/vinodvanja/temporal-agents-go/examples"
+	"github.com/vinodvanja/temporal-agents-go/examples/agent_with_worker/opts"
 	"github.com/vinodvanja/temporal-agents-go/pkg/agent"
-	"github.com/vinodvanja/temporal-agents-go/pkg/interfaces"
-	"github.com/vinodvanja/temporal-agents-go/pkg/llm"
-	"github.com/vinodvanja/temporal-agents-go/pkg/llm/anthropic"
-	"github.com/vinodvanja/temporal-agents-go/pkg/llm/openai"
 )
 
 func main() {
 	cfg := config.LoadFromEnv()
 
-	llmClient := newLLMClient(&llm.LLMConfig{
-		Type:    cfg.LLM.Type,
-		APIKey:  cfg.LLM.APIKey,
-		Model:   cfg.LLM.Model,
-		BaseURL: cfg.LLM.BaseURL,
-	})
-
-	opts := []agent.Option{
-		agent.WithName("agent-worker"),
-		agent.WithSystemPrompt("You are a helpful assistant."),
-		agent.WithTemporalConfig(&agent.TemporalConfig{
-			Host:      cfg.Temporal.Host,
-			Port:      cfg.Temporal.Port,
-			Namespace: cfg.Temporal.Namespace,
-			TaskQueue: cfg.Temporal.TaskQueue,
-		}),
-		agent.WithLLMClient(llmClient),
-		agent.WithLogLevel(cfg.Log.Level),
+	llmClient, err := config.NewLLMClientFromConfig(cfg)
+	if err != nil {
+		log.Fatalf("failed to create LLM client: %v", err)
 	}
 
-	w, err := agent.NewAgentWorker(opts...)
+	// Common opts (name, description, system prompt, Temporal, LLM, logger)
+	workerOpts := opts.Common(cfg.Host, cfg.Port, cfg.Namespace, cfg.TaskQueue, llmClient, config.NewLoggerFromLogConfig(cfg))
+
+	w, err := agent.NewAgentWorker(workerOpts...)
 	if err != nil {
 		log.Fatalf("failed to create agent worker: %v", err)
 	}
@@ -45,21 +31,15 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt)
 
+	fmt.Printf("Agent worker starting on task queue %q. Run this before the agent.\n", cfg.TaskQueue)
+	// Start() blocks until Close() is called. Run it in a goroutine so we can handle shutdown.
 	go func() {
+		fmt.Println("Agent worker running. Press Ctrl+C to stop.")
 		if err := w.Start(); err != nil {
 			log.Printf("worker stopped: %v", err)
 		}
 	}()
 
 	<-sigChan
-	log.Println("shutting down...")
-}
-
-func newLLMClient(cfg *llm.LLMConfig) interfaces.LLMClient {
-	switch cfg.Type {
-	case llm.LLMTypeAnthropic:
-		return anthropic.NewClient(cfg)
-	default:
-		return openai.NewClient(cfg)
-	}
+	fmt.Println("Shutting down agent worker...")
 }

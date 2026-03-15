@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -10,10 +11,6 @@ import (
 
 	config "github.com/vinodvanja/temporal-agents-go/examples"
 	"github.com/vinodvanja/temporal-agents-go/pkg/agent"
-	"github.com/vinodvanja/temporal-agents-go/pkg/interfaces"
-	"github.com/vinodvanja/temporal-agents-go/pkg/llm"
-	"github.com/vinodvanja/temporal-agents-go/pkg/llm/anthropic"
-	"github.com/vinodvanja/temporal-agents-go/pkg/llm/openai"
 	"github.com/vinodvanja/temporal-agents-go/pkg/tools"
 	"github.com/vinodvanja/temporal-agents-go/pkg/tools/calculator"
 	"github.com/vinodvanja/temporal-agents-go/pkg/tools/echo"
@@ -22,12 +19,10 @@ import (
 func main() {
 	cfg := config.LoadFromEnv()
 
-	llmClient := newLLMClient(&llm.LLMConfig{
-		Type:    cfg.LLM.Type,
-		APIKey:  cfg.LLM.APIKey,
-		Model:   cfg.LLM.Model,
-		BaseURL: cfg.LLM.BaseURL,
-	})
+	llmClient, err := config.NewLLMClientFromConfig(cfg)
+	if err != nil {
+		log.Fatalf("failed to create LLM client: %v", err)
+	}
 
 	reg := tools.NewRegistry()
 	reg.Register(echo.New())
@@ -38,16 +33,16 @@ func main() {
 		agent.WithDescription("Agent with tools that require user approval before execution"),
 		agent.WithSystemPrompt("You are a helpful assistant. Use the echo or calculator tool when asked."),
 		agent.WithTemporalConfig(&agent.TemporalConfig{
-			Host:      cfg.Temporal.Host,
-			Port:      cfg.Temporal.Port,
-			Namespace: cfg.Temporal.Namespace,
-			TaskQueue: cfg.Temporal.TaskQueue,
+			Host:      cfg.Host,
+			Port:      cfg.Port,
+			Namespace: cfg.Namespace,
+			TaskQueue: cfg.TaskQueue,
 		}),
 		agent.WithLLMClient(llmClient),
 		agent.WithToolRegistry(reg),
 		// Default policy: all tools require approval (no WithToolApprovalPolicy)
 		agent.WithApprovalHandler(approvalHandler),
-		agent.WithLogLevel(cfg.Log.Level),
+		agent.WithLogger(config.NewLoggerFromLogConfig(cfg)),
 	}
 
 	a, err := agent.NewAgent(opts...)
@@ -64,13 +59,15 @@ func main() {
 	fmt.Println("user:", prompt)
 	response, err := a.Run(context.Background(), prompt)
 	if err != nil {
-		log.Fatalf("run failed: %v", err)
+		log.Printf("run failed: %v", err)
+		return
 	}
 	fmt.Println("agent:", response.Content)
 }
 
 func approvalHandler(ctx context.Context, req *agent.ApprovalRequest, onApproval agent.ApprovalSender) {
-	fmt.Printf("\n--- Tool approval required ---\nTool: %s\nArgs: %v\nApprove? (y/n): ", req.ToolName, req.Args)
+	argsJSON, _ := json.MarshalIndent(req.Args, "", "  ")
+	fmt.Printf("\n--- Tool approval required ---\nTool: %s\nArgs:\n%s\nApprove? (y/n): ", req.ToolName, string(argsJSON))
 	scanner := bufio.NewScanner(os.Stdin)
 	if !scanner.Scan() {
 		fmt.Println("no input")
@@ -80,14 +77,5 @@ func approvalHandler(ctx context.Context, req *agent.ApprovalRequest, onApproval
 		onApproval(agent.ApprovalStatusApproved)
 	} else {
 		onApproval(agent.ApprovalStatusRejected)
-	}
-}
-
-func newLLMClient(cfg *llm.LLMConfig) interfaces.LLMClient {
-	switch cfg.Type {
-	case llm.LLMTypeAnthropic:
-		return anthropic.NewClient(cfg)
-	default:
-		return openai.NewClient(cfg)
 	}
 }

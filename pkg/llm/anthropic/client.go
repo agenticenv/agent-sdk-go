@@ -10,30 +10,40 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/shared/constant"
 	"github.com/vinodvanja/temporal-agents-go/pkg/interfaces"
 	"github.com/vinodvanja/temporal-agents-go/pkg/llm"
+	"go.uber.org/zap"
 )
 
 var _ interfaces.LLMClient = (*Client)(nil)
 
 // Client implements interfaces.LLMClient for Anthropic Claude.
 type Client struct {
-	config *llm.LLMConfig
+	llm.LLMConfig
 	client anthropic.Client
 }
 
 // NewClient creates a new Anthropic LLM client.
-func NewClient(config *llm.LLMConfig) interfaces.LLMClient {
-	opts := []option.RequestOption{option.WithAPIKey(config.APIKey)}
-	if config.BaseURL != "" {
-		opts = append(opts, option.WithBaseURL(config.BaseURL))
+func NewClient(opts ...llm.Option) (*Client, error) {
+	config, err := llm.BuildConfig(opts...)
+	if err != nil {
+		return nil, err
 	}
-	return &Client{
-		config: config,
-		client: anthropic.NewClient(opts...),
+	c := &Client{
+		LLMConfig: *config,
 	}
+	options := []option.RequestOption{option.WithAPIKey(c.APIKey)}
+	if c.BaseURL != "" {
+		options = append(options, option.WithBaseURL(c.BaseURL))
+	}
+	c.client = anthropic.NewClient(options...)
+	return c, nil
 }
 
-func (c *Client) Model() string {
-	return c.config.Model
+func (c *Client) GetProvider() interfaces.LLMProvider {
+	return interfaces.LLMProviderAnthropic
+}
+
+func (c *Client) GetModel() string {
+	return c.Model
 }
 
 func (c *Client) IsStreamSupported() bool {
@@ -43,7 +53,7 @@ func (c *Client) IsStreamSupported() bool {
 func (c *Client) Generate(ctx context.Context, req *interfaces.LLMRequest) (*interfaces.LLMResponse, error) {
 	messages := messagesToAnthropic(req)
 	params := anthropic.MessageNewParams{
-		Model:     anthropic.Model(c.config.Model),
+		Model:     anthropic.Model(c.Model),
 		MaxTokens: 1024,
 		Messages:  messages,
 	}
@@ -58,11 +68,29 @@ func (c *Client) Generate(ctx context.Context, req *interfaces.LLMRequest) (*int
 			OfAuto: &anthropic.ToolChoiceAutoParam{},
 		}
 	}
+	// Log safe debug info only (no messages/content to avoid leaking sensitive data)
+	c.Logger.Debug("generating anthropic response",
+		zap.String("model", c.Model),
+		zap.Int("messageCount", len(req.Messages)),
+		zap.Int("toolCount", len(req.Tools)),
+		zap.Bool("hasSystemMessage", req.SystemMessage != ""))
 	msg, err := c.client.Messages.New(ctx, params)
 	if err != nil {
 		return nil, err
 	}
 	content, toolCalls := extractContentAndToolCalls(msg.Content)
+	toolNames := make([]string, 0, len(toolCalls))
+	for _, tc := range toolCalls {
+		if tc != nil && tc.ToolName != "" {
+			toolNames = append(toolNames, tc.ToolName)
+		}
+	}
+	c.Logger.Debug("anthropic response generated",
+		zap.String("model", string(msg.Model)),
+		zap.String("stopReason", string(msg.StopReason)),
+		zap.Int("contentLen", len(content)),
+		zap.Int("toolCallCount", len(toolNames)),
+		zap.Strings("toolNames", toolNames))
 	return &interfaces.LLMResponse{
 		Content:   content,
 		ToolCalls: toolCalls,
@@ -74,9 +102,13 @@ func (c *Client) Generate(ctx context.Context, req *interfaces.LLMRequest) (*int
 }
 
 func (c *Client) GenerateStream(ctx context.Context, req *interfaces.LLMRequest) (interfaces.LLMStream, error) {
+	c.Logger.Debug("starting anthropic stream",
+		zap.String("model", c.Model),
+		zap.Int("messageCount", len(req.Messages)),
+		zap.Int("toolCount", len(req.Tools)))
 	messages := messagesToAnthropic(req)
 	params := anthropic.MessageNewParams{
-		Model:     anthropic.Model(c.config.Model),
+		Model:     anthropic.Model(c.Model),
 		MaxTokens: 1024,
 		Messages:  messages,
 	}

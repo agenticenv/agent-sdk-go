@@ -3,18 +3,14 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"strings"
 
-	config "github.com/vinodvanja/temporal-agents-go/examples"
 	"github.com/vinodvanja/temporal-agents-go/pkg/agent"
-	"github.com/vinodvanja/temporal-agents-go/pkg/interfaces"
-	"github.com/vinodvanja/temporal-agents-go/pkg/llm"
-	"github.com/vinodvanja/temporal-agents-go/pkg/llm/anthropic"
-	"github.com/vinodvanja/temporal-agents-go/pkg/llm/openai"
 	"github.com/vinodvanja/temporal-agents-go/pkg/tools"
 	"github.com/vinodvanja/temporal-agents-go/pkg/tools/calculator"
 	"github.com/vinodvanja/temporal-agents-go/pkg/tools/currenttime"
@@ -28,26 +24,19 @@ import (
 const exitPrompt = "Type 'exit', 'quit', or 'bye' to end the conversation."
 
 func main() {
-	configPath := flag.String("config", "", "path to config file (optional; uses env if empty)")
+	configPath := flag.String("config", "cmd/config.yaml", "path to config file (env overrides file values)")
 	flag.Parse()
 
-	var cfg *config.Config
-	if *configPath != "" {
-		fc, err := loadConfigFromFile(*configPath)
-		if err != nil {
-			log.Fatalf("failed to load config: %v", err)
-		}
-		cfg = fileConfigToConfig(fc)
-	} else {
-		cfg = config.LoadFromEnv()
+	cfg, err := LoadConfig(*configPath)
+	if err != nil {
+		log.Fatalf("failed to load config: %v", err)
 	}
 
-	llmClient := newLLMClient(&llm.LLMConfig{
-		Type:    cfg.LLM.Type,
-		APIKey:  cfg.LLM.APIKey,
-		Model:   cfg.LLM.Model,
-		BaseURL: cfg.LLM.BaseURL,
-	})
+	lgr := newLogger(cfg.Logger)
+	llmClient, err := NewLLMClient(cfg, lgr)
+	if err != nil {
+		log.Fatalf("failed to create LLM client: %v", err)
+	}
 
 	reg := tools.NewRegistry()
 	reg.Register(echo.New())
@@ -69,7 +58,7 @@ func main() {
 		}),
 		agent.WithLLMClient(llmClient),
 		agent.WithToolRegistry(reg),
-		agent.WithLogLevel(cfg.Log.Level),
+		agent.WithLogger(lgr),
 		agent.WithApprovalHandler(approvalHandler),
 	}
 
@@ -115,36 +104,9 @@ func isExitCommand(s string) bool {
 	return false
 }
 
-func fileConfigToConfig(fc *fileConfig) *config.Config {
-	cfg := &config.Config{
-		Temporal: &config.TemporalConfig{
-			Host:      fc.Temporal.Host,
-			Port:      fc.Temporal.Port,
-			Namespace: fc.Temporal.Namespace,
-			TaskQueue: fc.Temporal.TaskQueue,
-		},
-		LLM: &config.LLMConfig{
-			Type:    llm.LLMType(fc.LLM.Type),
-			APIKey:  fc.LLM.APIKey,
-			Model:   fc.LLM.Model,
-			BaseURL: fc.LLM.BaseURL,
-		},
-	}
-	cfg.Log = &config.LogConfig{Level: "error"}
-	return cfg
-}
-
-func newLLMClient(cfg *llm.LLMConfig) interfaces.LLMClient {
-	switch cfg.Type {
-	case llm.LLMTypeAnthropic:
-		return anthropic.NewClient(cfg)
-	default:
-		return openai.NewClient(cfg)
-	}
-}
-
 func approvalHandler(ctx context.Context, req *agent.ApprovalRequest, onApproval agent.ApprovalSender) {
-	fmt.Printf("\n--- Tool approval required ---\nTool: %s\nArgs: %v\nApprove? (y/n): ", req.ToolName, req.Args)
+	argsJSON, _ := json.MarshalIndent(req.Args, "", "  ")
+	fmt.Printf("\n--- Tool approval required ---\nTool: %s\nArgs:\n%s\nApprove? (y/n): ", req.ToolName, string(argsJSON))
 	scanner := bufio.NewScanner(os.Stdin)
 	if !scanner.Scan() {
 		fmt.Println("no input")

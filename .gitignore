@@ -1,2 +1,4 @@
-.env
-bin/
+examples/.env
+cmd/bin/
+logs/
+cmd/logs/

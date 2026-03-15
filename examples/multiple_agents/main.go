@@ -10,28 +10,23 @@ import (
 
 	config "github.com/vinodvanja/temporal-agents-go/examples"
 	"github.com/vinodvanja/temporal-agents-go/pkg/agent"
-	"github.com/vinodvanja/temporal-agents-go/pkg/interfaces"
-	"github.com/vinodvanja/temporal-agents-go/pkg/llm"
-	"github.com/vinodvanja/temporal-agents-go/pkg/llm/anthropic"
-	"github.com/vinodvanja/temporal-agents-go/pkg/llm/openai"
 )
 
 func main() {
 	cfg := config.LoadFromEnv()
 
-	llmClient := newLLMClient(&llm.LLMConfig{
-		Type:    cfg.LLM.Type,
-		APIKey:  cfg.LLM.APIKey,
-		Model:   cfg.LLM.Model,
-		BaseURL: cfg.LLM.BaseURL,
-	})
+	llmClient, err := config.NewLLMClientFromConfig(cfg)
+	if err != nil {
+		log.Printf("failed to create LLM client: %v", err)
+		return
+	}
 
 	// TaskQueue must be unique per agent. Use WithInstanceId when running multiple agents in same process.
 	temporalCfg := &agent.TemporalConfig{
-		Host:      cfg.Temporal.Host,
-		Port:      cfg.Temporal.Port,
-		Namespace: cfg.Temporal.Namespace,
-		TaskQueue: cfg.Temporal.TaskQueue,
+		Host:      cfg.Host,
+		Port:      cfg.Port,
+		Namespace: cfg.Namespace,
+		TaskQueue: cfg.TaskQueue,
 	}
 
 	agent1, err := agent.NewAgent(
@@ -40,7 +35,7 @@ func main() {
 		agent.WithTemporalConfig(temporalCfg),
 		agent.WithInstanceId("agent-1"),
 		agent.WithLLMClient(llmClient),
-		agent.WithLogLevel(cfg.Log.Level),
+		agent.WithLogger(config.NewLoggerFromLogConfig(cfg)),
 	)
 	if err != nil {
 		log.Fatalf("failed to create agent 1: %v", err)
@@ -53,7 +48,7 @@ func main() {
 		agent.WithTemporalConfig(temporalCfg),
 		agent.WithInstanceId("agent-2"),
 		agent.WithLLMClient(llmClient),
-		agent.WithLogLevel(cfg.Log.Level),
+		agent.WithLogger(config.NewLoggerFromLogConfig(cfg)),
 	)
 	if err != nil {
 		log.Fatalf("failed to create agent 2: %v", err)
@@ -105,13 +100,4 @@ func parseArgs() (mode, prompt string) {
 	}
 	prompt = strings.Join(args, " ")
 	return mode, prompt
-}
-
-func newLLMClient(cfg *llm.LLMConfig) interfaces.LLMClient {
-	switch cfg.Type {
-	case llm.LLMTypeAnthropic:
-		return anthropic.NewClient(cfg)
-	default:
-		return openai.NewClient(cfg)
-	}
 }

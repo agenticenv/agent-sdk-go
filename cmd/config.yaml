@@ -1,3 +1,4 @@
+# Env overrides: CMD_TEMPORAL_HOST, CMD_LLM_APIKEY, CMD_LOGGER_LEVEL, etc.
 temporal:
   host: localhost
   port: 7233
@@ -5,7 +6,11 @@ temporal:
   taskQueue: temporal-agents-go
 
 llm:
-  type: openai
+  provider: openai
   apiKey: ""
   model: gpt-4o
   baseURL: https://api.openai.com/v1
+
+logger:
+  level: info
+  output: logs/agent.log  # default: resolved to cmd/logs/agent.log; console shows only prompts and responses

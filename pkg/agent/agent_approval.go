@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+
+	"go.uber.org/zap"
 )
 
 type ApprovalStatus string
 
 const (
+	ApprovalStatusNone     ApprovalStatus = "NONE"
 	ApprovalStatusPending  ApprovalStatus = "PENDING"
 	ApprovalStatusApproved ApprovalStatus = "APPROVED"
 	ApprovalStatusRejected ApprovalStatus = "REJECTED"
@@ -35,35 +38,45 @@ type ApprovalSender func(status ApprovalStatus) error
 // concurrently when tools are invoked in parallel.
 type ApprovalHandler func(ctx context.Context, req *ApprovalRequest, onApproval ApprovalSender)
 
-// ApprovalRequest contains the details of a pending tool approval.
-// Sent via in-process channel when a tool requires approval.
+// ApprovalRequest contains the user-facing details of a pending tool approval.
+// Only ToolName and Args are exposed; workflow ID and task token are internal.
 type ApprovalRequest struct {
-	WorkflowID string         `json:"workflow_id"`
-	RunID      string         `json:"run_id"`
-	TaskToken  []byte         `json:"task_token"` // base64 in JSON
-	ToolName   string         `json:"tool_name"`
-	Args       map[string]any `json:"args"`
+	ToolName string         `json:"tool_name"`
+	Args     map[string]any `json:"args"`
 }
 
-// subscribeToApprovals returns a channel that receives ApprovalRequest from the per-run approval channel.
-func (a *Agent) subscribeToApprovals(ctx context.Context, runID string) (<-chan *ApprovalRequest, func() error, error) {
-	channel := toolRunApprovalChannelPrefix + runID
-	ch, closeFn, err := a.messaging.Subscribe(ctx, channel)
+// approvalRequest is the internal wire format; embeds ApprovalRequest and adds fields for completion and routing.
+type approvalRequest struct {
+	ApprovalRequest
+	AgentWorkflowID string `json:"agent_workflow_id"`
+	TaskToken       []byte `json:"task_token"`
+}
+
+// subscribeToApprovals returns a channel that receives approvalRequest from the per-run approval channel.
+func (a *Agent) subscribeToApprovals(ctx context.Context, workflowID string) (<-chan *approvalRequest, func() error, error) {
+	channel := approvalChannelName(workflowID)
+
+	a.logger.Debug("subscribing to approvals", zap.String("channel", channel))
+
+	ch, closeFn, err := a.agentChannel.Subscribe(ctx, channel)
 	if err != nil {
+		a.logger.Error("error subscribing to approvals", zap.Error(err))
 		return nil, nil, err
 	}
 
-	reqCh := make(chan *ApprovalRequest)
+	reqCh := make(chan *approvalRequest)
 	go func() {
 		defer close(reqCh)
 		for data := range ch {
-			var req ApprovalRequest
+			var req approvalRequest
 			if err := json.Unmarshal(data, &req); err != nil {
+				a.logger.Debug("failed to unmarshal approval request", zap.Error(err))
 				continue
 			}
 			reqCh <- &req
 		}
 	}()
 
+	a.logger.Debug("subscribed to approvals", zap.String("channel", channel))
 	return reqCh, closeFn, nil
 }
