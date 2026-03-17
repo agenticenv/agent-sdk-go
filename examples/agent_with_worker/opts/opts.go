@@ -3,8 +3,8 @@ package opts
 import (
 	"go.temporal.io/sdk/log"
 
-	"github.com/vinodvanja/temporal-agents-go/pkg/agent"
-	"github.com/vinodvanja/temporal-agents-go/pkg/interfaces"
+	"github.com/vvsynapse/temporal-agents-go/pkg/agent"
+	"github.com/vvsynapse/temporal-agents-go/pkg/interfaces"
 )
 
 // Common returns agent options shared by both the agent client and worker.

@@ -6,9 +6,9 @@ import (
 	"os"
 	"os/signal"
 
-	config "github.com/vinodvanja/temporal-agents-go/examples"
-	"github.com/vinodvanja/temporal-agents-go/examples/agent_with_worker/opts"
-	"github.com/vinodvanja/temporal-agents-go/pkg/agent"
+	config "github.com/vvsynapse/temporal-agents-go/examples"
+	"github.com/vvsynapse/temporal-agents-go/examples/agent_with_worker/opts"
+	"github.com/vvsynapse/temporal-agents-go/pkg/agent"
 )
 
 func main() {

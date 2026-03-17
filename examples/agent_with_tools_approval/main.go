@@ -9,11 +9,11 @@ import (
 	"os"
 	"strings"
 
-	config "github.com/vinodvanja/temporal-agents-go/examples"
-	"github.com/vinodvanja/temporal-agents-go/pkg/agent"
-	"github.com/vinodvanja/temporal-agents-go/pkg/tools"
-	"github.com/vinodvanja/temporal-agents-go/pkg/tools/calculator"
-	"github.com/vinodvanja/temporal-agents-go/pkg/tools/echo"
+	config "github.com/vvsynapse/temporal-agents-go/examples"
+	"github.com/vvsynapse/temporal-agents-go/pkg/agent"
+	"github.com/vvsynapse/temporal-agents-go/pkg/tools"
+	"github.com/vvsynapse/temporal-agents-go/pkg/tools/calculator"
+	"github.com/vvsynapse/temporal-agents-go/pkg/tools/echo"
 )
 
 func main() {

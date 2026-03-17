@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 )
 
-//go:generate mockgen -destination=./mocks/mock_llm.go -package=mocks github.com/vinodvanja/temporal-agents-go/pkg/interfaces LLMClient
+//go:generate mockgen -destination=./mocks/mock_llm.go -package=mocks github.com/vvsynapse/temporal-agents-go/pkg/interfaces LLMClient
 
 type LLMProvider string
 
@@ -51,7 +51,7 @@ type LLMRequest struct {
 
 	// Sampling (per-request; typically set from agent config). nil/0 = provider default.
 	Temperature *float64 // 0-2 OpenAI, 0-1 Anthropic
-	MaxTokens   int     // 0 = provider default
+	MaxTokens   int      // 0 = provider default
 	TopP        *float64 // 0-1; OpenAI only
 	TopK        *int     // Anthropic only
 }

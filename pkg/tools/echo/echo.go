@@ -3,8 +3,8 @@ package echo
 import (
 	"context"
 
-	"github.com/vinodvanja/temporal-agents-go/pkg/interfaces"
-	"github.com/vinodvanja/temporal-agents-go/pkg/tools"
+	"github.com/vvsynapse/temporal-agents-go/pkg/interfaces"
+	"github.com/vvsynapse/temporal-agents-go/pkg/tools"
 )
 
 var _ interfaces.Tool = (*Echo)(nil)

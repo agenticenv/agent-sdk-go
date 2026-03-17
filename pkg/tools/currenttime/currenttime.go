@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/vinodvanja/temporal-agents-go/pkg/interfaces"
-	"github.com/vinodvanja/temporal-agents-go/pkg/tools"
+	"github.com/vvsynapse/temporal-agents-go/pkg/interfaces"
+	"github.com/vvsynapse/temporal-agents-go/pkg/tools"
 )
 
 var _ interfaces.Tool = (*CurrentTime)(nil)

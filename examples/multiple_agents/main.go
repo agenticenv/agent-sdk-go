@@ -8,8 +8,8 @@ import (
 	"strings"
 	"sync"
 
-	config "github.com/vinodvanja/temporal-agents-go/examples"
-	"github.com/vinodvanja/temporal-agents-go/pkg/agent"
+	config "github.com/vvsynapse/temporal-agents-go/examples"
+	"github.com/vvsynapse/temporal-agents-go/pkg/agent"
 )
 
 func main() {

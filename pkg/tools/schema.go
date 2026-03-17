@@ -15,7 +15,7 @@
 package tools
 
 import (
-	"github.com/vinodvanja/temporal-agents-go/pkg/interfaces"
+	"github.com/vvsynapse/temporal-agents-go/pkg/interfaces"
 )
 
 // ParamString returns a JSON Schema for a string parameter.

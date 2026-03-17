@@ -2,7 +2,7 @@ package interfaces
 
 import "context"
 
-//go:generate mockgen -destination=./mocks/mock_tool.go -package=mocks github.com/vinodvanja/temporal-agents-go/pkg/interfaces Tool,ToolRegistry
+//go:generate mockgen -destination=./mocks/mock_tool.go -package=mocks github.com/vvsynapse/temporal-agents-go/pkg/interfaces Tool,ToolRegistry
 
 // ToolApproval is an optional interface for tools that require user approval before execution.
 // When implemented, the tool's ApprovalRequired() is reflected in ToolSpec for the LLM.

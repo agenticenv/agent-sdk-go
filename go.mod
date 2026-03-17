@@ -1,8 +1,8 @@
-module github.com/vinodvanja/temporal-agents-go
+module github.com/vvsynapse/temporal-agents-go
 
 go 1.24.4
 
-replace github.com/vinodvanja/temporal-agents-go/pkg/tools => ./pkg/tools
+replace github.com/vvsynapse/temporal-agents-go/pkg/tools => ./pkg/tools
 
 require (
 	github.com/anthropics/anthropic-sdk-go v1.26.0

@@ -6,11 +6,11 @@ import (
 	"strings"
 
 	"github.com/joho/godotenv"
-	"github.com/vinodvanja/temporal-agents-go/pkg/interfaces"
-	"github.com/vinodvanja/temporal-agents-go/pkg/llm"
-	"github.com/vinodvanja/temporal-agents-go/pkg/llm/anthropic"
-	"github.com/vinodvanja/temporal-agents-go/pkg/llm/openai"
-	"github.com/vinodvanja/temporal-agents-go/pkg/logger"
+	"github.com/vvsynapse/temporal-agents-go/pkg/interfaces"
+	"github.com/vvsynapse/temporal-agents-go/pkg/llm"
+	"github.com/vvsynapse/temporal-agents-go/pkg/llm/anthropic"
+	"github.com/vvsynapse/temporal-agents-go/pkg/llm/openai"
+	"github.com/vvsynapse/temporal-agents-go/pkg/logger"
 	"go.temporal.io/sdk/log"
 )
 
