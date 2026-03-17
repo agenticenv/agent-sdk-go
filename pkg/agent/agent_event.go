@@ -12,22 +12,15 @@ import (
 )
 
 var (
-	agentEventChannelPrefix      = "agent_event_"
-	toolRunApprovalChannelPrefix = "tool_run_approval_"
+	agentEventChannelPrefix = "agent_event_"
 
-	agentEventActivityTimeOut     time.Duration = 30 * time.Minute
+	agentEventActivityTaskTimeout time.Duration = 2 * time.Minute
 	agentEventActivityMaxAttempts int32         = 3
 
 	agentEventName              = "agent-event"
-	toolRunApprovalName         = "tool-run-approval"
 	eventWorkflowIDPrefix       = "event-"
 	eventWorkflowCompleteSignal = "complete" // received when agent Close is called
 )
-
-// approvalChannelName returns the pub/sub channel name for tool approvals. workflowID is the run workflow ID.
-func approvalChannelName(workflowID string) string {
-	return toolRunApprovalChannelPrefix + workflowID
-}
 
 // eventChannelName returns the pub/sub channel name for agent events. runID is the run workflow ID.
 func eventChannelName(runID string) string {
@@ -58,18 +51,33 @@ const (
 	AgentEventThinkingDelta AgentEventType = "thinking_delta" // Anthropic extended thinking stream
 	AgentEventToolCall      AgentEventType = "tool_call"
 	AgentEventToolResult    AgentEventType = "tool_result"
+	AgentEventToolApproval  AgentEventType = "tool_approval"
 	AgentEventError         AgentEventType = "error"
 	AgentEventComplete      AgentEventType = "complete"
+	AgentEventAll           AgentEventType = "*" // matches all events
 )
 
 // AgentEvent is published to subscribers when the agent produces output or errors.
 type AgentEvent struct {
-	Type      AgentEventType         `json:"type"`
-	Content   string                 `json:"content,omitempty"`
-	ToolCall  *ToolCallEvent         `json:"tool_call,omitempty"`
-	Error     error                  `json:"error,omitempty"`
-	Metadata  map[string]interface{} `json:"metadata,omitempty"`
-	Timestamp time.Time              `json:"timestamp"`
+	Type       AgentEventType         `json:"type"`
+	Content    string                 `json:"content,omitempty"`
+	ToolCall   *ToolCallEvent         `json:"tool_call,omitempty"`
+	Approval   *ToolApprovalEvent     `json:"approval,omitempty"` // for AgentEventToolApproval
+	Error      error                  `json:"error,omitempty"`
+	Metadata   map[string]interface{} `json:"metadata,omitempty"`
+	Timestamp  time.Time              `json:"timestamp"`
+	WorkflowID string                 `json:"workflow_id,omitempty"` // run workflow ID; for correlation only
+}
+
+// ToolApprovalEvent is the payload for AgentEventToolApproval.
+// Pass ApprovalToken to Agent.OnApproval(ctx, ev.Approval.ApprovalToken, status).
+// ApprovalToken is base64-encoded; stateless so approvals work across pods (Redis pub/sub, load-balanced /approval).
+// ToolCallID is for reference (e.g. logging, correlation).
+type ToolApprovalEvent struct {
+	ToolCallID    string         `json:"tool_call_id,omitempty"` // for reference
+	ToolName      string         `json:"tool_name"`
+	Args          map[string]any `json:"args,omitempty"`
+	ApprovalToken string         `json:"approval_token,omitempty"` // opaque; pass to OnApproval
 }
 
 type ToolCallStatus string
@@ -106,7 +114,6 @@ func (a *Agent) AgentEventWorkflow(ctx workflow.Context) error {
 	}
 
 	eventCh := workflow.NewChannel(ctx)
-	approvalCh := workflow.NewChannel(ctx)
 
 	err := workflow.SetUpdateHandlerWithOptions(ctx, agentEventName, func(ctx workflow.Context, upd *AgentEventUpdate) error {
 		noOfEvents++
@@ -125,17 +132,8 @@ func (a *Agent) AgentEventWorkflow(ctx workflow.Context) error {
 		return fmt.Errorf("failed setting update handler for events: %w", err)
 	}
 
-	err = workflow.SetUpdateHandler(ctx, toolRunApprovalName, func(ctx workflow.Context, req *approvalRequest) error {
-		logger.Debug("received tool-run-approval", zap.String("tool", req.ToolName))
-		approvalCh.Send(ctx, req)
-		return nil
-	})
-	if err != nil {
-		return fmt.Errorf("failed setting update handler for tool-run-approval: %w", err)
-	}
-
 	actCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		StartToCloseTimeout: agentEventActivityTimeOut,
+		StartToCloseTimeout: agentEventActivityTaskTimeout,
 		RetryPolicy:         retryPolicy(agentEventActivityMaxAttempts),
 	})
 
@@ -154,20 +152,6 @@ func (a *Agent) AgentEventWorkflow(ctx workflow.Context) error {
 				logger.Warn("agent event activity failed", zap.Error(err), zap.String("eventType", evType), zap.String("agentWorkflowID", upd.AgentWorkflowID))
 			}
 			processedCount++
-		}
-	})
-
-	workflow.Go(ctx, func(ctx workflow.Context) {
-		for {
-			var req *approvalRequest
-			approvalCh.Receive(ctx, &req)
-			if req == nil {
-				return
-			}
-			runID := req.AgentWorkflowID
-			if err := workflow.ExecuteActivity(actCtx, a.ToolRunApprovalPublishActivity, runID, req).Get(ctx, nil); err != nil {
-				logger.Warn("approval publish activity failed", zap.Error(err), zap.String("tool", req.ToolName))
-			}
 		}
 	})
 
@@ -221,25 +205,6 @@ func (a *Agent) EventPublishActivity(ctx context.Context, workflowID string, eve
 	if err := a.agentChannel.Publish(ctx, channel, data); err != nil {
 		logger.Error("failed to publish agent event", zap.String("channel", channel), zap.Error(err))
 		return fmt.Errorf("failed to publish agent event: %w", err)
-	}
-	return nil
-}
-
-// ToolRunApprovalPublishActivity publishes an approvalRequest to the per-run channel approval_{runID}.
-func (a *Agent) ToolRunApprovalPublishActivity(ctx context.Context, workflowID string, req *approvalRequest) error {
-	logger := activity.GetLogger(ctx)
-	logger.Debug("approval publish activity", zap.String("workflowID", workflowID), zap.String("tool", req.ToolName))
-	if req == nil {
-		return fmt.Errorf("approval request is nil")
-	}
-	data, err := json.Marshal(req)
-	if err != nil {
-		return err
-	}
-	channel := approvalChannelName(workflowID)
-	if err := a.agentChannel.Publish(ctx, channel, data); err != nil {
-		logger.Error("failed to publish approval request", zap.String("channel", channel), zap.Error(err))
-		return fmt.Errorf("failed to publish approval request: %w", err)
 	}
 	return nil
 }

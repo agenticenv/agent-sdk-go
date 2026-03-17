@@ -6,8 +6,10 @@ import (
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/packages/param"
 	"github.com/openai/openai-go/v3/packages/ssestream"
 	"github.com/openai/openai-go/v3/shared"
+	"github.com/openai/openai-go/v3/shared/constant"
 	"github.com/vinodvanja/temporal-agents-go/pkg/interfaces"
 	"github.com/vinodvanja/temporal-agents-go/pkg/llm"
 	"go.uber.org/zap"
@@ -50,11 +52,20 @@ func (c *Client) IsStreamSupported() bool {
 	return true
 }
 
-func (c *Client) Generate(ctx context.Context, req *interfaces.LLMRequest) (*interfaces.LLMResponse, error) {
-	messages := messagesToOpenAI(req)
+// buildCompletionParams builds ChatCompletionNewParams. Sampling (Temperature, MaxTokens, TopP) from req when set.
+func (c *Client) buildCompletionParams(messages []openai.ChatCompletionMessageParamUnion, req *interfaces.LLMRequest) openai.ChatCompletionNewParams {
 	params := openai.ChatCompletionNewParams{
 		Messages: messages,
 		Model:    c.Model,
+	}
+	if req.Temperature != nil {
+		params.Temperature = param.NewOpt(*req.Temperature)
+	}
+	if req.MaxTokens > 0 {
+		params.MaxTokens = param.NewOpt(int64(req.MaxTokens))
+	}
+	if req.TopP != nil {
+		params.TopP = param.NewOpt(*req.TopP)
 	}
 	if len(req.Tools) > 0 {
 		params.Tools = toolsToOpenAI(req.Tools)
@@ -62,6 +73,46 @@ func (c *Client) Generate(ctx context.Context, req *interfaces.LLMRequest) (*int
 			OfAuto: openai.String("auto"),
 		}
 	}
+	if req.ResponseFormat != nil {
+		params.ResponseFormat = responseFormatToOpenAI(req.ResponseFormat)
+	}
+	return params
+}
+
+func responseFormatToOpenAI(rf *interfaces.ResponseFormat) openai.ChatCompletionNewParamsResponseFormatUnion {
+	switch rf.Type {
+	case interfaces.ResponseFormatText:
+		return openai.ChatCompletionNewParamsResponseFormatUnion{
+			OfText: &shared.ResponseFormatTextParam{Type: constant.Text("text")},
+		}
+	case interfaces.ResponseFormatJSON:
+		if len(rf.Schema) > 0 {
+			name := rf.Name
+			if name == "" {
+				name = "response"
+			}
+			return openai.ChatCompletionNewParamsResponseFormatUnion{
+				OfJSONSchema: &shared.ResponseFormatJSONSchemaParam{
+					Type: constant.JSONSchema("json_schema"),
+					JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
+						Name:   name,
+						Schema: map[string]any(rf.Schema),
+					},
+				},
+			}
+		}
+		return openai.ChatCompletionNewParamsResponseFormatUnion{
+			OfJSONObject: &shared.ResponseFormatJSONObjectParam{Type: constant.JSONObject("json_object")},
+		}
+	default:
+		return openai.ChatCompletionNewParamsResponseFormatUnion{}
+	}
+}
+
+func (c *Client) Generate(ctx context.Context, req *interfaces.LLMRequest) (*interfaces.LLMResponse, error) {
+	messages := messagesToOpenAI(req)
+	params := c.buildCompletionParams(messages, req)
+
 	// Log safe debug info only (no messages/content to avoid leaking sensitive data)
 	c.Logger.Debug("generating openai response",
 		zap.String("model", c.Model),
@@ -98,16 +149,7 @@ func (c *Client) GenerateStream(ctx context.Context, req *interfaces.LLMRequest)
 		zap.Int("messageCount", len(req.Messages)),
 		zap.Int("toolCount", len(req.Tools)))
 	messages := messagesToOpenAI(req)
-	params := openai.ChatCompletionNewParams{
-		Messages: messages,
-		Model:    c.Model,
-	}
-	if len(req.Tools) > 0 {
-		params.Tools = toolsToOpenAI(req.Tools)
-		params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
-			OfAuto: openai.String("auto"),
-		}
-	}
+	params := c.buildCompletionParams(messages, req)
 	stream := c.client.Chat.Completions.NewStreaming(ctx, params)
 	acc := &openai.ChatCompletionAccumulator{}
 	return &openAIStreamAdapter{stream: stream, acc: acc}, nil

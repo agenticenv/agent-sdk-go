@@ -24,9 +24,11 @@ The examples use `TEMPORAL_HOST`, `TEMPORAL_PORT`, `TEMPORAL_NAMESPACE` from `.e
 | Example | What it demonstrates |
 |---------|---------------------|
 | `simple_agent` | Minimal agent, no tools — Temporal config, system prompt, LLM client, single `Run()` |
+| `agent_with_conversation` | In-memory conversation with `WithConversation` — multi-turn context, same `conversationID` for `Run` |
 | `agent_with_tools` | Built-in tools (echo, calculator, weather, wikipedia, search) with auto-approval |
 | `agent_with_stream` | Streaming with `RunStream` + partial content (`content_delta`, `tool_call`, `complete`) |
-| `agent_with_tools_approval` | Tools + `WithApprovalHandler` — user approves or rejects each tool run |
+| `agent_with_stream_conversation` | RunStream + conversation; event handling to avoid duplicate output (ContentDelta vs Complete) |
+| `agent_with_tools_approval` | Tools + `WithApprovalHandler` — user approves or rejects each tool run (Run only) |
 | `agent_with_custom_tools` | Custom tools via `WithTools` — implementing `interfaces.Tool` |
 | `multiple_agents` | Multiple agents with `WithInstanceId` — sequential or concurrent |
 | `agent_with_worker` | Agent and worker in separate processes — `DisableWorker` + `NewAgentWorker` |
@@ -46,6 +48,18 @@ cp env.sample .env
 go run ./simple_agent "Hello, what can you do?"
 ```
 
+### Agent with conversation (multi-turn)
+
+Uses in-memory conversation. Run **interactive mode** (no args) for multi-turn in one process—history is shared across turns. With args, runs a single turn (useful for testing).
+
+```bash
+# Interactive: type prompts, get responses; history shared. Type 'exit' to end.
+go run ./agent_with_conversation
+
+# Single turn (new process each run; no shared history)
+go run ./agent_with_conversation "Hello, remember I'm Alice"
+```
+
 ### Agent with tools
 
 ```bash
@@ -56,6 +70,15 @@ go run ./agent_with_tools "What's the weather in Tokyo?"
 
 ```bash
 go run ./agent_with_stream "What's the current time and what's 17 * 23?"
+```
+
+### Streaming + conversation (event handling pattern)
+
+Interactive multi-turn with `RunStream`. Demonstrates how to handle ContentDelta/Content and Complete to avoid printing the same text twice.
+
+```bash
+go run ./agent_with_stream_conversation
+go run ./agent_with_stream_conversation "What is 5 * 8?"
 ```
 
 ### Tools + approval, custom tools, multiple agents, worker split

@@ -28,6 +28,16 @@ func main() {
 	reg.Register(echo.New())
 	reg.Register(calculator.New())
 
+	// Single stdin reader: same pattern as cmd for consistency and timeout handling
+	lineCh := make(chan string)
+	go func() {
+		scanner := bufio.NewScanner(os.Stdin)
+		for scanner.Scan() {
+			lineCh <- scanner.Text()
+		}
+		close(lineCh)
+	}()
+
 	opts := []agent.Option{
 		agent.WithName("agent-with-tools-approval"),
 		agent.WithDescription("Agent with tools that require user approval before execution"),
@@ -40,8 +50,7 @@ func main() {
 		}),
 		agent.WithLLMClient(llmClient),
 		agent.WithToolRegistry(reg),
-		// Default policy: all tools require approval (no WithToolApprovalPolicy)
-		agent.WithApprovalHandler(approvalHandler),
+		agent.WithApprovalHandler(makeApprovalHandler(lineCh)),
 		agent.WithLogger(config.NewLoggerFromLogConfig(cfg)),
 	}
 
@@ -57,7 +66,7 @@ func main() {
 	}
 
 	fmt.Println("user:", prompt)
-	response, err := a.Run(context.Background(), prompt)
+	response, err := a.Run(context.Background(), prompt, "")
 	if err != nil {
 		log.Printf("run failed: %v", err)
 		return
@@ -65,17 +74,19 @@ func main() {
 	fmt.Println("agent:", response.Content)
 }
 
-func approvalHandler(ctx context.Context, req *agent.ApprovalRequest, onApproval agent.ApprovalSender) {
-	argsJSON, _ := json.MarshalIndent(req.Args, "", "  ")
-	fmt.Printf("\n--- Tool approval required ---\nTool: %s\nArgs:\n%s\nApprove? (y/n): ", req.ToolName, string(argsJSON))
-	scanner := bufio.NewScanner(os.Stdin)
-	if !scanner.Scan() {
-		fmt.Println("no input")
-		return
-	}
-	if strings.TrimSpace(strings.ToLower(scanner.Text())) == "y" {
-		onApproval(agent.ApprovalStatusApproved)
-	} else {
-		onApproval(agent.ApprovalStatusRejected)
+func makeApprovalHandler(lineCh <-chan string) agent.ApprovalHandler {
+	return func(ctx context.Context, req *agent.ApprovalRequest, onApproval agent.ApprovalSender) {
+		argsJSON, _ := json.MarshalIndent(req.Args, "", "  ")
+		fmt.Printf("\n--- Tool approval required ---\nTool: %s\nArgs:\n%s\nApprove? (y/n): ", req.ToolName, string(argsJSON))
+		select {
+		case <-ctx.Done():
+			return
+		case line, ok := <-lineCh:
+			if ok && strings.TrimSpace(strings.ToLower(line)) == "y" {
+				onApproval(agent.ApprovalStatusApproved)
+			} else if ok {
+				onApproval(agent.ApprovalStatusRejected)
+			}
+		}
 	}
 }

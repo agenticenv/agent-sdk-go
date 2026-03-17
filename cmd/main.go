@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/vinodvanja/temporal-agents-go/pkg/agent"
+	"github.com/vinodvanja/temporal-agents-go/pkg/conversation/inmem"
 	"github.com/vinodvanja/temporal-agents-go/pkg/tools"
 	"github.com/vinodvanja/temporal-agents-go/pkg/tools/calculator"
 	"github.com/vinodvanja/temporal-agents-go/pkg/tools/currenttime"
@@ -21,7 +22,10 @@ import (
 	"github.com/vinodvanja/temporal-agents-go/pkg/tools/wikipedia"
 )
 
-const exitPrompt = "Type 'exit', 'quit', or 'bye' to end the conversation."
+const (
+	exitPrompt = "Type 'exit', 'quit', or 'bye' to end the conversation."
+	convID     = "interactive"
+)
 
 func main() {
 	configPath := flag.String("config", "cmd/config.yaml", "path to config file (env overrides file values)")
@@ -47,8 +51,20 @@ func main() {
 	reg.Register(wikipedia.New())
 	reg.Register(search.New())
 
+	conv := inmem.NewInMemoryConversation(inmem.WithMaxSize(100))
+
+	// Single stdin reader: avoids conflict between main loop and approval handler after timeout
+	lineCh := make(chan string)
+	go func() {
+		scanner := bufio.NewScanner(os.Stdin)
+		for scanner.Scan() {
+			lineCh <- scanner.Text()
+		}
+		close(lineCh)
+	}()
+
 	opts := []agent.Option{
-		agent.WithName("agent"),
+		agent.WithName("agent-cli"),
 		agent.WithSystemPrompt("You are a helpful assistant."),
 		agent.WithTemporalConfig(&agent.TemporalConfig{
 			Host:      cfg.Temporal.Host,
@@ -57,9 +73,11 @@ func main() {
 			TaskQueue: cfg.Temporal.TaskQueue,
 		}),
 		agent.WithLLMClient(llmClient),
+		agent.WithStream(true),
 		agent.WithToolRegistry(reg),
+		agent.WithConversation(conv),
+		agent.WithConversationSize(20),
 		agent.WithLogger(lgr),
-		agent.WithApprovalHandler(approvalHandler),
 	}
 
 	a, err := agent.NewAgent(opts...)
@@ -68,16 +86,15 @@ func main() {
 	}
 	defer a.Close()
 
-	scanner := bufio.NewScanner(os.Stdin)
 	fmt.Println("Conversation mode. " + exitPrompt)
-	fmt.Println()
 
 	for {
-		fmt.Print("You: ")
-		if !scanner.Scan() {
+		fmt.Print("\nYou: ")
+		line, ok := <-lineCh
+		if !ok {
 			break
 		}
-		line := strings.TrimSpace(scanner.Text())
+		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
@@ -86,13 +103,83 @@ func main() {
 			break
 		}
 
-		response, err := a.Run(context.Background(), line)
+		eventCh, err := a.RunStream(context.Background(), line, convID)
 		if err != nil {
 			log.Printf("agent error: %v", err)
 			continue
 		}
-		fmt.Println("Agent:", response.Content)
-		fmt.Println()
+		fmt.Print("assistant: ")
+		var finalContent string
+		var streamedContent bool
+		for ev := range eventCh {
+			if ev == nil {
+				continue
+			}
+			if ev.Type == agent.AgentEventToolApproval && ev.Approval != nil {
+				argsJSON, _ := json.MarshalIndent(ev.Approval.Args, "", "  ")
+				fmt.Printf("\n--- Tool approval required ---\nTool: %s\nArgs:\n%s\nApprove? (y/n): ", ev.Approval.ToolName, string(argsJSON))
+				line, ok := <-lineCh
+				status := agent.ApprovalStatusRejected
+				if ok && strings.TrimSpace(strings.ToLower(line)) == "y" {
+					status = agent.ApprovalStatusApproved
+				}
+				if err := a.OnApproval(context.Background(), ev.Approval.ApprovalToken, status); err != nil {
+					log.Printf("approval failed: %v", err)
+				}
+				continue
+			}
+			if ev.Type == agent.AgentEventContentDelta || ev.Type == agent.AgentEventContent {
+				streamedContent = true
+			}
+			printEvent(ev, streamedContent)
+			if ev.Type == agent.AgentEventComplete {
+				finalContent = ev.Content
+			}
+		}
+		if finalContent != "" {
+			fmt.Println()
+		}
+	}
+}
+
+func printEvent(ev *agent.AgentEvent, streamedContent bool) {
+	switch ev.Type {
+	case agent.AgentEventContent:
+		if ev.Content != "" {
+			fmt.Print(ev.Content)
+		}
+	case agent.AgentEventContentDelta:
+		if ev.Content != "" {
+			fmt.Print(ev.Content)
+		}
+	case agent.AgentEventThinking:
+		if ev.Content != "" {
+			fmt.Printf("[thinking] %s\n", ev.Content)
+		}
+	case agent.AgentEventThinkingDelta:
+		if ev.Content != "" {
+			fmt.Print(ev.Content)
+		}
+	case agent.AgentEventToolCall:
+		if ev.ToolCall != nil {
+			args, _ := json.Marshal(ev.ToolCall.Args)
+			fmt.Printf("\n[tool_call] %s args=%s\n", ev.ToolCall.ToolName, string(args))
+		}
+	case agent.AgentEventToolApproval:
+		// Handled in main loop; Approval events are not printed here
+	case agent.AgentEventToolResult:
+		if ev.ToolCall != nil {
+			fmt.Printf("[tool_result] %s: %v\n", ev.ToolCall.ToolName, ev.ToolCall.Result)
+		}
+	case agent.AgentEventError:
+		fmt.Printf("[error] %s\n", ev.Content)
+	case agent.AgentEventComplete:
+		// Only print content if we didn't already display it via ContentDelta or Content
+		if ev.Content != "" && !streamedContent {
+			fmt.Print(ev.Content)
+		}
+	default:
+		fmt.Printf("[%s] %+v\n", ev.Type, ev)
 	}
 }
 
@@ -102,19 +189,4 @@ func isExitCommand(s string) bool {
 		return true
 	}
 	return false
-}
-
-func approvalHandler(ctx context.Context, req *agent.ApprovalRequest, onApproval agent.ApprovalSender) {
-	argsJSON, _ := json.MarshalIndent(req.Args, "", "  ")
-	fmt.Printf("\n--- Tool approval required ---\nTool: %s\nArgs:\n%s\nApprove? (y/n): ", req.ToolName, string(argsJSON))
-	scanner := bufio.NewScanner(os.Stdin)
-	if !scanner.Scan() {
-		fmt.Println("no input")
-		return
-	}
-	if strings.TrimSpace(strings.ToLower(scanner.Text())) == "y" {
-		onApproval(agent.ApprovalStatusApproved)
-	} else {
-		onApproval(agent.ApprovalStatusRejected)
-	}
 }

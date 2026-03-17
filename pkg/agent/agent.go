@@ -17,8 +17,6 @@ import (
 )
 
 const (
-	// defaultTimeout is used when DisableWorker but no deadline set, to avoid blocking forever when no workers run.
-	defaultTimeout = 5 * time.Minute
 	// workersCheckTimeout is how long hasWorkers polls for pollers before giving up.
 	workersCheckTimeout = 15 * time.Second
 )
@@ -40,7 +38,7 @@ type TemporalConfig struct {
 }
 
 // Agent runs LLM-backed workflows via Temporal. It holds agentConfig and client-side state
-// (agentChannel, approvalHandler, event worker). Uses AgentWorker for run workflow execution.
+// (agentChannel, event worker). Uses AgentWorker for run workflow execution.
 type Agent struct {
 	agentConfig
 	localAgentWorker      *AgentWorker // run worker; set when workers are embedded
@@ -73,13 +71,8 @@ func buildAgent(opts []Option) (*Agent, error) {
 		agentConfig:  *cfg,
 		agentChannel: newAgentChannel(cfg.logger),
 	}
-	for _, t := range a.toolsList() {
-		if a.requiresApproval(t) && a.approvalHandler == nil {
-			return nil, fmt.Errorf("tool %q requires approval but WithApprovalHandler was not set", t.Name())
-		}
-	}
-	if a.disableWorker && (a.approvalHandler != nil || a.streamEnabled) && !a.enableRemoteWorkers {
-		return nil, fmt.Errorf("DisableWorker with approval or streaming requires WithEnableRemoteWorkers(true)")
+	if a.disableWorker && a.streamEnabled && !a.enableRemoteWorkers {
+		return nil, fmt.Errorf("DisableWorker with streaming requires WithEnableRemoteWorkers(true)")
 	}
 
 	if !a.disableWorker {
@@ -142,7 +135,6 @@ func (a *Agent) createEventWorker() {
 	w := worker.New(a.temporalClient, eventQueue, worker.Options{})
 	w.RegisterWorkflowWithOptions(a.AgentEventWorkflow, workflow.RegisterOptions{Name: "AgentEventWorkflow"})
 	w.RegisterActivityWithOptions(a.EventPublishActivity, activity.RegisterOptions{Name: "EventPublishActivity"})
-	w.RegisterActivityWithOptions(a.ToolRunApprovalPublishActivity, activity.RegisterOptions{Name: "ToolRunApprovalPublishActivity"})
 	a.eventWorker = w
 	go func() { _ = a.eventWorker.Start() }()
 }
@@ -260,15 +252,26 @@ func (a *Agent) Close() {
 	a.logger.Info("agent closed", zap.String("name", a.Name))
 }
 
-// Run starts the agent workflow and returns the result. Handles approvals when
-// tools require them. Use WithTimeout or a context with deadline to avoid blocking.
-func (a *Agent) Run(ctx context.Context, input string) (*AgentResponse, error) {
+// Run starts the agent workflow and returns the result. Use WithApprovalHandler on the agent when tools require approval (Run only; RunStream uses event-based OnApproval).
+// Use WithTimeout or a context with deadline to avoid blocking.
+// When using WithConversation, pass the conversation ID (runtime id from user/session); agent and worker use the same ID.
+func (a *Agent) Run(ctx context.Context, input string, conversationID string) (*AgentResponse, error) {
 	a.logger.Debug("run started", zap.String("agent", a.Name), zap.Int("inputLen", len(input)))
+
+	if conversationID != "" && a.conversation == nil {
+		return nil, fmt.Errorf("conversationID %s requires conversation configuration", conversationID)
+	}
+
+	if conversationID == "" && a.conversation != nil {
+		return nil, fmt.Errorf("conversationID is required when using conversation")
+	}
+
+	if a.hasApprovalTools() && a.approvalHandler == nil {
+		return nil, fmt.Errorf("tools require approval but WithApprovalHandler was not set (required for Run)")
+	}
+
 	runCtx := ctx
 	d := a.timeout
-	if d == 0 {
-		d = defaultTimeout
-	}
 	if _, ok := ctx.Deadline(); !ok && d > 0 {
 		var cancel context.CancelFunc
 		runCtx, cancel = context.WithTimeout(ctx, d)
@@ -284,9 +287,11 @@ func (a *Agent) Run(ctx context.Context, input string) (*AgentResponse, error) {
 	defer cleanup()
 
 	wfInput := AgentWorkflowInput{
-		Input:            input,
-		StreamingEnabled: a.streamEnabled,
+		UserPrompt:       input,
+		StreamingEnabled: false,
 		EventWorkflowID:  "",
+		ConversationID:   conversationID,
+		EventTypes:       []AgentEventType{},
 	}
 	if a.enableRemoteWorkers {
 		a.createEventWorker()
@@ -297,16 +302,16 @@ func (a *Agent) Run(ctx context.Context, input string) (*AgentResponse, error) {
 		}
 	}
 
-	var approvalCh <-chan *approvalRequest
-	var closeApproval func() error
+	var eventCh <-chan *AgentEvent
+	var closeEvent func() error
 	if a.approvalHandler != nil {
-		var err error
-		approvalCh, closeApproval, err = a.subscribeToApprovals(runCtx, workflowID)
+		wfInput.EventTypes = []AgentEventType{AgentEventToolApproval}
+		eventCh, closeEvent, err = a.subscribeToAgentEvents(runCtx, workflowID)
 		if err != nil {
-			a.logger.Error("failed to subscribe to approvals", zap.String("workflowID", workflowID), zap.Error(err))
+			a.logger.Error("failed to subscribe to agent events", zap.String("workflowID", workflowID), zap.Error(err))
 			return nil, err
 		}
-		defer closeApproval()
+		defer closeEvent()
 	}
 
 	hasWorkers := a.hasWorkers(ctx, a.taskQueue)
@@ -344,14 +349,10 @@ func (a *Agent) Run(ctx context.Context, input string) (*AgentResponse, error) {
 	}()
 
 	type approvalResponse struct {
-		toolName  string
-		status    ApprovalStatus
-		taskToken []byte
+		approvalToken string
+		status        ApprovalStatus
 	}
-	var approvalResponseCh chan approvalResponse
-	if a.approvalHandler != nil {
-		approvalResponseCh = make(chan approvalResponse, 16)
-	}
+	approvalResponseCh := make(chan approvalResponse, 16)
 
 	a.logger.Debug("waiting for agent workflow response", zap.String("workflowID", workflowID))
 
@@ -367,27 +368,31 @@ func (a *Agent) Run(ctx context.Context, input string) (*AgentResponse, error) {
 			a.logger.Error("agent workflow failed", zap.String("workflowID", workflowID), zap.Error(err))
 			return nil, err
 		case <-runCtx.Done():
-			a.logger.Debug("run context cancelled", zap.String("workflowID", workflowID), zap.Error(runCtx.Err()))
+			a.logger.Debug("run context cancelled, terminating agent workflow", zap.String("workflowID", workflowID), zap.Error(runCtx.Err()))
+			termCtx, termCancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer termCancel()
+			if a.temporalClient != nil {
+				_ = a.temporalClient.TerminateWorkflow(termCtx, workflowID, "", "run timeout")
+			}
 			return nil, runCtx.Err()
-		case req := <-approvalCh:
-			if req == nil || req.AgentWorkflowID != workflowID {
-				a.logger.Debug("ignoring approval request (nil or workflow ID mismatch)", zap.String("workflowID", workflowID))
+		case ev := <-eventCh:
+			if ev == nil || ev.Type != AgentEventToolApproval || ev.Approval == nil || ev.Approval.ApprovalToken == "" {
 				continue
 			}
-			a.logger.Debug("received approval request for tool", zap.String("tool", req.ToolName), zap.Int("argCount", len(req.Args)))
-			taskToken := req.TaskToken
+			approvalToken := ev.Approval.ApprovalToken
 			onApproval := func(status ApprovalStatus) error {
 				if status != ApprovalStatusRejected && status != ApprovalStatusApproved {
 					return errors.New("invalid approval status")
 				}
-				approvalResponseCh <- approvalResponse{toolName: req.ToolName, taskToken: taskToken, status: status}
+				approvalResponseCh <- approvalResponse{approvalToken: approvalToken, status: status}
 				return nil
 			}
-			a.approvalHandler(runCtx, &req.ApprovalRequest, onApproval)
+			approvalCtx, cancel := context.WithTimeout(runCtx, a.approvalTimeout)
+			a.approvalHandler(approvalCtx, &ApprovalRequest{ToolName: ev.Approval.ToolName, Args: ev.Approval.Args}, onApproval)
+			cancel()
 		case resp := <-approvalResponseCh:
-			a.logger.Debug("received approval response for tool", zap.String("tool", resp.toolName), zap.String("status", string(resp.status)))
-			if err := a.temporalClient.CompleteActivity(runCtx, resp.taskToken, resp.status, nil); err != nil {
-				a.logger.Error("failed to complete approval activity", zap.String("tool", resp.toolName), zap.Error(err))
+			if err := a.OnApproval(runCtx, resp.approvalToken, resp.status); err != nil {
+				a.logger.Error("failed to complete approval", zap.Error(err))
 				return nil, err
 			}
 		}
@@ -395,18 +400,18 @@ func (a *Agent) Run(ctx context.Context, input string) (*AgentResponse, error) {
 }
 
 // RunStream starts the run and returns a channel of AgentEvent. Events are streamed until
-// AgentEventComplete. Handles approvals via ApprovalHandler when tools require them.
-func (a *Agent) RunStream(ctx context.Context, input string) (chan *AgentEvent, error) {
+// AgentEventComplete. For tool approvals, receive AgentEventToolApproval and call
+// agent.OnApproval(ctx, ev.Approval.ApprovalToken, status).
+// When using WithConversation, pass the conversation ID.
+func (a *Agent) RunStream(ctx context.Context, input string, conversationID string) (chan *AgentEvent, error) {
 	a.logger.Debug("run stream started", zap.String("agent", a.Name), zap.Int("inputLen", len(input)))
-	runCtx := ctx
-	d := a.timeout
-	if d == 0 {
-		d = defaultTimeout
+
+	if conversationID != "" && a.conversation == nil {
+		return nil, fmt.Errorf("conversationID %s requires conversation configuration", conversationID)
 	}
-	if _, ok := ctx.Deadline(); !ok && d > 0 {
-		var cancel context.CancelFunc
-		runCtx, cancel = context.WithTimeout(ctx, d)
-		defer cancel()
+
+	if conversationID == "" && a.conversation != nil {
+		return nil, fmt.Errorf("conversationID is required when using conversation")
 	}
 
 	id := uuid.New().String()
@@ -415,6 +420,12 @@ func (a *Agent) RunStream(ctx context.Context, input string) (chan *AgentEvent, 
 	if err != nil {
 		return nil, err
 	}
+	streamStarted := false
+	defer func() {
+		if !streamStarted {
+			cleanup()
+		}
+	}()
 
 	var eventWorkflowID string
 	if a.enableRemoteWorkers {
@@ -422,108 +433,125 @@ func (a *Agent) RunStream(ctx context.Context, input string) (chan *AgentEvent, 
 		var err error
 		eventWorkflowID, err = a.ensureEventWorkflowStarted(ctx)
 		if err != nil {
-			cleanup()
 			return nil, err
 		}
 	}
 
 	wfInput := AgentWorkflowInput{
-		Input:            input,
+		UserPrompt:       input,
 		EventWorkflowID:  eventWorkflowID,
 		StreamingEnabled: a.streamEnabled,
+		ConversationID:   conversationID,
+		EventTypes:       []AgentEventType{AgentEventAll},
 	}
+
+	runCtx := ctx
+	var runCancel context.CancelFunc
+	d := a.timeout
+	if _, ok := ctx.Deadline(); !ok && d > 0 {
+		runCtx, runCancel = context.WithTimeout(ctx, d)
+	}
+	defer func() {
+		if !streamStarted && runCancel != nil {
+			runCancel()
+		}
+	}()
 
 	eventCh, closeEvent, err := a.subscribeToAgentEvents(runCtx, workflowID)
 	if err != nil {
 		a.logger.Error("failed to subscribe to agent events", zap.String("workflowID", workflowID), zap.Error(err))
-		cleanup()
 		return nil, err
 	}
 	a.logger.Debug("subscribed to agent events", zap.String("workflowID", workflowID))
-
-	var approvalCh <-chan *approvalRequest
-	var closeApproval func() error
-	if a.approvalHandler != nil {
-		approvalCh, closeApproval, err = a.subscribeToApprovals(runCtx, workflowID)
-		if err != nil {
-			a.logger.Error("failed to subscribe to approvals", zap.String("workflowID", workflowID), zap.Error(err))
+	defer func() {
+		if !streamStarted && closeEvent != nil {
 			closeEvent()
-			cleanup()
-			return nil, err
 		}
-	}
+	}()
 
 	hasWorkers := a.hasWorkers(ctx, a.taskQueue)
 	if !hasWorkers {
 		a.logger.Warn("no workers available on task queue", zap.String("taskQueue", a.taskQueue))
-		cleanup()
 		return nil, fmt.Errorf("no workers available on task queue %s", a.taskQueue)
 	}
 
 	a.logger.Debug("executing agent workflow (stream)", zap.String("workflowID", workflowID))
 	wf := NewAgentWorkerDefault()
-	_, err = a.temporalClient.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
+	workflowRun, err := a.temporalClient.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
 		ID:        workflowID,
 		TaskQueue: a.taskQueue,
 	}, wf.AgentWorkflow, wfInput)
 	if err != nil {
 		a.logger.Error("failed to execute agent workflow", zap.String("workflowID", workflowID), zap.Error(err))
-		cleanup()
-		closeEvent()
-		if closeApproval != nil {
-			closeApproval()
-		}
 		return nil, err
 	}
 
+	streamStarted = true
 	outCh := make(chan *AgentEvent, 64)
+	wfErrCh := make(chan error, 1)
+	go func() {
+		var result AgentResponse
+		if err := workflowRun.Get(runCtx, &result); err != nil {
+			wfErrCh <- err
+		}
+	}()
 	go func() {
 		defer close(outCh)
 		defer closeEvent()
-		if closeApproval != nil {
-			defer closeApproval()
-		}
 		defer cleanup()
-		for ev := range eventCh {
-			outCh <- ev
-			if ev != nil && ev.Type == AgentEventComplete {
+		if runCancel != nil {
+			defer runCancel()
+		}
+		for {
+			select {
+			case <-runCtx.Done():
+				termCtx, termCancel := context.WithTimeout(context.Background(), 15*time.Second)
+				if a.temporalClient != nil {
+					_ = a.temporalClient.TerminateWorkflow(termCtx, workflowID, "", "run timeout")
+				}
+				termCancel()
+				outCh <- &AgentEvent{
+					Type:      AgentEventError,
+					Content:   "request timed out (approval expired or deadline exceeded)",
+					Timestamp: time.Now(),
+				}
 				return
+			case wfErr := <-wfErrCh:
+				a.logger.Error("agent workflow failed (stream)", zap.String("workflowID", workflowID), zap.Error(wfErr))
+				outCh <- &AgentEvent{
+					Type:      AgentEventError,
+					Content:   wfErr.Error(),
+					Timestamp: time.Now(),
+				}
+				return
+			case ev, ok := <-eventCh:
+				if !ok {
+					return
+				}
+				if ev == nil {
+					continue
+				}
+				outCh <- ev
+				if ev.Type == AgentEventComplete {
+					return
+				}
 			}
 		}
 	}()
 
-	if a.approvalHandler != nil {
-		approvalResponseCh := make(chan struct {
-			taskToken []byte
-			status    ApprovalStatus
-		}, 16)
-		go func() {
-			for req := range approvalCh {
-				if req == nil || req.AgentWorkflowID != workflowID {
-					continue
-				}
-				taskToken := req.TaskToken
-				onApproval := func(status ApprovalStatus) error {
-					if status != ApprovalStatusRejected && status != ApprovalStatusApproved {
-						return errors.New("invalid approval status")
-					}
-					approvalResponseCh <- struct {
-						taskToken []byte
-						status    ApprovalStatus
-					}{taskToken: taskToken, status: status}
-					return nil
-				}
-				a.approvalHandler(runCtx, &req.ApprovalRequest, onApproval)
-			}
-		}()
-		go func() {
-			for resp := range approvalResponseCh {
-				if err := a.temporalClient.CompleteActivity(runCtx, resp.taskToken, resp.status, nil); err != nil {
-					a.logger.Error("failed to complete approval activity (stream)", zap.Error(err))
-				}
-			}
-		}()
-	}
-
 	return outCh, nil
+}
+
+// copyEventWithShortApprovalToken replaces the internal base64 token with a short opaque token for the user.
+func copyEventWithShortApprovalToken(ev *AgentEvent, shortToken string) *AgentEvent {
+	c := *ev
+	if c.Approval != nil {
+		c.Approval = &ToolApprovalEvent{
+			ToolCallID:    ev.Approval.ToolCallID,
+			ToolName:      ev.Approval.ToolName,
+			Args:          ev.Approval.Args,
+			ApprovalToken: shortToken,
+		}
+	}
+	return &c
 }

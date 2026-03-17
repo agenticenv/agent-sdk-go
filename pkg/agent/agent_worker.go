@@ -25,6 +25,7 @@ func createAgentWorker(aw *AgentWorker) worker.Worker {
 	w.RegisterActivityWithOptions(aw.AgentToolApprovalActivity, activity.RegisterOptions{Name: "AgentToolApprovalActivity"})
 	w.RegisterActivityWithOptions(aw.AgentToolExecuteActivity, activity.RegisterOptions{Name: "AgentToolExecuteActivity"})
 	w.RegisterActivityWithOptions(aw.SendAgentEventUpdateActivity, activity.RegisterOptions{Name: "SendAgentEventUpdateActivity"})
+	w.RegisterActivityWithOptions(aw.AddConversationMessagesActivity, activity.RegisterOptions{Name: "AddConversationMessagesActivity"})
 	return w
 }
 

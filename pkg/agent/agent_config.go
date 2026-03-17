@@ -15,6 +15,15 @@ import (
 	"go.uber.org/zap"
 )
 
+// LLMSampling holds per-agent LLM sampling overrides. nil/0 = provider default.
+// One LLM client can serve multiple agents with different sampling.
+type LLMSampling struct {
+	Temperature *float64 // 0-2 OpenAI, 0-1 Anthropic
+	MaxTokens   int      // 0 = provider default
+	TopP        *float64 // 0-1; OpenAI only
+	TopK        *int     // Anthropic only
+}
+
 // agentConfig holds shared configuration for Agent and AgentWorker.
 //
 // Option applicability:
@@ -22,7 +31,7 @@ import (
 //   - AgentWorker only: (none—worker inherits from options passed to NewAgentWorker)
 //   - Both: WithName, WithDescription, WithSystemPrompt, WithTemporalConfig, WithInstanceId,
 //     WithLLMClient, WithToolApprovalPolicy, WithTools, WithToolRegistry, WithMaxIterations,
-//     WithStream, WithLogger, WithLogLevel
+//     WithStream, WithLogger, WithLogLevel, WithConversation
 type agentConfig struct {
 	ID                 string
 	Name               string
@@ -42,6 +51,16 @@ type agentConfig struct {
 	logLevel           string
 	approvalHandler    ApprovalHandler
 	timeout            time.Duration
+	approvalTimeout    time.Duration // max wait per tool approval; must be < timeout when tools require approval
+
+	conversation     interfaces.Conversation
+	conversationSize int // max messages to fetch for LLM context (default 20)
+
+	// responseFormat: when set, LLM requests use it; otherwise use text-only (no JSON schema).
+	responseFormat *interfaces.ResponseFormat
+
+	// llmSampling: per-agent overrides; nil = use provider defaults.
+	llmSampling *LLMSampling
 
 	// build-time flags
 	disableWorker       bool // true when user calls DisableWorker; no local worker. Agent only.
@@ -49,6 +68,12 @@ type agentConfig struct {
 	remoteWorker        bool // true when AgentWorker; activities use UpdateWorkflow
 	agentWorker         bool
 }
+
+// defaultTimeout is used when no deadline set, to avoid blocking forever when no workers run.
+const defaultTimeout = 5 * time.Minute
+
+// maxApprovalTimeout caps approval wait. Approval activity timeout cannot exceed this.
+const maxApprovalTimeout = 31 * 24 * time.Hour
 
 // Option configures an agent. See agentConfig for which options apply to Agent vs AgentWorker.
 type Option func(*agentConfig)
@@ -118,14 +143,21 @@ func WithLogLevel(level string) Option {
 	return func(c *agentConfig) { c.logLevel = level }
 }
 
-// WithApprovalHandler sets the callback for tool approval. Agent only. Ignored by AgentWorker.
+// WithApprovalHandler sets the approval callback for Run. Required when tools need approval. Used only by Run; RunStream uses AgentEventToolApproval + OnApproval. Agent only.
 func WithApprovalHandler(fn ApprovalHandler) Option {
 	return func(c *agentConfig) { c.approvalHandler = fn }
 }
 
-// WithTimeout sets a maximum wait for Run. Agent only. Ignored by AgentWorker.
+// WithTimeout sets a maximum wait for Run and RunStream. Agent only. Ignored by AgentWorker.
 func WithTimeout(d time.Duration) Option {
 	return func(c *agentConfig) { c.timeout = d }
+}
+
+// WithApprovalTimeout sets max wait per tool approval. Must be less than agent timeout.
+// Agent only. When tools require approval, used for the approval activity; defaults to timeout-30s if unset.
+// Capped at maxApprovalTimeout (31 days). Validation at build: approvalTimeout < timeout.
+func WithApprovalTimeout(d time.Duration) Option {
+	return func(c *agentConfig) { c.approvalTimeout = d }
 }
 
 // WithEnableRemoteWorkers enables the event worker and event workflow. Agent only. Default false.
@@ -138,6 +170,38 @@ func WithEnableRemoteWorkers(enable bool) Option {
 // DisableWorker marks to skip local worker creation. Agent only. Use with NewAgentWorker.
 func DisableWorker() Option {
 	return func(c *agentConfig) { c.disableWorker = true }
+}
+
+// WithConversation sets the conversation for message history. Applies to Agent and AgentWorker.
+// The user creates the conversation (inmem or redis) and passes it to the agent.
+// System messages are not stored; agent SystemPrompt is used for LLM calls.
+//
+// Choose implementation based on deployment:
+//   - Single process: use inmem.NewInMemoryConversation
+//   - Remote workers: use redis.NewRedisConversation (in-memory cannot be used across processes)
+//
+// The user owns the conversation lifecycle. Call Clear on the conversation when appropriate
+// (e.g., when ending a session). The agent never calls Clear.
+// Note: Agent and worker must use the same conversation and ID when using remote workers.
+func WithConversation(conv interfaces.Conversation) Option {
+	return func(c *agentConfig) { c.conversation = conv }
+}
+
+// WithConversationSize sets the max messages to fetch for LLM context (default 20).
+func WithConversationSize(size int) Option {
+	return func(c *agentConfig) { c.conversationSize = size }
+}
+
+// WithResponseFormat sets the LLM response format (e.g. JSON with schema). Applies to Agent and AgentWorker.
+// When not set, the agent uses text-only output (no response_format override).
+func WithResponseFormat(rf *interfaces.ResponseFormat) Option {
+	return func(c *agentConfig) { c.responseFormat = rf }
+}
+
+// WithLLMSampling sets per-agent LLM sampling overrides. Applies to Agent and AgentWorker.
+// When not set, LLM clients use their provider defaults. nil fields / 0 = provider default.
+func WithLLMSampling(s *LLMSampling) Option {
+	return func(c *agentConfig) { c.llmSampling = s }
 }
 
 // buildAgentConfig applies options, validates, and creates the Temporal client.
@@ -159,6 +223,29 @@ func buildAgentConfig(opts []Option) (*agentConfig, error) {
 	if c.LLMClient == nil {
 		return nil, errors.New("LLM client is required")
 	}
+	if c.conversation != nil && (c.enableRemoteWorkers || c.disableWorker) && !c.conversation.IsDistributed() {
+		return nil, errors.New("in-memory conversation cannot be used with remote workers (DisableWorker or WithEnableRemoteWorkers): use distributed storage such as redis.NewRedisConversation")
+	}
+	if c.conversationSize <= 0 {
+		c.conversationSize = 20
+	}
+	if c.timeout == 0 {
+		c.timeout = defaultTimeout
+	}
+
+	// Validate approvalTimeout when any tool requires approval (approvalTimeout must be < timeout)
+	if c.hasApprovalTools() {
+		if c.approvalTimeout == 0 {
+			c.approvalTimeout = c.timeout - 30*time.Second
+		}
+		if c.approvalTimeout >= c.timeout {
+			return nil, fmt.Errorf("approvalTimeout (%v) must be less than agent timeout (%v)", c.approvalTimeout, c.timeout)
+		}
+		if c.approvalTimeout > maxApprovalTimeout {
+			return nil, fmt.Errorf("approvalTimeout (%v) exceeds max (%v)", c.approvalTimeout, maxApprovalTimeout)
+		}
+	}
+
 	if c.logLevel == "" {
 		c.logLevel = "error"
 	}
@@ -194,8 +281,10 @@ func buildAgentConfig(opts []Option) (*agentConfig, error) {
 		zap.Bool("remoteWorker", c.remoteWorker),
 		zap.Bool("hasApprovalHandler", c.approvalHandler != nil),
 		zap.Duration("timeout", c.timeout),
+		zap.Duration("approvalTimeout", c.approvalTimeout),
 		zap.String("logLevel", c.logLevel),
-		zap.Int("toolCount", len(c.toolsList())))
+		zap.Int("toolCount", len(c.toolsList())),
+		zap.Bool("hasConversation", c.conversation != nil))
 	return c, nil
 }
 
@@ -216,8 +305,47 @@ func (c *agentConfig) toolsList() []interfaces.Tool {
 	return c.tools
 }
 
+// responseFormatForLLM returns the response format for LLM requests.
+// When user sets WithResponseFormat, that is used; otherwise text-only.
+func (c *agentConfig) responseFormatForLLM() *interfaces.ResponseFormat {
+	if c.responseFormat != nil {
+		return c.responseFormat
+	}
+	return &interfaces.ResponseFormat{Type: interfaces.ResponseFormatText}
+}
+
+// applySamplingToRequest sets Temperature, MaxTokens, TopP, TopK on req from agent LLMSampling.
+// When llmSampling is nil, nothing is set; LLM clients use their provider defaults.
+func (c *agentConfig) applySamplingToRequest(req *interfaces.LLMRequest) {
+	if c.llmSampling == nil {
+		return
+	}
+	s := c.llmSampling
+	if s.Temperature != nil {
+		req.Temperature = s.Temperature
+	}
+	if s.MaxTokens > 0 {
+		req.MaxTokens = s.MaxTokens
+	}
+	if s.TopP != nil {
+		req.TopP = s.TopP
+	}
+	if s.TopK != nil {
+		req.TopK = s.TopK
+	}
+}
+
 func (c *agentConfig) requiresApproval(t interfaces.Tool) bool {
 	return c.toolApprovalPolicy != nil && c.toolApprovalPolicy.RequiresApproval(t)
+}
+
+func (c *agentConfig) hasApprovalTools() bool {
+	for _, t := range c.toolsList() {
+		if c.requiresApproval(t) {
+			return true
+		}
+	}
+	return false
 }
 
 func newTemporalClient(config *TemporalConfig, logger log.Logger) (client.Client, error) {

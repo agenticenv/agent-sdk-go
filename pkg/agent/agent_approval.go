@@ -2,10 +2,8 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/base64"
 	"fmt"
-
-	"go.uber.org/zap"
 )
 
 type ApprovalStatus string
@@ -16,18 +14,6 @@ const (
 	ApprovalStatusApproved ApprovalStatus = "APPROVED"
 	ApprovalStatusRejected ApprovalStatus = "REJECTED"
 )
-
-// ErrApprovalRequired is returned by AgentLLMActivity when a tool needs approval and the workflow should run ToolApprovalActivity.
-var ErrApprovalRequired = &errApprovalRequired{}
-
-type errApprovalRequired struct {
-	ToolName string
-	Args     map[string]any
-}
-
-func (e *errApprovalRequired) Error() string {
-	return fmt.Sprintf("approval required for tool %s", e.ToolName)
-}
 
 // ApprovalSender sends an approval result. Call once per request. Safe for concurrent use—
 // multiple approvals may be pending when tools run in parallel.
@@ -45,38 +31,16 @@ type ApprovalRequest struct {
 	Args     map[string]any `json:"args"`
 }
 
-// approvalRequest is the internal wire format; embeds ApprovalRequest and adds fields for completion and routing.
-type approvalRequest struct {
-	ApprovalRequest
-	AgentWorkflowID string `json:"agent_workflow_id"`
-	TaskToken       []byte `json:"task_token"`
-}
-
-// subscribeToApprovals returns a channel that receives approvalRequest from the per-run approval channel.
-func (a *Agent) subscribeToApprovals(ctx context.Context, workflowID string) (<-chan *approvalRequest, func() error, error) {
-	channel := approvalChannelName(workflowID)
-
-	a.logger.Debug("subscribing to approvals", zap.String("channel", channel))
-
-	ch, closeFn, err := a.agentChannel.Subscribe(ctx, channel)
-	if err != nil {
-		a.logger.Error("error subscribing to approvals", zap.Error(err))
-		return nil, nil, err
+// OnApproval completes a pending tool approval. Pass the ApprovalToken from AgentEventToolApproval.
+// ApprovalToken is base64-encoded; stateless so it works across pods (e.g. Redis pub/sub to UI, approval from any instance).
+// Example: a.OnApproval(ctx, ev.Approval.ApprovalToken, status)
+func (a *Agent) OnApproval(ctx context.Context, approvalToken string, status ApprovalStatus) error {
+	if status != ApprovalStatusApproved && status != ApprovalStatusRejected {
+		return fmt.Errorf("invalid approval status: %s", status)
 	}
-
-	reqCh := make(chan *approvalRequest)
-	go func() {
-		defer close(reqCh)
-		for data := range ch {
-			var req approvalRequest
-			if err := json.Unmarshal(data, &req); err != nil {
-				a.logger.Debug("failed to unmarshal approval request", zap.Error(err))
-				continue
-			}
-			reqCh <- &req
-		}
-	}()
-
-	a.logger.Debug("subscribed to approvals", zap.String("channel", channel))
-	return reqCh, closeFn, nil
+	taskToken, err := base64.StdEncoding.DecodeString(approvalToken)
+	if err != nil {
+		return fmt.Errorf("invalid approval token: %w", err)
+	}
+	return a.temporalClient.CompleteActivity(ctx, taskToken, status, nil)
 }

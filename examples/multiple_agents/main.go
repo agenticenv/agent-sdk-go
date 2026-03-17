@@ -62,7 +62,7 @@ func main() {
 
 	runAgent := func(name string, a *agent.Agent, p string) {
 		fmt.Printf("\n--- %s ---\n", name)
-		response, err := a.Run(context.Background(), p)
+		response, err := a.Run(context.Background(), p, "")
 		if err != nil {
 			fmt.Printf("%s error: %v\n", name, err)
 			return

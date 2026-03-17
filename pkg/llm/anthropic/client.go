@@ -6,6 +6,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/anthropics/anthropic-sdk-go/packages/param"
 	"github.com/anthropics/anthropic-sdk-go/packages/ssestream"
 	"github.com/anthropics/anthropic-sdk-go/shared/constant"
 	"github.com/vinodvanja/temporal-agents-go/pkg/interfaces"
@@ -50,12 +51,21 @@ func (c *Client) IsStreamSupported() bool {
 	return true
 }
 
-func (c *Client) Generate(ctx context.Context, req *interfaces.LLMRequest) (*interfaces.LLMResponse, error) {
-	messages := messagesToAnthropic(req)
+func (c *Client) buildMessageParams(messages []anthropic.MessageParam, req *interfaces.LLMRequest) anthropic.MessageNewParams {
+	maxTokens := int64(llm.DefaultMaxTokens)
+	if req.MaxTokens > 0 {
+		maxTokens = int64(req.MaxTokens)
+	}
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(c.Model),
-		MaxTokens: 1024,
+		MaxTokens: maxTokens,
 		Messages:  messages,
+	}
+	if req.Temperature != nil {
+		params.Temperature = param.NewOpt(*req.Temperature)
+	}
+	if req.TopK != nil {
+		params.TopK = param.NewOpt(int64(*req.TopK))
 	}
 	if req.SystemMessage != "" {
 		params.System = []anthropic.TextBlockParam{
@@ -68,6 +78,34 @@ func (c *Client) Generate(ctx context.Context, req *interfaces.LLMRequest) (*int
 			OfAuto: &anthropic.ToolChoiceAutoParam{},
 		}
 	}
+	if req.ResponseFormat != nil {
+		params.OutputConfig = responseFormatToAnthropic(req.ResponseFormat)
+	}
+	return params
+}
+
+func responseFormatToAnthropic(rf *interfaces.ResponseFormat) anthropic.OutputConfigParam {
+	switch rf.Type {
+	case interfaces.ResponseFormatJSON:
+		if len(rf.Schema) > 0 {
+			return anthropic.OutputConfigParam{
+				Format: anthropic.JSONOutputFormatParam{
+					Type:   constant.JSONSchema("json_schema"),
+					Schema: map[string]any(rf.Schema),
+				},
+			}
+		}
+	case interfaces.ResponseFormatText:
+		// Anthropic defaults to text; no OutputConfig needed
+	}
+	return anthropic.OutputConfigParam{}
+}
+
+func (c *Client) Generate(ctx context.Context, req *interfaces.LLMRequest) (*interfaces.LLMResponse, error) {
+	messages := messagesToAnthropic(req)
+
+	params := c.buildMessageParams(messages, req)
+
 	// Log safe debug info only (no messages/content to avoid leaking sensitive data)
 	c.Logger.Debug("generating anthropic response",
 		zap.String("model", c.Model),
@@ -107,22 +145,7 @@ func (c *Client) GenerateStream(ctx context.Context, req *interfaces.LLMRequest)
 		zap.Int("messageCount", len(req.Messages)),
 		zap.Int("toolCount", len(req.Tools)))
 	messages := messagesToAnthropic(req)
-	params := anthropic.MessageNewParams{
-		Model:     anthropic.Model(c.Model),
-		MaxTokens: 1024,
-		Messages:  messages,
-	}
-	if req.SystemMessage != "" {
-		params.System = []anthropic.TextBlockParam{
-			{Text: req.SystemMessage},
-		}
-	}
-	if len(req.Tools) > 0 {
-		params.Tools = toolsToAnthropic(req.Tools)
-		params.ToolChoice = anthropic.ToolChoiceUnionParam{
-			OfAuto: &anthropic.ToolChoiceAutoParam{},
-		}
-	}
+	params := c.buildMessageParams(messages, req)
 	stream := c.client.Messages.NewStreaming(ctx, params)
 	acc := &anthropic.Message{}
 	return &anthropicStreamAdapter{stream: stream, acc: acc}, nil

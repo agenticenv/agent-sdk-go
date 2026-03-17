@@ -4,7 +4,7 @@ Temporal-native AI agent SDK for building agents with [Temporal](https://tempora
 
 ## What is this?
 
-**temporal-agents-go** lets you build AI agents that run on Temporal. The agent uses an LLM (OpenAI or Anthropic) to reason and optionally call tools. Workflows, activities, and tool execution are all orchestrated by Temporal—giving you durability, retries, and visibility out of the box.
+**temporal-agents-go** lets you build AI agents that run on Temporal. The agent uses an LLM (OpenAI or Anthropic) to reason and optionally call tools. Temporal handles orchestration—giving you durability, retries, and visibility.
 
 ## Capabilities
 
@@ -12,7 +12,7 @@ Temporal-native AI agent SDK for building agents with [Temporal](https://tempora
 - **Streaming** — Partial content and thinking deltas via `RunStream`
 - **Tools** — Built-in tools and custom tools via `interfaces.Tool`
 - **Tool approval** — Optional approval flow before executing tools
-- **Temporal-native** — Workflows, activities, durable execution, retries
+- **Temporal-native** — Durable execution, retries, visibility
 
 ## Getting started
 
@@ -42,7 +42,7 @@ a, _ := agent.NewAgent(
 )
 defer a.Close()
 
-result, err := a.Run(ctx, "Hello")
+result, err := a.Run(ctx, "Hello", "")
 // result.Content, result.AgentName, result.Model
 ```
 
@@ -77,7 +77,7 @@ a, _ := agent.NewAgent(
 )
 defer a.Close()
 
-eventCh, err := a.RunStream(ctx, "What's 17 * 23?")
+eventCh, err := a.RunStream(ctx, "What's 17 * 23?", "")
 for ev := range eventCh {
     switch ev.Type {
     case agent.AgentEventContentDelta:
@@ -91,6 +91,22 @@ for ev := range eventCh {
 ```
 
 [examples/agent_with_stream](examples/agent_with_stream)
+
+#### Displaying stream events
+
+When streaming is enabled, the agent emits `ContentDelta` (partial tokens) and then `Complete` (full content). Both carry the same text—printing both would show it twice.
+
+**Recommended pattern:** Track whether you already displayed content via `ContentDelta` or `Content`, and skip printing `Complete`'s content when so. Use `ev.Content` from `AgentEventComplete` as the canonical final result for programmatic use (e.g. logging, storage).
+
+```
+ContentDelta → "The result is 40."   (streamed, shown to user)
+ContentDelta → ...
+Complete     → "The result is 40."   (don't re-print; use ev.Content in code)
+```
+
+**Event types:** `ContentDelta` (streamed tokens), `Content` (full block when not streaming), `ToolCall`, `ToolResult`, `Complete` (final response), `Error`.
+
+See [examples/agent_with_stream_conversation](examples/agent_with_stream_conversation) for a full example: RunStream with conversation and the event-handling pattern.
 
 ### Tools
 
@@ -109,33 +125,121 @@ a, _ := agent.NewAgent(
 )
 defer a.Close()
 
-result, _ := a.Run(ctx, "What's the weather in Tokyo?")
+result, _ := a.Run(ctx, "What's the weather in Tokyo?", "")
 ```
 
 [examples/agent_with_tools](examples/agent_with_tools)
 
 ### Tool approval
 
-By default tools require approval. Use `agent.WithApprovalHandler` to handle approvals:
+By default tools require approval. Use `WithApprovalHandler` on the agent (required for Run):
 
 ```go
 a, _ := agent.NewAgent(
-    agent.WithTemporalConfig(...),
-    agent.WithLLMClient(...),
-    agent.WithToolRegistry(reg),
     agent.WithApprovalHandler(func(ctx context.Context, req *agent.ApprovalRequest, onApproval agent.ApprovalSender) {
         // Prompt user, then call onApproval(agent.ApprovalStatusApproved) or onApproval(agent.ApprovalStatusRejected)
     }),
+    // ...
 )
+a.Run(ctx, prompt, "")
 ```
 
+**RunStream** — receive `AgentEventToolApproval` and call `agent.OnApproval`:
+
+```go
+for ev := range eventCh {
+    if ev.Type == agent.AgentEventToolApproval && ev.Approval != nil {
+        // Show UI, then:
+        a.OnApproval(ctx, ev.Approval.ApprovalToken, agent.ApprovalStatusApproved)
+    }
+}
+```
+
+`ApprovalToken` is opaque—pass it to `OnApproval`. The token is stateless and self-contained; the agent does not require Redis or other shared storage for approvals. You may forward the event (with token) to a UI or API and call `OnApproval` when the user responds. To avoid exposing the token, store it in your own map or DB, give the UI a short ID, and look up the token before calling `OnApproval`.
+
 [examples/agent_with_tools_approval](examples/agent_with_tools_approval)
+
+**Approval timeout:** `WithApprovalTimeout` (default: `timeout − 30s`) limits how long the user has to approve or reject a tool. If they do not respond in time:
+
+- **Run:** `Run()` returns `nil, err` with the failure.
+- **RunStream:** An `AgentEventError` is emitted on the event channel with the error message.
+
+### Timeouts and deadlines
+
+You can limit run duration in two ways:
+
+**Option 1 — Context with deadline** (per-call):
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+defer cancel()
+result, err := a.Run(ctx, "Hello", "")
+```
+
+**Option 2 — Agent `WithTimeout`** (when ctx has no deadline):
+
+```go
+a, _ := agent.NewAgent(
+    agent.WithTimeout(5 * time.Minute),
+    // ...
+)
+result, err := a.Run(context.Background(), "Hello", "")
+```
+
+**Notes:**
+
+- ctx deadline always wins. If ctx has 2 min but agent has `WithTimeout(10 min)`, the run ends at 2 min.
+- approvalTimeout (per-approval limit) comes from agent config. If ctx has 1 hour and you use neither option, approval still expires at ~4.5 min (default). Set `WithTimeout` or `WithApprovalTimeout` for longer approvals.
 
 ### Custom tools
 
 Implement `interfaces.Tool`: `Name()`, `Description()`, `Parameters()`, `Execute()`. Register with `agent.WithTools(tool1, tool2)`.
 
 [examples/agent_with_custom_tools](examples/agent_with_custom_tools)
+
+### Response format
+
+By default the agent uses **text-only** output. Use `agent.WithResponseFormat` to request structured output (e.g. JSON with a schema).
+
+**Default (text):** No `WithResponseFormat` — the LLM responds as plain text.
+
+```go
+a, _ := agent.NewAgent(
+    agent.WithTemporalConfig(...),
+    agent.WithLLMClient(...),
+    // No WithResponseFormat — text output
+)
+```
+
+**JSON with schema:** Use `interfaces.ResponseFormatJSON` and a valid JSON Schema. The schema must have `type: "object"` at the root with `properties`:
+
+```go
+import "github.com/vinodvanja/temporal-agents-go/pkg/interfaces"
+
+a, _ := agent.NewAgent(
+    agent.WithTemporalConfig(...),
+    agent.WithLLMClient(...),
+    agent.WithResponseFormat(&interfaces.ResponseFormat{
+        Type:   interfaces.ResponseFormatJSON,
+        Name:   "AgentResponse",
+        Schema: interfaces.JSONSchema{
+            "type":       "object",
+            "properties": interfaces.JSONSchema{
+                "response": interfaces.JSONSchema{"type": "string"},
+            },
+            "required": []any{"response"},
+        },
+    }),
+)
+```
+
+**Text explicitly:** Force plain text even if you later add other config:
+
+```go
+agent.WithResponseFormat(&interfaces.ResponseFormat{Type: interfaces.ResponseFormatText})
+```
+
+**Note:** Structured Outputs (JSON schema) require supported models (e.g. `gpt-4o`, `gpt-4o-mini`). Older models may use JSON mode instead. See your provider docs.
 
 ### Multiple agents
 
@@ -177,12 +281,98 @@ result, _ := a.Run(ctx, "Hello")
 
 [examples/agent_with_worker](examples/agent_with_worker)
 
+### Conversation (message history)
+
+Pass `agent.WithConversation(conv)` to persist message history for multi-turn context. Use `agent.WithConversationSize(n)` to limit how many messages are fetched for LLM context (default 20).
+
+**Conversation ID:** When the agent is configured with a conversation, pass the same `conversationID` to both `Run(ctx, prompt, conversationID)` and `RunStream(ctx, prompt, conversationID)` for the same session—so history is shared across turns.
+
+Choose implementation by deployment:
+
+| Deployment | Use |
+|------------|-----|
+| **Single process** (agent and worker in same process) | `inmem.NewInMemoryConversation` |
+| **Remote workers** (`DisableWorker` or `WithEnableRemoteWorkers`) | `redis.NewRedisConversation` or another distributed store |
+
+In-memory cannot be used with remote workers—the agent will return an error at build time.
+
+**Remote workers:** Agent and worker must use the same conversation store (same Redis config) so both processes access the same data. Only the process that calls `Run` or `RunStream` passes the conversation ID; the worker does not.
+
+```go
+// Single process (default)
+conv := inmem.NewInMemoryConversation(inmem.WithMaxSize(100))
+a, _ := agent.NewAgent(
+    agent.WithTemporalConfig(...),
+    agent.WithLLMClient(...),
+    agent.WithConversation(conv),
+    agent.WithConversationSize(20), // optional; default 20
+)
+result, _ := a.Run(ctx, "Hello", "session-1")
+
+// Worker process
+convW, _ := redis.NewRedisConversation(redis.WithAddr("localhost:6379"))
+defer convW.Close()
+w, _ := agent.NewAgentWorker(
+    agent.WithTemporalConfig(...),
+    agent.WithLLMClient(...),
+    agent.WithConversation(convW),
+)
+go w.Start()
+
+// Agent process
+convA, _ := redis.NewRedisConversation(redis.WithAddr("localhost:6379"))
+defer convA.Close()
+a, _ := agent.NewAgent(
+    agent.WithTemporalConfig(...),
+    agent.WithLLMClient(...),
+    agent.DisableWorker(),
+    agent.WithConversation(convA),
+)
+result, _ := a.Run(ctx, "Hello", "session-1")
+```
+
+**Lifecycle:** You own the conversation. Call `Clear` when ending a session or when you no longer need the history. The agent never calls `Clear`.
+
+**Example (in-memory, single process):**
+
+```go
+import (
+    "github.com/vinodvanja/temporal-agents-go/pkg/agent"
+    "github.com/vinodvanja/temporal-agents-go/pkg/conversation/inmem"
+)
+
+conv := inmem.NewInMemoryConversation(inmem.WithMaxSize(100))
+a, _ := agent.NewAgent(
+    agent.WithTemporalConfig(...),
+    agent.WithLLMClient(...),
+    agent.WithConversation(conv),
+    agent.WithConversationSize(20),
+)
+defer a.Close()
+
+convID := "session-1"
+a.Run(ctx, "I'm Alice. Remember that.", convID)
+a.Run(ctx, "What's my name?", convID) // agent uses history: "Alice"
+```
+
+[examples/agent_with_conversation](examples/agent_with_conversation)
+
 ---
 
 ## Configuration
 
-- **EnableRemoteWorkers:** Set `agent.WithEnableRemoteWorkers(true)` when using `DisableWorker` with approval or streaming.
-- **Env config:** [examples/README.md](examples/README.md) for examples; [cmd/README.md](cmd/README.md) for CLI.
+| Option | Description |
+|--------|--------------|
+| **WithResponseFormat** | LLM response format. Omit for text-only. Use `&interfaces.ResponseFormat{Type, Name, Schema}` for JSON with schema. See [Response format](#response-format). |
+| **WithConversation** | Message history store. Use `inmem` for single process; `redis` for remote workers. Pass same `conversationID` to `Run` and `RunStream` for a session. See [Conversation](#conversation-message-history). |
+| **WithConversationSize** | Max messages to fetch for LLM context (default 20). Only applies when `WithConversation` is set. |
+| **WithEnableRemoteWorkers** | Set `true` when using `DisableWorker` with approval or streaming. |
+| **WithMaxIterations** | Max LLM rounds (default 5). |
+| **WithStream** | Enable `RunStream` partial content streaming. |
+| **WithLLMSampling** | Per-agent sampling (`Temperature`, `MaxTokens`, `TopP`, `TopK`). Pass `&agent.LLMSampling{...}`; nil fields = provider default. Extensible for more params. |
+| **WithApprovalTimeout** | Max wait per tool approval; must be less than agent timeout. Defaults to timeout−30s when tools require approval. Capped at 31 days. |
+
+**Env config:** [examples/README.md](examples/README.md) for examples; [cmd/README.md](cmd/README.md) for CLI.
 
 ---
 

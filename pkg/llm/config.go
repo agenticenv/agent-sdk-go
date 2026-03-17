@@ -39,6 +39,14 @@ func WithBaseURL(baseURL string) Option {
 	return func(c *LLMConfig) { c.BaseURL = baseURL }
 }
 
+// DefaultMaxTokens is used when MaxTokens is 0 and the provider requires it (e.g. Anthropic).
+const DefaultMaxTokens = 1024
+
+// BuildConfig builds LLMConfig from options. Defaults when not set:
+//   - LogLevel: "error"
+//   - Logger: zap adapter
+//
+// Sampling (Temperature, MaxTokens, TopP, TopK) is per-agent—use agent.WithTemperature etc.
 func BuildConfig(opts ...Option) (*LLMConfig, error) {
 	c := &LLMConfig{}
 	for _, opt := range opts {

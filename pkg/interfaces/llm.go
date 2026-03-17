@@ -40,14 +40,6 @@ type LLMStreamChunk struct {
 	ToolCalls     []*ToolCall // set on final chunk when tool calls are present
 }
 
-// Message represents a conversation turn for multi-turn (including tool use).
-type Message struct {
-	Role       string      // "user", "assistant", "tool"
-	Content    string      // text content
-	ToolCallID string      // for tool role: id from the assistant's tool_call
-	ToolCalls  []*ToolCall // for assistant: tool invocations
-}
-
 type LLMRequest struct {
 	SystemMessage  string
 	ResponseFormat *ResponseFormat
@@ -56,6 +48,12 @@ type LLMRequest struct {
 	// Messages is the conversation history. For first turn, use one user message.
 	// For continuation after tool use: append assistant (with ToolCalls) + tool result messages.
 	Messages []Message
+
+	// Sampling (per-request; typically set from agent config). nil/0 = provider default.
+	Temperature *float64 // 0-2 OpenAI, 0-1 Anthropic
+	MaxTokens   int     // 0 = provider default
+	TopP        *float64 // 0-1; OpenAI only
+	TopK        *int     // Anthropic only
 }
 
 type LLMResponse struct {
