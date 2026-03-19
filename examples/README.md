@@ -24,6 +24,7 @@ The examples use `TEMPORAL_HOST`, `TEMPORAL_PORT`, `TEMPORAL_NAMESPACE` from `.e
 | Example | What it demonstrates |
 |---------|---------------------|
 | `simple_agent` | Minimal agent, no tools — Temporal config, system prompt, LLM client, single `Run()` |
+| `agent_with_temporal_client` | Caller-owned Temporal client — `WithTemporalClient` + `WithTaskQueue`; create and close client yourself (TLS, API key, Cloud) |
 | `agent_with_conversation` | In-memory conversation with `WithConversation` — multi-turn context, same `conversationID` for `Run` |
 | `agent_with_tools` | Built-in tools (echo, calculator, weather, wikipedia, search) with auto-approval |
 | `agent_with_stream` | Streaming with `RunStream` + partial content (`content_delta`, `tool_call`, `complete`) |
@@ -46,6 +47,14 @@ cp env.sample .env
 
 ```bash
 go run ./simple_agent "Hello, what can you do?"
+```
+
+### Agent with caller-owned Temporal client
+
+Uses `WithTemporalClient` and `WithTaskQueue`. The example creates the Temporal client, passes it to the agent, and closes it when done. Use this pattern for TLS, Temporal Cloud API keys, or other connection options.
+
+```bash
+go run ./agent_with_temporal_client "Hello, what can you do?"
 ```
 
 ### Agent with conversation (multi-turn)
