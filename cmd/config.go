@@ -10,6 +10,7 @@ import (
 	"github.com/vvsynapse/temporal-agents-go/pkg/interfaces"
 	"github.com/vvsynapse/temporal-agents-go/pkg/llm"
 	"github.com/vvsynapse/temporal-agents-go/pkg/llm/anthropic"
+	"github.com/vvsynapse/temporal-agents-go/pkg/llm/gemini"
 	"github.com/vvsynapse/temporal-agents-go/pkg/llm/openai"
 	"github.com/vvsynapse/temporal-agents-go/pkg/logger"
 	"go.temporal.io/sdk/log"
@@ -115,6 +116,8 @@ func NewLLMClient(cfg *Config, lgr log.Logger) (interfaces.LLMClient, error) {
 		return anthropic.NewClient(opts...)
 	case interfaces.LLMProviderOpenAI:
 		return openai.NewClient(opts...)
+	case interfaces.LLMProviderGemini:
+		return gemini.NewClient(opts...)
 	default:
 		return openai.NewClient(opts...)
 	}

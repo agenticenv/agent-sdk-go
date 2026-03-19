@@ -336,7 +336,15 @@ func (c *agentConfig) applySamplingToRequest(req *interfaces.LLMRequest) {
 }
 
 func (c *agentConfig) requiresApproval(t interfaces.Tool) bool {
-	return c.toolApprovalPolicy != nil && c.toolApprovalPolicy.RequiresApproval(t)
+	if c.toolApprovalPolicy == nil {
+		// No policy: honor tool's ApprovalRequired
+		if ar, ok := t.(interfaces.ToolApproval); ok && ar.ApprovalRequired() {
+			return true
+		}
+		return false
+	}
+	// Policy set: policy decides (can override tool default)
+	return c.toolApprovalPolicy.RequiresApproval(t)
 }
 
 func (c *agentConfig) hasApprovalTools() bool {

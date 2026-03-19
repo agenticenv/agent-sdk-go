@@ -5,7 +5,8 @@ import "context"
 //go:generate mockgen -destination=./mocks/mock_tool.go -package=mocks github.com/vvsynapse/temporal-agents-go/pkg/interfaces Tool,ToolRegistry
 
 // ToolApproval is an optional interface for tools that require user approval before execution.
-// When implemented, the tool's ApprovalRequired() is reflected in ToolSpec for the LLM.
+// When implemented, the agent honors ApprovalRequired() when no agent-level policy is set.
+// WithToolApprovalPolicy overrides this tool-level default when set.
 type ToolApproval interface {
 	ApprovalRequired() bool
 }
@@ -30,23 +31,18 @@ type Tool interface {
 
 // ToolSpec is the schema sent to the LLM for tool selection. Convert from Tool via ToolToSpec.
 type ToolSpec struct {
-	Name             string     `json:"name"`
-	Description      string     `json:"description"`
-	Parameters       JSONSchema `json:"parameters"`
-	ApprovalRequired bool       `json:"approval_required,omitempty"` // when true, tool requires user approval before execution
+	Name        string     `json:"name"`
+	Description string     `json:"description"`
+	Parameters  JSONSchema `json:"parameters"`
 }
 
 // ToolToSpec converts a Tool to its spec for the LLM.
 func ToolToSpec(t Tool) ToolSpec {
-	spec := ToolSpec{
+	return ToolSpec{
 		Name:        t.Name(),
 		Description: t.Description(),
 		Parameters:  t.Parameters(),
 	}
-	if ar, ok := t.(ToolApproval); ok && ar.ApprovalRequired() {
-		spec.ApprovalRequired = true
-	}
-	return spec
 }
 
 // ToolsToSpecs converts a slice of Tool to specs for the LLM.

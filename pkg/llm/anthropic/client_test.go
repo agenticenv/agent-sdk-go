@@ -80,6 +80,59 @@ func TestGenerate_ResponseFormatJSON(t *testing.T) {
 	}
 }
 
+func TestGenerate_WithTools(t *testing.T) {
+	apiKey := os.Getenv("ANTHROPIC_API_KEY")
+	if apiKey == "" {
+		t.Skip("ANTHROPIC_API_KEY not set")
+	}
+	c, err := NewClient(llm.WithAPIKey(apiKey), llm.WithModel("claude-haiku-4-5"))
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	ctx := context.Background()
+	req := &interfaces.LLMRequest{
+		SystemMessage: "You are a helpful assistant. Use the add tool when asked to add numbers.",
+		Tools: []interfaces.ToolSpec{
+			{
+				Name:        "add",
+				Description: "Add two numbers. Use when the user asks to add or sum numbers.",
+				Parameters: interfaces.JSONSchema{
+					"type": "object",
+					"properties": interfaces.JSONSchema{
+						"a": interfaces.JSONSchema{"type": "number", "description": "First number"},
+						"b": interfaces.JSONSchema{"type": "number", "description": "Second number"},
+					},
+					"required": []any{"a", "b"},
+				},
+			},
+		},
+		Messages: []interfaces.Message{{Role: "user", Content: "What is 3 + 5? Use the add tool."}},
+	}
+	resp, err := c.Generate(ctx, req)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("expected non-nil response")
+	}
+	if len(resp.ToolCalls) == 0 {
+		t.Error("expected at least one tool call, got none")
+	}
+	found := false
+	for _, tc := range resp.ToolCalls {
+		if tc != nil && tc.ToolName == "add" {
+			found = true
+			if tc.Args == nil {
+				t.Error("expected tool call args")
+			}
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected tool call for 'add', got %v", resp.ToolCalls)
+	}
+}
+
 func TestGenerateStream(t *testing.T) {
 	apiKey := os.Getenv("ANTHROPIC_API_KEY")
 	if apiKey == "" {

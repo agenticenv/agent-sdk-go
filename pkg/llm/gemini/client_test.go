@@ -1,4 +1,4 @@
-package openai
+package gemini
 
 import (
 	"context"
@@ -11,18 +11,21 @@ import (
 )
 
 func TestNewClient_requiresAPIKey(t *testing.T) {
-	_, err := NewClient(llm.WithModel("gpt-4o-mini"))
+	_, err := NewClient(llm.WithModel("gemini-2.5-flash"))
 	if err == nil {
 		t.Fatal("expected error when APIKey is not set")
 	}
 }
 
 func TestGenerate(t *testing.T) {
-	apiKey := os.Getenv("OPENAI_API_KEY")
+	apiKey := os.Getenv("GEMINI_API_KEY")
 	if apiKey == "" {
-		t.Skip("OPENAI_API_KEY not set")
+		apiKey = os.Getenv("GOOGLE_API_KEY")
 	}
-	c, err := NewClient(llm.WithAPIKey(apiKey), llm.WithModel("gpt-4o-mini"))
+	if apiKey == "" {
+		t.Skip("GEMINI_API_KEY or GOOGLE_API_KEY not set")
+	}
+	c, err := NewClient(llm.WithAPIKey(apiKey), llm.WithModel("gemini-2.5-flash"))
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -41,11 +44,14 @@ func TestGenerate(t *testing.T) {
 }
 
 func TestGenerate_ResponseFormatJSON(t *testing.T) {
-	apiKey := os.Getenv("OPENAI_API_KEY")
+	apiKey := os.Getenv("GEMINI_API_KEY")
 	if apiKey == "" {
-		t.Skip("OPENAI_API_KEY not set")
+		apiKey = os.Getenv("GOOGLE_API_KEY")
 	}
-	c, err := NewClient(llm.WithAPIKey(apiKey), llm.WithModel("gpt-4o-mini"))
+	if apiKey == "" {
+		t.Skip("GEMINI_API_KEY or GOOGLE_API_KEY not set")
+	}
+	c, err := NewClient(llm.WithAPIKey(apiKey), llm.WithModel("gemini-2.5-flash"))
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -80,11 +86,14 @@ func TestGenerate_ResponseFormatJSON(t *testing.T) {
 }
 
 func TestGenerate_WithTools(t *testing.T) {
-	apiKey := os.Getenv("OPENAI_API_KEY")
+	apiKey := os.Getenv("GEMINI_API_KEY")
 	if apiKey == "" {
-		t.Skip("OPENAI_API_KEY not set")
+		apiKey = os.Getenv("GOOGLE_API_KEY")
 	}
-	c, err := NewClient(llm.WithAPIKey(apiKey), llm.WithModel("gpt-4o-mini"))
+	if apiKey == "" {
+		t.Skip("GEMINI_API_KEY or GOOGLE_API_KEY not set")
+	}
+	c, err := NewClient(llm.WithAPIKey(apiKey), llm.WithModel("gemini-2.5-flash"))
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -133,11 +142,14 @@ func TestGenerate_WithTools(t *testing.T) {
 }
 
 func TestGenerateStream(t *testing.T) {
-	apiKey := os.Getenv("OPENAI_API_KEY")
+	apiKey := os.Getenv("GEMINI_API_KEY")
 	if apiKey == "" {
-		t.Skip("OPENAI_API_KEY not set")
+		apiKey = os.Getenv("GOOGLE_API_KEY")
 	}
-	c, err := NewClient(llm.WithAPIKey(apiKey), llm.WithModel("gpt-4o-mini"))
+	if apiKey == "" {
+		t.Skip("GEMINI_API_KEY or GOOGLE_API_KEY not set")
+	}
+	c, err := NewClient(llm.WithAPIKey(apiKey), llm.WithModel("gemini-2.5-flash"))
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}

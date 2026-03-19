@@ -4,11 +4,11 @@ Temporal-native AI agent SDK for building agents with [Temporal](https://tempora
 
 ## What is this?
 
-**temporal-agents-go** lets you build AI agents that run on Temporal. The agent uses an LLM (OpenAI or Anthropic) to reason and optionally call tools. Temporal handles orchestration—giving you durability, retries, and visibility.
+**temporal-agents-go** lets you build AI agents that run on Temporal. The agent uses an LLM (OpenAI, Anthropic, or Gemini) to reason and optionally call tools. Temporal handles orchestration—giving you durability, retries, and visibility.
 
 ## Capabilities
 
-- **LLM integration** — OpenAI and Anthropic with tool/function calling
+- **LLM integration** — OpenAI, Anthropic, and Gemini with tool/function calling
 - **Streaming** — Partial content and thinking deltas via `RunStream`
 - **Tools** — Built-in tools and custom tools via `interfaces.Tool`
 - **Tool approval** — Optional approval flow before executing tools
@@ -48,7 +48,7 @@ result, err := a.Run(ctx, "Hello", "")
 
 [examples/simple_agent](examples/simple_agent)
 
-### Create an LLM client (OpenAI or Anthropic)
+### Create an LLM client (OpenAI, Anthropic, or Gemini)
 
 ```go
 // OpenAI
@@ -63,7 +63,29 @@ llmClient, err := anthropic.NewClient(
     llm.WithAPIKey("..."),
     llm.WithModel("claude-3-5-sonnet-20241022"),
 )
+
+// Gemini
+llmClient, err := gemini.NewClient(
+    llm.WithAPIKey("..."),  // or GOOGLE_API_KEY
+    llm.WithModel("gemini-2.5-flash"),
+)
 ```
+
+### Supported LLMs
+
+| Provider | Package | Notes |
+|----------|---------|-------|
+| **OpenAI** | `pkg/llm/openai` | GPT-4o, GPT-4o-mini, etc. |
+| **Anthropic** | `pkg/llm/anthropic` | Claude models |
+| **Gemini** | `pkg/llm/gemini` | gemini-2.5-flash, etc. |
+
+You can add support for other LLM providers by implementing the `interfaces.LLMClient` interface in [`pkg/interfaces/llm.go`](pkg/interfaces/llm.go). The interface requires:
+
+- `Generate(ctx, *LLMRequest) (*LLMResponse, error)` — non-streaming completion
+- `GenerateStream(ctx, *LLMRequest) (LLMStream, error)` — streaming completion
+- `GetModel()`, `GetProvider()`, `IsStreamSupported()` — metadata
+
+Implement `LLMStream` for streaming: `Next()`, `Current()`, `Err()`, `GetResult()`. See the existing providers in `pkg/llm/` for reference.
 
 ### Stream events (RunStream)
 
@@ -293,6 +315,8 @@ Choose implementation by deployment:
 |------------|-----|
 | **Single process** (agent and worker in same process) | `inmem.NewInMemoryConversation` |
 | **Remote workers** (`DisableWorker` or `WithEnableRemoteWorkers`) | `redis.NewRedisConversation` or another distributed store |
+
+To add a new conversation store (e.g., Postgres, MongoDB), implement the `interfaces.Conversation` interface in [`pkg/interfaces/conversation.go`](pkg/interfaces/conversation.go). The interface requires `AddMessage`, `ListMessages`, `Clear`, and `IsDistributed`. See `pkg/conversation/inmem` and `pkg/conversation/redis` for reference.
 
 In-memory cannot be used with remote workers—the agent will return an error at build time.
 

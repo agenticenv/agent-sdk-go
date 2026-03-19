@@ -12,6 +12,7 @@ type LLMProvider string
 const (
 	LLMProviderOpenAI    LLMProvider = "openai"
 	LLMProviderAnthropic LLMProvider = "anthropic"
+	LLMProviderGemini   LLMProvider = "gemini"
 )
 
 type LLMClient interface {
@@ -43,7 +44,6 @@ type LLMStreamChunk struct {
 type LLMRequest struct {
 	SystemMessage  string
 	ResponseFormat *ResponseFormat
-	MaxIterations  int
 	Tools          []ToolSpec // Tool specs for the LLM to choose from
 	// Messages is the conversation history. For first turn, use one user message.
 	// For continuation after tool use: append assistant (with ToolCalls) + tool result messages.
