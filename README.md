@@ -410,3 +410,21 @@ cp examples/env.sample examples/.env
 ```
 
 See **[examples/README.md](examples/README.md)** for how to run examples and the CLI.
+
+### CLI configuration
+
+The CLI uses a YAML config file. Copy the sample and add your values:
+
+```bash
+cp cmd/config.sample.yaml cmd/config.yaml
+# Edit cmd/config.yaml: set llm.apiKey (or use AGENT_LLM_APIKEY env var)
+go run ./cmd
+```
+
+Or run with a custom config path: `go run ./cmd -config /path/to/config.yaml`.
+
+- **config.sample.yaml** — template in the repo (safe to commit)
+- **config.yaml** — your config (gitignored; copy from sample)
+- **Env overrides** — `AGENT_LLM_APIKEY`, `AGENT_TEMPORAL_HOST`, etc. override file values
+
+See **[cmd/README.md](cmd/README.md)** for CLI details and env vars.

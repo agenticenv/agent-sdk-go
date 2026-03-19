@@ -41,8 +41,8 @@ type LoggerConfig struct {
 	Output string `mapstructure:"output"` // file path for logs (e.g. cmd/logs/agent.log); empty = stderr
 }
 
-// LoadConfig loads config from file (YAML). Env vars with CMD_ prefix override file values.
-// Env keys: CMD_TEMPORAL_HOST, CMD_LLM_APIKEY, CMD_LOGGER_LEVEL, etc.
+// LoadConfig loads config from file (YAML). Env vars with AGENT_ prefix override file values.
+// Env keys: AGENT_TEMPORAL_HOST, AGENT_LLM_APIKEY, AGENT_LOGGER_LEVEL, etc.
 func LoadConfig(path string) (*Config, error) {
 	v := viper.New()
 	if path == "" {
@@ -50,21 +50,21 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	v.SetConfigFile(path)
 	v.SetConfigType("yaml")
-	v.SetEnvPrefix("CMD")
+	v.SetEnvPrefix("AGENT")
 	v.AutomaticEnv()
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 
-	// Explicit BindEnv so CMD_* env vars reliably override (AutomaticEnv can be inconsistent with nested keys)
-	v.BindEnv("temporal.host", "CMD_TEMPORAL_HOST")
-	v.BindEnv("temporal.port", "CMD_TEMPORAL_PORT")
-	v.BindEnv("temporal.namespace", "CMD_TEMPORAL_NAMESPACE")
-	v.BindEnv("temporal.taskQueue", "CMD_TEMPORAL_TASKQUEUE")
-	v.BindEnv("llm.provider", "CMD_LLM_PROVIDER")
-	v.BindEnv("llm.apiKey", "CMD_LLM_APIKEY")
-	v.BindEnv("llm.model", "CMD_LLM_MODEL")
-	v.BindEnv("llm.baseURL", "CMD_LLM_BASEURL")
-	v.BindEnv("logger.level", "CMD_LOGGER_LEVEL")
-	v.BindEnv("logger.output", "CMD_LOGGER_OUTPUT")
+	// Explicit BindEnv so AGENT_* env vars reliably override (AutomaticEnv can be inconsistent with nested keys)
+	v.BindEnv("temporal.host", "AGENT_TEMPORAL_HOST")
+	v.BindEnv("temporal.port", "AGENT_TEMPORAL_PORT")
+	v.BindEnv("temporal.namespace", "AGENT_TEMPORAL_NAMESPACE")
+	v.BindEnv("temporal.taskQueue", "AGENT_TEMPORAL_TASKQUEUE")
+	v.BindEnv("llm.provider", "AGENT_LLM_PROVIDER")
+	v.BindEnv("llm.apiKey", "AGENT_LLM_APIKEY")
+	v.BindEnv("llm.model", "AGENT_LLM_MODEL")
+	v.BindEnv("llm.baseURL", "AGENT_LLM_BASEURL")
+	v.BindEnv("logger.level", "AGENT_LOGGER_LEVEL")
+	v.BindEnv("logger.output", "AGENT_LOGGER_OUTPUT")
 
 	// Set defaults so env can override even when file is missing or key absent
 	v.SetDefault("temporal.host", "localhost")

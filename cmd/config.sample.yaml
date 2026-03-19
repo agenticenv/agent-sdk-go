@@ -1,0 +1,29 @@
+# temporal-agents-go CLI configuration sample
+#
+# 1. Copy this file to config.yaml:
+#    cp cmd/config.sample.yaml cmd/config.yaml
+#
+# 2. Edit cmd/config.yaml with your values (API keys, Temporal host, etc.)
+# 3. Run: go run ./cmd   or   ./cmd/bin/agent -config cmd/config.yaml
+#
+# Environment variables with AGENT_ prefix override file values.
+# Example: AGENT_LLM_APIKEY=sk-xxx AGENT_LLM_PROVIDER=openai go run ./cmd
+
+# Temporal connection (for durable agent execution)
+temporal:
+  host: localhost       # Temporal server host; use AGENT_TEMPORAL_HOST to override
+  port: 7233            # Temporal gRPC port
+  namespace: default     # Temporal namespace
+  taskQueue: temporal-agents-go   # Task queue for agent workflows
+
+# LLM provider (OpenAI, Anthropic, or Gemini)
+llm:
+  provider: openai      # openai | anthropic | gemini
+  apiKey: ""            # Set here or via AGENT_LLM_APIKEY (preferred for secrets)
+  model: gpt-4o         # Model name, e.g. gpt-4o, gpt-4o-mini, claude-haiku-4-5, gemini-2.5-flash
+  baseURL: https://api.openai.com/v1   # Optional; used for OpenAI-compatible proxies
+
+# Logger (console shows only prompts/responses; internal logs go to file)
+logger:
+  level: info           # error | warn | info | debug
+  output: logs/agent.log   # Path; default resolves to cmd/logs/agent.log from project root

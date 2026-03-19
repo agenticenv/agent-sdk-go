@@ -28,10 +28,12 @@ const (
 )
 
 func main() {
-	configPath := flag.String("config", "cmd/config.yaml", "path to config file (env overrides file values)")
+	var configPath string
+	flag.StringVar(&configPath, "config", "cmd/config.yaml", "path to config file (env overrides file values)")
+	flag.StringVar(&configPath, "c", "cmd/config.yaml", "alias for -config")
 	flag.Parse()
 
-	cfg, err := LoadConfig(*configPath)
+	cfg, err := LoadConfig(configPath)
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
 	}
