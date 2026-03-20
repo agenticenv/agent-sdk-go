@@ -2,6 +2,10 @@
 
 Temporal-native AI agent SDK for building agents with [Temporal](https://temporal.io).
 
+> **Note:** This project is not affiliated with Temporal Technologies. It is a community SDK for building AI agents on the Temporal platform.
+
+> **Stable:** v1.0.0 — Follows [semantic versioning](https://semver.org/). Backward compatibility is maintained within major versions.
+
 ## What is this?
 
 **temporal-agent-sdk-go** lets you build AI agents that run on Temporal. The agent uses an LLM (OpenAI, Anthropic, or Gemini) to reason and optionally call tools. Temporal handles orchestration—giving you durability, retries, and visibility.

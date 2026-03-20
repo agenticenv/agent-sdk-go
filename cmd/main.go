@@ -23,15 +23,24 @@ import (
 )
 
 const (
+	version    = "1.0.0"
 	exitPrompt = "Type 'exit', 'quit', or 'bye' to end the conversation."
 	convID     = "interactive"
 )
 
 func main() {
 	var configPath string
+	var showVersion bool
 	flag.StringVar(&configPath, "config", "cmd/config.yaml", "path to config file (env overrides file values)")
 	flag.StringVar(&configPath, "c", "cmd/config.yaml", "alias for -config")
+	flag.BoolVar(&showVersion, "version", false, "print version and exit")
+	flag.BoolVar(&showVersion, "v", false, "alias for -version")
 	flag.Parse()
+
+	if showVersion {
+		fmt.Printf("%s\n", version)
+		return
+	}
 
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
