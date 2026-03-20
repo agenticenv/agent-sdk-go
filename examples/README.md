@@ -30,6 +30,7 @@ The examples use `TEMPORAL_HOST`, `TEMPORAL_PORT`, `TEMPORAL_NAMESPACE` from `.e
 | `agent_with_stream` | Streaming with `RunStream` + partial content (`content_delta`, `tool_call`, `complete`) |
 | `agent_with_stream_conversation` | RunStream + conversation; event handling to avoid duplicate output (ContentDelta vs Complete) |
 | `agent_with_tools_approval` | Tools + `WithApprovalHandler` — user approves or rejects each tool run (Run only) |
+| `agent_with_run_async` | `RunAsync` — `resultCh` + `approvalCh`; use `req.Respond` (no `WithApprovalHandler`) |
 | `agent_with_custom_tools` | Custom tools via `WithTools` — implementing `interfaces.Tool` |
 | `multiple_agents` | Multiple agents with `WithInstanceId` — sequential or concurrent |
 | `agent_with_worker` | Agent and worker in separate processes — `DisableWorker` + `NewAgentWorker` |
@@ -94,6 +95,7 @@ go run ./agent_with_stream_conversation "What is 5 * 8?"
 
 ```bash
 go run ./agent_with_tools_approval "What is 15 + 27?"
+go run ./agent_with_run_async "What is 15 + 27?"
 go run ./agent_with_custom_tools "Reverse 'hello world'"
 go run ./multiple_agents "What is 7 times 8?"
 go run ./multiple_agents concurrent "What is 7 times 8?"

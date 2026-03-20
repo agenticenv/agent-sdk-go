@@ -1,3 +1,5 @@
+// agent_with_run_async demonstrates RunAsync: result and approval channels without
+// WithApprovalHandler or RunStream. Complete each approval with req.Respond.
 package main
 
 import (
@@ -8,6 +10,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync"
 
 	config "github.com/vvsynapse/temporal-agents-go/examples"
 	"github.com/vvsynapse/temporal-agents-go/pkg/agent"
@@ -28,7 +31,6 @@ func main() {
 	reg.Register(echo.New())
 	reg.Register(calculator.New())
 
-	// Single stdin reader: same pattern as cmd for consistency and timeout handling
 	lineCh := make(chan string)
 	go func() {
 		scanner := bufio.NewScanner(os.Stdin)
@@ -39,8 +41,8 @@ func main() {
 	}()
 
 	opts := []agent.Option{
-		agent.WithName("agent-with-tools-approval"),
-		agent.WithDescription("Agent with tools that require user approval before execution"),
+		agent.WithName("agent-with-run-async"),
+		agent.WithDescription("RunAsync demo: approvals on approvalCh, outcome on resultCh"),
 		agent.WithSystemPrompt("You are a helpful assistant. Use the echo or calculator tool when asked."),
 		agent.WithTemporalConfig(&agent.TemporalConfig{
 			Host:      cfg.Host,
@@ -50,7 +52,6 @@ func main() {
 		}),
 		agent.WithLLMClient(llmClient),
 		agent.WithToolRegistry(reg),
-		agent.WithApprovalHandler(makeApprovalHandler(lineCh)),
 		agent.WithLogger(config.NewLoggerFromLogConfig(cfg)),
 	}
 
@@ -65,28 +66,39 @@ func main() {
 		prompt = "What is 17 + 23?"
 	}
 
-	fmt.Println("user:", prompt)
-	response, err := a.Run(context.Background(), prompt, "")
+	ctx := context.Background()
+	resultCh, approvalCh, err := a.RunAsync(ctx, prompt, "")
 	if err != nil {
-		log.Printf("run failed: %v", err)
-		return
+		log.Fatalf("RunAsync: %v", err)
 	}
-	fmt.Println("agent:", response.Content)
-}
 
-func makeApprovalHandler(lineCh <-chan string) agent.ApprovalHandler {
-	return func(ctx context.Context, req *agent.ApprovalRequest) {
-		argsJSON, _ := json.MarshalIndent(req.Args, "", "  ")
-		fmt.Printf("\n--- Tool approval required ---\nTool: %s\nArgs:\n%s\nApprove? (y/n): ", req.ToolName, string(argsJSON))
-		select {
-		case <-ctx.Done():
-			return
-		case line, ok := <-lineCh:
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for req := range approvalCh {
+			argsJSON, _ := json.MarshalIndent(req.Args, "", "  ")
+			fmt.Printf("\n--- Tool approval required ---\nTool: %s\nArgs:\n%s\nApprove? (y/n): ", req.ToolName, string(argsJSON))
+			line, ok := <-lineCh
 			if ok && strings.TrimSpace(strings.ToLower(line)) == "y" {
-				_ = req.Respond(agent.ApprovalStatusApproved)
+				if err := req.Respond(agent.ApprovalStatusApproved); err != nil {
+					log.Printf("respond approved: %v", err)
+				}
 			} else if ok {
-				_ = req.Respond(agent.ApprovalStatusRejected)
+				if err := req.Respond(agent.ApprovalStatusRejected); err != nil {
+					log.Printf("respond rejected: %v", err)
+				}
 			}
 		}
+	}()
+
+	fmt.Println("user:", prompt)
+	res := <-resultCh
+	wg.Wait()
+
+	if res.Err != nil {
+		log.Printf("run failed: %v", res.Err)
+		return
 	}
+	fmt.Println("agent:", res.Response.Content)
 }
