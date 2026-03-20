@@ -70,12 +70,13 @@ func (aw *AgentWorker) stop() {
 }
 
 // Close stops the worker and closes the Temporal client. Call when AgentWorker is the top-level object (standalone process).
+// Does not close the client when it was provided via WithTemporalClient (caller owns the lifecycle).
 func (aw *AgentWorker) Close() {
 	if aw.config != nil && aw.config.logger != nil {
 		aw.config.logger.Info("agent worker closing", zap.String("taskQueue", aw.config.taskQueue))
 	}
 	aw.stop()
-	if aw.config != nil && aw.config.temporalClient != nil {
+	if aw.config != nil && aw.config.temporalClient != nil && aw.config.ownsTemporalClient {
 		aw.config.temporalClient.Close()
 	}
 }

@@ -15,6 +15,22 @@ import (
 	"go.uber.org/zap"
 )
 
+// TemporalConfig holds Temporal connection settings (Host, Port, Namespace) and the task queue name.
+//
+// TaskQueue is required and must be unique per agent. Use different TaskQueues when running
+// multiple agents in the same process (e.g. "my-agent-math", "my-agent-creative").
+// For multiple instances of the same agent (e.g. scaled pods), use WithInstanceId() so each
+// instance gets a unique queue derived as {TaskQueue}-{InstanceId}.
+//
+// When using DisableWorker, the agent and NewAgentWorker must use the same TaskQueue (and
+// same InstanceId if set) so they pair correctly.
+type TemporalConfig struct {
+	Host      string
+	Port      int
+	Namespace string
+	TaskQueue string // Required. Full task queue name. Unique per agent.
+}
+
 // LLMSampling holds per-agent LLM sampling overrides. nil/0 = provider default.
 // One LLM client can serve multiple agents with different sampling.
 type LLMSampling struct {
@@ -29,18 +45,20 @@ type LLMSampling struct {
 // Option applicability:
 //   - Agent only: EnableRemoteWorkers, DisableWorker, WithApprovalHandler, WithTimeout
 //   - AgentWorker only: (none—worker inherits from options passed to NewAgentWorker)
-//   - Both: WithName, WithDescription, WithSystemPrompt, WithTemporalConfig, WithInstanceId,
-//     WithLLMClient, WithToolApprovalPolicy, WithTools, WithToolRegistry, WithMaxIterations,
-//     WithStream, WithLogger, WithLogLevel, WithConversation
+//   - Both: WithName, WithDescription, WithSystemPrompt, WithTemporalConfig, WithTemporalClient,
+//     WithTaskQueue, WithInstanceId, WithLLMClient, WithToolApprovalPolicy, WithTools,
+//     WithToolRegistry, WithMaxIterations, WithStream, WithLogger, WithLogLevel, WithConversation
 type agentConfig struct {
 	ID                 string
 	Name               string
 	Description        string
 	SystemPrompt       string
 	temporalConfig     *TemporalConfig
+	temporalClient     client.Client
+	taskQueueOption    string // set by WithTaskQueue; required when using WithTemporalClient
+	ownsTemporalClient bool   // true when we create client from config; false when user provides it
 	instanceId         string
 	taskQueue          string
-	temporalClient     client.Client
 	LLMClient          interfaces.LLMClient
 	tools              []interfaces.Tool
 	toolRegistry       interfaces.ToolRegistry
@@ -94,8 +112,26 @@ func WithSystemPrompt(prompt string) Option {
 }
 
 // WithTemporalConfig sets the Temporal config. Applies to Agent and AgentWorker.
+// Use either WithTemporalConfig or WithTemporalClient, not both.
 func WithTemporalConfig(cfg *TemporalConfig) Option {
 	return func(c *agentConfig) { c.temporalConfig = cfg }
+}
+
+// WithTemporalClient sets a pre-configured Temporal client. Use when you need TLS, API key auth,
+// Temporal Cloud, or other connection options not supported by TemporalConfig.
+// Requires WithTaskQueue. Use either WithTemporalConfig or WithTemporalClient, not both.
+// The agent does not close the client when Close() is called; the caller owns the lifecycle.
+func WithTemporalClient(tc client.Client) Option {
+	return func(c *agentConfig) {
+		c.temporalClient = tc
+		c.ownsTemporalClient = false
+	}
+}
+
+// WithTaskQueue sets the task queue name. Required when using WithTemporalClient.
+// Ignored when using WithTemporalConfig (TaskQueue comes from TemporalConfig).
+func WithTaskQueue(queue string) Option {
+	return func(c *agentConfig) { c.taskQueueOption = queue }
 }
 
 // WithInstanceId sets the instance identifier. Applies to Agent and AgentWorker.
@@ -143,7 +179,8 @@ func WithLogLevel(level string) Option {
 	return func(c *agentConfig) { c.logLevel = level }
 }
 
-// WithApprovalHandler sets the approval callback for Run. Required when tools need approval. Used only by Run; RunStream uses AgentEventToolApproval + OnApproval. Agent only.
+// WithApprovalHandler sets the approval callback for Run. Required when tools need approval.
+// The callback receives req with req.Respond set; call req.Respond(Approved|Rejected). Agent only; RunStream uses OnApproval on events.
 func WithApprovalHandler(fn ApprovalHandler) Option {
 	return func(c *agentConfig) { c.approvalHandler = fn }
 }
@@ -214,11 +251,22 @@ func buildAgentConfig(opts []Option) (*agentConfig, error) {
 	if c.toolApprovalPolicy == nil {
 		c.toolApprovalPolicy = RequireAllToolApprovalPolicy{}
 	}
-	if c.temporalConfig == nil {
-		return nil, errors.New("temporal config is required")
+	// Either TemporalConfig or TemporalClient is required, not both.
+	if c.temporalConfig != nil && c.temporalClient != nil {
+		return nil, errors.New("provide either WithTemporalConfig or WithTemporalClient, not both")
 	}
-	if c.temporalConfig.TaskQueue == "" {
-		return nil, errors.New("TaskQueue is required in TemporalConfig: provide a unique name per agent")
+	if c.temporalConfig == nil && c.temporalClient == nil {
+		return nil, errors.New("temporal connection is required: use WithTemporalConfig or WithTemporalClient")
+	}
+	if c.temporalConfig != nil {
+		if c.temporalConfig.TaskQueue == "" {
+			return nil, errors.New("TaskQueue is required in TemporalConfig: provide a unique name per agent")
+		}
+	}
+	if c.temporalClient != nil {
+		if c.taskQueueOption == "" {
+			return nil, errors.New("WithTaskQueue is required when using WithTemporalClient")
+		}
 	}
 	if c.LLMClient == nil {
 		return nil, errors.New("LLM client is required")
@@ -253,27 +301,28 @@ func buildAgentConfig(opts []Option) (*agentConfig, error) {
 		c.logger = logger.NewZapAdapter(logger.NewZapLoggerWithConfig(logger.ZapLoggerConfig{Level: c.logLevel}))
 	}
 
-	tc, err := newTemporalClient(c.temporalConfig, c.logger)
-	if err != nil {
-		return nil, err
+	if c.temporalConfig != nil {
+		tc, err := newTemporalClient(c.temporalConfig, c.logger)
+		if err != nil {
+			return nil, err
+		}
+		c.temporalClient = tc
+		c.ownsTemporalClient = true
+		c.taskQueue = c.temporalConfig.TaskQueue
+	} else {
+		c.taskQueue = c.taskQueueOption
 	}
-
-	c.temporalClient = tc
-	c.taskQueue = c.temporalConfig.TaskQueue
 	if c.instanceId != "" {
 		c.taskQueue = c.taskQueue + "-" + c.instanceId
 	}
 
 	c.logger.Info("agent config built", zap.String("name", c.Name), zap.String("taskQueue", c.taskQueue))
 	// Debug: full config summary for troubleshooting (no sensitive: systemPrompt, API keys)
-	temporalCfg := c.temporalConfig
 	c.logger.Debug("agent config",
 		zap.String("name", c.Name),
 		zap.String("taskQueue", c.taskQueue),
 		zap.String("instanceId", c.instanceId),
-		zap.String("temporalHost", temporalCfg.Host),
-		zap.Int("temporalPort", temporalCfg.Port),
-		zap.String("namespace", temporalCfg.Namespace),
+		zap.Bool("ownsTemporalClient", c.ownsTemporalClient),
 		zap.Int("maxIterations", c.maxIterations),
 		zap.Bool("streamEnabled", c.streamEnabled),
 		zap.Bool("disableWorker", c.disableWorker),
@@ -393,7 +442,7 @@ func newTemporalClient(config *TemporalConfig, logger log.Logger) (client.Client
 			if !clientReady {
 				c, err = client.Dial(clientOptions)
 				if err == nil {
-					logger.Info("successfully created temporal client, checking namespace readiness")
+					logger.Info("successfully created temporal client, checking namespace availability")
 					clientReady = true
 				} else {
 					logger.Info("failed to create temporal client, dialing again...", zap.Error(err))

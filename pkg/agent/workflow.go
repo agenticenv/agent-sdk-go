@@ -557,7 +557,7 @@ func (aw *AgentWorker) AgentToolApprovalActivity(ctx context.Context, input Agen
 			ToolCallID:    input.ToolCallID,
 			ToolName:      input.ToolName,
 			Args:          input.Args,
-			ApprovalToken: taskTokenB64, // opaque; user passes back to OnApproval
+			ApprovalToken: taskTokenB64,
 		},
 		Timestamp: time.Now(),
 	}

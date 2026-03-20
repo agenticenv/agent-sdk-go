@@ -48,6 +48,44 @@ result, err := a.Run(ctx, "Hello", "")
 
 [examples/simple_agent](examples/simple_agent)
 
+### Temporal connection
+
+Provide **either** `WithTemporalConfig` or `WithTemporalClient`, not both.
+
+**Option 1 — WithTemporalConfig** (simple, local dev):
+
+```go
+agent.WithTemporalConfig(&agent.TemporalConfig{
+    Host: "localhost", Port: 7233,
+    Namespace: "default", TaskQueue: "my-app",
+})
+```
+
+**Option 2 — WithTemporalClient** (TLS, API key auth, Temporal Cloud):
+
+Use when you need mTLS, Temporal Cloud API keys, or other connection options. Create the client yourself and pass it. You must also call `WithTaskQueue`. The agent does not close the client; you own its lifecycle.
+
+```go
+import "go.temporal.io/sdk/client"
+
+tc, _ := client.Dial(client.Options{
+    HostPort:  "namespace-id.tmprl.cloud:7233",
+    Namespace: "my-namespace",
+    Credentials: client.NewAPIKeyStaticCredentials(apiKey),
+    // Or: ConnectionOptions for mTLS, etc.
+})
+defer tc.Close()
+
+a, _ := agent.NewAgent(
+    agent.WithTemporalClient(tc),
+    agent.WithTaskQueue("my-app"),
+    agent.WithLLMClient(llmClient),
+)
+defer a.Close()
+```
+
+[examples/agent_with_temporal_client](examples/agent_with_temporal_client) demonstrates the full pattern.
+
 ### Create an LLM client (OpenAI, Anthropic, or Gemini)
 
 ```go
@@ -73,13 +111,15 @@ llmClient, err := gemini.NewClient(
 
 ### Supported LLMs
 
-| Provider | Package | Notes |
-|----------|---------|-------|
-| **OpenAI** | `pkg/llm/openai` | GPT-4o, GPT-4o-mini, etc. |
-| **Anthropic** | `pkg/llm/anthropic` | Claude models |
-| **Gemini** | `pkg/llm/gemini` | gemini-2.5-flash, etc. |
 
-You can add support for other LLM providers by implementing the `interfaces.LLMClient` interface in [`pkg/interfaces/llm.go`](pkg/interfaces/llm.go). The interface requires:
+| Provider      | Package             | Notes                     |
+| ------------- | ------------------- | ------------------------- |
+| **OpenAI**    | `pkg/llm/openai`    | GPT-4o, GPT-4o-mini, etc. |
+| **Anthropic** | `pkg/llm/anthropic` | Claude models             |
+| **Gemini**    | `pkg/llm/gemini`    | gemini-2.5-flash, etc.    |
+
+
+You can add support for other LLM providers by implementing the `interfaces.LLMClient` interface in `[pkg/interfaces/llm.go](pkg/interfaces/llm.go)`. The interface requires:
 
 - `Generate(ctx, *LLMRequest) (*LLMResponse, error)` — non-streaming completion
 - `GenerateStream(ctx, *LLMRequest) (LLMStream, error)` — streaming completion
@@ -154,12 +194,13 @@ result, _ := a.Run(ctx, "What's the weather in Tokyo?", "")
 
 ### Tool approval
 
-By default tools require approval. Use `WithApprovalHandler` on the agent (required for Run):
+By default tools require approval. Use `WithApprovalHandler` on the agent (required for Run). Each `ApprovalRequest` includes `Respond`; call `req.Respond(Approved|Rejected)` when ready (same as RunAsync):
 
 ```go
 a, _ := agent.NewAgent(
-    agent.WithApprovalHandler(func(ctx context.Context, req *agent.ApprovalRequest, onApproval agent.ApprovalSender) {
-        // Prompt user, then call onApproval(agent.ApprovalStatusApproved) or onApproval(agent.ApprovalStatusRejected)
+    agent.WithApprovalHandler(func(ctx context.Context, req *agent.ApprovalRequest) {
+        // Prompt user, then:
+        _ = req.Respond(agent.ApprovalStatusApproved) // or Rejected
     }),
     // ...
 )
@@ -177,14 +218,34 @@ for ev := range eventCh {
 }
 ```
 
-`ApprovalToken` is opaque—pass it to `OnApproval`. The token is stateless and self-contained; the agent does not require Redis or other shared storage for approvals. You may forward the event (with token) to a UI or API and call `OnApproval` when the user responds. To avoid exposing the token, store it in your own map or DB, give the UI a short ID, and look up the token before calling `OnApproval`.
+**RunAsync** — channel-based completion without streaming. Do not set `WithApprovalHandler` for this path (it is replaced for the duration of the run). Receive each pending approval on `approvalCh` and call `req.Respond` (same idea as `WithApprovalHandler`):
+
+```go
+resultCh, approvalCh, err := a.RunAsync(ctx, prompt, "")
+if err != nil { /* validation error before goroutine started */ }
+
+go func() {
+    for req := range approvalCh {
+        _ = req.Respond(agent.ApprovalStatusApproved) // or Rejected
+    }
+}()
+
+res := <-resultCh
+if res.Err != nil { /* handle */ }
+// res.Response.Content
+```
+
+For **Run** / **RunAsync**, use `req.Respond` only. For **RunStream**, use `OnApproval` as in the snippet above (first argument comes from `ev.Approval`).
 
 [examples/agent_with_tools_approval](examples/agent_with_tools_approval)
+
+[examples/agent_with_run_async](examples/agent_with_run_async)
 
 **Approval timeout:** `WithApprovalTimeout` (default: `timeout − 30s`) limits how long the user has to approve or reject a tool. If they do not respond in time:
 
 - **Run:** `Run()` returns `nil, err` with the failure.
 - **RunStream:** An `AgentEventError` is emitted on the event channel with the error message.
+- **RunAsync:** `resultCh` receives `RunAsyncResult` with `Err` set.
 
 ### Timeouts and deadlines
 
@@ -311,12 +372,14 @@ Pass `agent.WithConversation(conv)` to persist message history for multi-turn co
 
 Choose implementation by deployment:
 
-| Deployment | Use |
-|------------|-----|
-| **Single process** (agent and worker in same process) | `inmem.NewInMemoryConversation` |
+
+| Deployment                                                        | Use                                                       |
+| ----------------------------------------------------------------- | --------------------------------------------------------- |
+| **Single process** (agent and worker in same process)             | `inmem.NewInMemoryConversation`                           |
 | **Remote workers** (`DisableWorker` or `WithEnableRemoteWorkers`) | `redis.NewRedisConversation` or another distributed store |
 
-To add a new conversation store (e.g., Postgres, MongoDB), implement the `interfaces.Conversation` interface in [`pkg/interfaces/conversation.go`](pkg/interfaces/conversation.go). The interface requires `AddMessage`, `ListMessages`, `Clear`, and `IsDistributed`. See `pkg/conversation/inmem` and `pkg/conversation/redis` for reference.
+
+To add a new conversation store (e.g., Postgres, MongoDB), implement the `interfaces.Conversation` interface in `[pkg/interfaces/conversation.go](pkg/interfaces/conversation.go)`. The interface requires `AddMessage`, `ListMessages`, `Clear`, and `IsDistributed`. See `pkg/conversation/inmem` and `pkg/conversation/redis` for reference.
 
 In-memory cannot be used with remote workers—the agent will return an error at build time.
 
@@ -385,16 +448,21 @@ a.Run(ctx, "What's my name?", convID) // agent uses history: "Alice"
 
 ## Configuration
 
-| Option | Description |
-|--------|--------------|
-| **WithResponseFormat** | LLM response format. Omit for text-only. Use `&interfaces.ResponseFormat{Type, Name, Schema}` for JSON with schema. See [Response format](#response-format). |
-| **WithConversation** | Message history store. Use `inmem` for single process; `redis` for remote workers. Pass same `conversationID` to `Run` and `RunStream` for a session. See [Conversation](#conversation-message-history). |
-| **WithConversationSize** | Max messages to fetch for LLM context (default 20). Only applies when `WithConversation` is set. |
-| **WithEnableRemoteWorkers** | Set `true` when using `DisableWorker` with approval or streaming. |
-| **WithMaxIterations** | Max LLM rounds (default 5). |
-| **WithStream** | Enable `RunStream` partial content streaming. |
-| **WithLLMSampling** | Per-agent sampling (`Temperature`, `MaxTokens`, `TopP`, `TopK`). Pass `&agent.LLMSampling{...}`; nil fields = provider default. Extensible for more params. |
-| **WithApprovalTimeout** | Max wait per tool approval; must be less than agent timeout. Defaults to timeout−30s when tools require approval. Capped at 31 days. |
+
+| Option                      | Description                                                                                                                                                                                              |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **WithTemporalConfig**      | Temporal connection (Host, Port, Namespace, TaskQueue). Use for simple setups. See [Temporal connection](#temporal-connection).                                                                          |
+| **WithTemporalClient**      | Pre-configured Temporal client. Use for TLS, API key auth, Temporal Cloud. Requires `WithTaskQueue`. Agent does not close the client.                                                                    |
+| **WithTaskQueue**           | Task queue name. Required when using `WithTemporalClient`. Ignored when using `WithTemporalConfig`.                                                                                                      |
+| **WithResponseFormat**      | LLM response format. Omit for text-only. Use `&interfaces.ResponseFormat{Type, Name, Schema}` for JSON with schema. See [Response format](#response-format).                                             |
+| **WithConversation**        | Message history store. Use `inmem` for single process; `redis` for remote workers. Pass same `conversationID` to `Run` and `RunStream` for a session. See [Conversation](#conversation-message-history). |
+| **WithConversationSize**    | Max messages to fetch for LLM context (default 20). Only applies when `WithConversation` is set.                                                                                                         |
+| **WithEnableRemoteWorkers** | Set `true` when using `DisableWorker` with approval or streaming.                                                                                                                                        |
+| **WithMaxIterations**       | Max LLM rounds (default 5).                                                                                                                                                                              |
+| **WithStream**              | Enable `RunStream` partial content streaming.                                                                                                                                                            |
+| **WithLLMSampling**         | Per-agent sampling (`Temperature`, `MaxTokens`, `TopP`, `TopK`). Pass `&agent.LLMSampling{...}`; nil fields = provider default. Extensible for more params.                                              |
+| **WithApprovalTimeout**     | Max wait per tool approval; must be less than agent timeout. Defaults to timeout−30s when tools require approval. Capped at 31 days.                                                                     |
+
 
 **Env config:** [examples/README.md](examples/README.md) for examples; [cmd/README.md](cmd/README.md) for CLI.
 

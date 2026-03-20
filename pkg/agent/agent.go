@@ -21,22 +21,6 @@ const (
 	workersCheckTimeout = 15 * time.Second
 )
 
-// TemporalConfig holds Temporal connection settings (Host, Port, Namespace) and the task queue name.
-//
-// TaskQueue is required and must be unique per agent. Use different TaskQueues when running
-// multiple agents in the same process (e.g. "my-agent-math", "my-agent-creative").
-// For multiple instances of the same agent (e.g. scaled pods), use WithInstanceId() so each
-// instance gets a unique queue derived as {TaskQueue}-{InstanceId}.
-//
-// When using DisableWorker, the agent and NewAgentWorker must use the same TaskQueue (and
-// same InstanceId if set) so they pair correctly.
-type TemporalConfig struct {
-	Host      string
-	Port      int
-	Namespace string
-	TaskQueue string // Required. Full task queue name. Unique per agent.
-}
-
 // Agent runs LLM-backed workflows via Temporal. It holds agentConfig and client-side state
 // (agentChannel, event worker). Uses AgentWorker for run workflow execution.
 type Agent struct {
@@ -50,7 +34,7 @@ type Agent struct {
 	activeEventWorkflowID string
 }
 
-// ErrAgentAlreadyRunning is returned when Run or RunStream is called while a run is already in progress.
+// ErrAgentAlreadyRunning is returned when Run, RunAsync, or RunStream is called while a run is already in progress.
 var ErrAgentAlreadyRunning = errors.New("agent already has an active run")
 
 // AgentResponse is the return value of AgentRun.Get / AgentWorkflow.
@@ -59,6 +43,13 @@ type AgentResponse struct {
 	AgentName string         `json:"agent_name"`
 	Model     string         `json:"model"`
 	Metadata  map[string]any `json:"metadata"`
+}
+
+// RunAsyncResult is the single outcome from RunAsync. After the channel closes, Err is non-nil
+// on failure; otherwise Response is non-nil.
+type RunAsyncResult struct {
+	Response *AgentResponse
+	Err      error
 }
 
 // buildAgent builds an Agent from options. Validates approval handler when tools require approval.
@@ -246,24 +237,20 @@ func (a *Agent) Close() {
 		a.logger.Debug("stopping event worker")
 		a.eventWorker.Stop()
 	}
-	if a.temporalClient != nil {
+	if a.temporalClient != nil && a.ownsTemporalClient {
 		a.temporalClient.Close()
 	}
 	a.logger.Info("agent closed", zap.String("name", a.Name))
 }
 
-// Run starts the agent workflow and returns the result. Use WithApprovalHandler on the agent when tools require approval (Run only; RunStream uses event-based OnApproval).
+// Run starts the agent workflow and returns the result. Use WithApprovalHandler when tools require approval (Run only; handler uses req.Respond). RunStream uses AgentEventToolApproval + OnApproval.
 // Use WithTimeout or a context with deadline to avoid blocking.
 // When using WithConversation, pass the conversation ID (runtime id from user/session); agent and worker use the same ID.
 func (a *Agent) Run(ctx context.Context, input string, conversationID string) (*AgentResponse, error) {
 	a.logger.Debug("run started", zap.String("agent", a.Name), zap.Int("inputLen", len(input)))
 
-	if conversationID != "" && a.conversation == nil {
-		return nil, fmt.Errorf("conversationID %s requires conversation configuration", conversationID)
-	}
-
-	if conversationID == "" && a.conversation != nil {
-		return nil, fmt.Errorf("conversationID is required when using conversation")
+	if err := a.validateConversationID(conversationID); err != nil {
+		return nil, err
 	}
 
 	if a.hasApprovalTools() && a.approvalHandler == nil {
@@ -388,7 +375,11 @@ func (a *Agent) Run(ctx context.Context, input string, conversationID string) (*
 				return nil
 			}
 			approvalCtx, cancel := context.WithTimeout(runCtx, a.approvalTimeout)
-			a.approvalHandler(approvalCtx, &ApprovalRequest{ToolName: ev.Approval.ToolName, Args: ev.Approval.Args}, onApproval)
+			a.approvalHandler(approvalCtx, &ApprovalRequest{
+				ToolName: ev.Approval.ToolName,
+				Args:     ev.Approval.Args,
+				Respond:  onApproval,
+			})
 			cancel()
 		case resp := <-approvalResponseCh:
 			if err := a.OnApproval(runCtx, resp.approvalToken, resp.status); err != nil {
@@ -399,19 +390,78 @@ func (a *Agent) Run(ctx context.Context, input string, conversationID string) (*
 	}
 }
 
+// RunAsync starts the run in a goroutine and returns two channels:
+//   - resultCh: receives exactly one RunAsyncResult, then closes.
+//   - approvalCh: receives each pending tool approval; call req.Respond. Channel closes when the run ends.
+//
+// For each approval, call req.Respond(Approved|Rejected) exactly once.
+//
+// WithApprovalHandler is temporarily replaced for the duration of the run; restore happens when the run finishes.
+// If tools do not require approval, approvalCh is still closed immediately with no values.
+func (a *Agent) RunAsync(ctx context.Context, input string, conversationID string) (resultCh <-chan RunAsyncResult, approvalCh <-chan *ApprovalRequest, err error) {
+	a.logger.Debug("run async started", zap.String("agent", a.Name), zap.Int("inputLen", len(input)))
+
+	if err := a.validateConversationID(conversationID); err != nil {
+		return nil, nil, err
+	}
+
+	resCh := make(chan RunAsyncResult, 1)
+	apprCh := make(chan *ApprovalRequest, 16)
+
+	go func() {
+		defer close(apprCh)
+		defer close(resCh)
+
+		var saved ApprovalHandler
+		if a.hasApprovalTools() {
+			saved = a.approvalHandler
+			a.approvalHandler = func(handlerCtx context.Context, req *ApprovalRequest) {
+				out := &ApprovalRequest{
+					ToolName: req.ToolName,
+					Args:     copyApprovalArgs(req.Args),
+					Respond:  req.Respond,
+				}
+				select {
+				case apprCh <- out:
+				default:
+					// Avoid blocking Run's event loop if consumer is slow.
+					go func(p *ApprovalRequest) { apprCh <- p }(out)
+				}
+			}
+			defer func() { a.approvalHandler = saved }()
+		}
+
+		resp, runErr := a.Run(ctx, input, conversationID)
+		if runErr != nil {
+			resCh <- RunAsyncResult{Err: runErr}
+			return
+		}
+		resCh <- RunAsyncResult{Response: resp}
+	}()
+
+	return resCh, apprCh, nil
+}
+
+func copyApprovalArgs(src map[string]any) map[string]any {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]any, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
 // RunStream starts the run and returns a channel of AgentEvent. Events are streamed until
-// AgentEventComplete. For tool approvals, receive AgentEventToolApproval and call
-// agent.OnApproval(ctx, ev.Approval.ApprovalToken, status).
+// AgentEventComplete. For tool approvals, receive AgentEventToolApproval and call OnApproval
+// as in the streaming examples.
 // When using WithConversation, pass the conversation ID.
 func (a *Agent) RunStream(ctx context.Context, input string, conversationID string) (chan *AgentEvent, error) {
 	a.logger.Debug("run stream started", zap.String("agent", a.Name), zap.Int("inputLen", len(input)))
 
-	if conversationID != "" && a.conversation == nil {
-		return nil, fmt.Errorf("conversationID %s requires conversation configuration", conversationID)
-	}
-
-	if conversationID == "" && a.conversation != nil {
-		return nil, fmt.Errorf("conversationID is required when using conversation")
+	if err := a.validateConversationID(conversationID); err != nil {
+		return nil, err
 	}
 
 	id := uuid.New().String()
@@ -542,7 +592,7 @@ func (a *Agent) RunStream(ctx context.Context, input string, conversationID stri
 	return outCh, nil
 }
 
-// copyEventWithShortApprovalToken replaces the internal base64 token with a short opaque token for the user.
+// copyEventWithShortApprovalToken builds an event copy with a substituted approval identifier.
 func copyEventWithShortApprovalToken(ev *AgentEvent, shortToken string) *AgentEvent {
 	c := *ev
 	if c.Approval != nil {
@@ -554,4 +604,14 @@ func copyEventWithShortApprovalToken(ev *AgentEvent, shortToken string) *AgentEv
 		}
 	}
 	return &c
+}
+
+func (a *Agent) validateConversationID(conversationID string) error {
+	if conversationID != "" && a.conversation == nil {
+		return fmt.Errorf("conversationID %s requires conversation configuration", conversationID)
+	}
+	if conversationID == "" && a.conversation != nil {
+		return fmt.Errorf("conversationID is required when using conversation")
+	}
+	return nil
 }

@@ -69,15 +69,13 @@ type AgentEvent struct {
 	WorkflowID string                 `json:"workflow_id,omitempty"` // run workflow ID; for correlation only
 }
 
-// ToolApprovalEvent is the payload for AgentEventToolApproval.
-// Pass ApprovalToken to Agent.OnApproval(ctx, ev.Approval.ApprovalToken, status).
-// ApprovalToken is base64-encoded; stateless so approvals work across pods (Redis pub/sub, load-balanced /approval).
-// ToolCallID is for reference (e.g. logging, correlation).
+// ToolApprovalEvent is the payload for AgentEventToolApproval (RunStream).
+// Use with Agent.OnApproval when the user approves or rejects; see streaming examples.
 type ToolApprovalEvent struct {
-	ToolCallID    string         `json:"tool_call_id,omitempty"` // for reference
+	ToolCallID    string         `json:"tool_call_id,omitempty"`
 	ToolName      string         `json:"tool_name"`
 	Args          map[string]any `json:"args,omitempty"`
-	ApprovalToken string         `json:"approval_token,omitempty"` // opaque; pass to OnApproval
+	ApprovalToken string         `json:"approval_token,omitempty"`
 }
 
 type ToolCallStatus string
