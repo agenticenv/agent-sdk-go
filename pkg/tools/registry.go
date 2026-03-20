@@ -3,7 +3,7 @@ package tools
 import (
 	"sync"
 
-	"github.com/vvsynapse/temporal-agents-go/pkg/interfaces"
+	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/interfaces"
 )
 
 var _ interfaces.ToolRegistry = (*Registry)(nil)

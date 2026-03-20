@@ -10,16 +10,16 @@ import (
 	"os"
 	"strings"
 
-	"github.com/vvsynapse/temporal-agents-go/pkg/agent"
-	"github.com/vvsynapse/temporal-agents-go/pkg/conversation/inmem"
-	"github.com/vvsynapse/temporal-agents-go/pkg/tools"
-	"github.com/vvsynapse/temporal-agents-go/pkg/tools/calculator"
-	"github.com/vvsynapse/temporal-agents-go/pkg/tools/currenttime"
-	"github.com/vvsynapse/temporal-agents-go/pkg/tools/echo"
-	"github.com/vvsynapse/temporal-agents-go/pkg/tools/random"
-	"github.com/vvsynapse/temporal-agents-go/pkg/tools/search"
-	"github.com/vvsynapse/temporal-agents-go/pkg/tools/weather"
-	"github.com/vvsynapse/temporal-agents-go/pkg/tools/wikipedia"
+	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/agent"
+	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/conversation/inmem"
+	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/tools"
+	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/tools/calculator"
+	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/tools/currenttime"
+	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/tools/echo"
+	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/tools/random"
+	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/tools/search"
+	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/tools/weather"
+	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/tools/wikipedia"
 )
 
 const (

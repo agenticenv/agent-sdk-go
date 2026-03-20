@@ -6,8 +6,8 @@ import (
 	"iter"
 	"sync"
 
-	"github.com/vvsynapse/temporal-agents-go/pkg/interfaces"
-	"github.com/vvsynapse/temporal-agents-go/pkg/llm"
+	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/interfaces"
+	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/llm"
 	"go.uber.org/zap"
 	"google.golang.org/genai"
 )

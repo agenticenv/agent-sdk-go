@@ -1,10 +1,10 @@
-# temporal-agents-go
+# temporal-agent-sdk-go
 
 Temporal-native AI agent SDK for building agents with [Temporal](https://temporal.io).
 
 ## What is this?
 
-**temporal-agents-go** lets you build AI agents that run on Temporal. The agent uses an LLM (OpenAI, Anthropic, or Gemini) to reason and optionally call tools. Temporal handles orchestration—giving you durability, retries, and visibility.
+**temporal-agent-sdk-go** lets you build AI agents that run on Temporal. The agent uses an LLM (OpenAI, Anthropic, or Gemini) to reason and optionally call tools. Temporal handles orchestration—giving you durability, retries, and visibility.
 
 ## Capabilities
 
@@ -22,9 +22,9 @@ Prerequisites: [Temporal](https://docs.temporal.io/self-hosted-guide) running, G
 
 ```go
 import (
-    "github.com/vvsynapse/temporal-agents-go/pkg/agent"
-    "github.com/vvsynapse/temporal-agents-go/pkg/llm"
-    "github.com/vvsynapse/temporal-agents-go/pkg/llm/openai"
+    "github.com/vvsynapse/temporal-agent-sdk-go/pkg/agent"
+    "github.com/vvsynapse/temporal-agent-sdk-go/pkg/llm"
+    "github.com/vvsynapse/temporal-agent-sdk-go/pkg/llm/openai"
 )
 
 llmClient, _ := openai.NewClient(
@@ -297,7 +297,7 @@ a, _ := agent.NewAgent(
 **JSON with schema:** Use `interfaces.ResponseFormatJSON` and a valid JSON Schema. The schema must have `type: "object"` at the root with `properties`:
 
 ```go
-import "github.com/vvsynapse/temporal-agents-go/pkg/interfaces"
+import "github.com/vvsynapse/temporal-agent-sdk-go/pkg/interfaces"
 
 a, _ := agent.NewAgent(
     agent.WithTemporalConfig(...),
@@ -424,8 +424,8 @@ result, _ := a.Run(ctx, "Hello", "session-1")
 
 ```go
 import (
-    "github.com/vvsynapse/temporal-agents-go/pkg/agent"
-    "github.com/vvsynapse/temporal-agents-go/pkg/conversation/inmem"
+    "github.com/vvsynapse/temporal-agent-sdk-go/pkg/agent"
+    "github.com/vvsynapse/temporal-agent-sdk-go/pkg/conversation/inmem"
 )
 
 conv := inmem.NewInMemoryConversation(inmem.WithMaxSize(100))
@@ -472,7 +472,7 @@ a.Run(ctx, "What's my name?", convID) // agent uses history: "Alice"
 
 ```bash
 git clone <repo-url>
-cd temporal-agents-go
+cd temporal-agent-sdk-go
 cp examples/env.sample examples/.env
 # Edit examples/.env: set LLM_APIKEY, LLM_MODEL
 ```

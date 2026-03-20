@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 )
 
-//go:generate mockgen -destination=./mocks/mock_llm.go -package=mocks github.com/vvsynapse/temporal-agents-go/pkg/interfaces LLMClient
+//go:generate mockgen -destination=./mocks/mock_llm.go -package=mocks github.com/vvsynapse/temporal-agent-sdk-go/pkg/interfaces LLMClient
 
 type LLMProvider string
 

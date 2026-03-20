@@ -1,4 +1,4 @@
-# temporal-agents-go CLI configuration sample
+# temporal-agent-sdk-go CLI configuration sample
 #
 # 1. Copy this file to config.yaml:
 #    cp cmd/config.sample.yaml cmd/config.yaml
@@ -14,7 +14,7 @@ temporal:
   host: localhost       # Temporal server host; use AGENT_TEMPORAL_HOST to override
   port: 7233            # Temporal gRPC port
   namespace: default     # Temporal namespace
-  taskQueue: temporal-agents-go   # Task queue for agent workflows
+  taskQueue: temporal-agent-sdk-go   # Task queue for agent workflows
 
 # LLM provider (OpenAI, Anthropic, or Gemini)
 llm:

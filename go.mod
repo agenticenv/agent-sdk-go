@@ -1,9 +1,9 @@
-module github.com/vvsynapse/temporal-agents-go
+module github.com/vvsynapse/temporal-agent-sdk-go
 
 go 1.24.4
 
-replace github.com/vvsynapse/temporal-agents-go/pkg/tools => ./pkg/tools
-replace github.com/vvsynapse/temporal-agents-go/pkg/llm => ./pkg/llm
+replace github.com/vvsynapse/temporal-agent-sdk-go/pkg/tools => ./pkg/tools
+replace github.com/vvsynapse/temporal-agent-sdk-go/pkg/llm => ./pkg/llm
 
 require (
 	github.com/anthropics/anthropic-sdk-go v1.26.0

@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/vvsynapse/temporal-agents-go/pkg/interfaces"
+	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/interfaces"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/temporal"

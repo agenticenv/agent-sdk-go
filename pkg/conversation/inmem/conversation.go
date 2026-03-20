@@ -6,7 +6,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/vvsynapse/temporal-agents-go/pkg/interfaces"
+	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/interfaces"
 )
 
 type InMemoryConversation struct {

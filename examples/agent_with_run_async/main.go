@@ -12,11 +12,11 @@ import (
 	"strings"
 	"sync"
 
-	config "github.com/vvsynapse/temporal-agents-go/examples"
-	"github.com/vvsynapse/temporal-agents-go/pkg/agent"
-	"github.com/vvsynapse/temporal-agents-go/pkg/tools"
-	"github.com/vvsynapse/temporal-agents-go/pkg/tools/calculator"
-	"github.com/vvsynapse/temporal-agents-go/pkg/tools/echo"
+	config "github.com/vvsynapse/temporal-agent-sdk-go/examples"
+	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/agent"
+	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/tools"
+	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/tools/calculator"
+	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/tools/echo"
 )
 
 func main() {

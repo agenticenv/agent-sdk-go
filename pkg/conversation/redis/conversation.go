@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
-	"github.com/vvsynapse/temporal-agents-go/pkg/interfaces"
+	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/interfaces"
 )
 
 const keyPrefix = "conversation"

@@ -10,8 +10,8 @@ import (
 	"github.com/openai/openai-go/v3/packages/ssestream"
 	"github.com/openai/openai-go/v3/shared"
 	"github.com/openai/openai-go/v3/shared/constant"
-	"github.com/vvsynapse/temporal-agents-go/pkg/interfaces"
-	"github.com/vvsynapse/temporal-agents-go/pkg/llm"
+	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/interfaces"
+	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/llm"
 	"go.uber.org/zap"
 )
 

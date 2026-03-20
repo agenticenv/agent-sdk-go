@@ -1,6 +1,6 @@
 # Examples
 
-Run examples to try the temporal-agents-go SDK.
+Run examples to try the temporal-agent-sdk-go SDK.
 
 ## Prerequisites
 

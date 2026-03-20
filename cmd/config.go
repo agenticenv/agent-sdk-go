@@ -7,12 +7,12 @@ import (
 	"strings"
 
 	"github.com/spf13/viper"
-	"github.com/vvsynapse/temporal-agents-go/pkg/interfaces"
-	"github.com/vvsynapse/temporal-agents-go/pkg/llm"
-	"github.com/vvsynapse/temporal-agents-go/pkg/llm/anthropic"
-	"github.com/vvsynapse/temporal-agents-go/pkg/llm/gemini"
-	"github.com/vvsynapse/temporal-agents-go/pkg/llm/openai"
-	"github.com/vvsynapse/temporal-agents-go/pkg/logger"
+	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/interfaces"
+	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/llm"
+	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/llm/anthropic"
+	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/llm/gemini"
+	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/llm/openai"
+	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/logger"
 	"go.temporal.io/sdk/log"
 )
 
@@ -70,7 +70,7 @@ func LoadConfig(path string) (*Config, error) {
 	v.SetDefault("temporal.host", "localhost")
 	v.SetDefault("temporal.port", 7233)
 	v.SetDefault("temporal.namespace", "default")
-	v.SetDefault("temporal.taskQueue", "temporal-agents-go")
+	v.SetDefault("temporal.taskQueue", "temporal-agent-sdk-go")
 	v.SetDefault("llm.provider", "openai")
 	v.SetDefault("llm.model", "gpt-4o")
 	v.SetDefault("llm.baseURL", "https://api.openai.com/v1")
