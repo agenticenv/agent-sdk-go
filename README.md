@@ -1,6 +1,6 @@
 # Temporal Agent SDK for Go
 
-Temporal-native AI agent SDK for building agents with [Temporal](https://temporal.io).
+[Temporal](https://temporal.io)-native Go AI agent SDK for building agents.
 
 > **Note:** This project is not affiliated with Temporal Technologies. It is a community SDK for building AI agents on the Temporal platform.
 
