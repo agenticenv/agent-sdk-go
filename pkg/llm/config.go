@@ -3,13 +3,11 @@ package llm
 import (
 	"errors"
 
-	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/interfaces"
 	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/logger"
 	"go.temporal.io/sdk/log"
 )
 
 type LLMConfig struct {
-	provider interfaces.LLMProvider
 	APIKey   string
 	Model    string
 	BaseURL  string

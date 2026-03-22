@@ -479,17 +479,6 @@ func (aw *AgentWorker) fetchConversationMessages(ctx context.Context, conversati
 	return messages, nil
 }
 
-func (aw *AgentWorker) assistantMessageFromResult(r *AgentLLMResult) interfaces.Message {
-	msg := interfaces.Message{Role: interfaces.MessageRoleAssistant, Content: r.Content}
-	if len(r.ToolCalls) > 0 {
-		msg.ToolCalls = make([]*interfaces.ToolCall, len(r.ToolCalls))
-		for i, tc := range r.ToolCalls {
-			msg.ToolCalls[i] = &interfaces.ToolCall{ToolCallID: tc.ToolCallID, ToolName: tc.ToolName, Args: tc.Args}
-		}
-	}
-	return msg
-}
-
 func (aw *AgentWorker) llmResponseToResult(resp *interfaces.LLMResponse, tools []interfaces.Tool) (*AgentLLMResult, error) {
 	result := &AgentLLMResult{Content: resp.Content}
 	for _, tc := range resp.ToolCalls {
@@ -671,7 +660,6 @@ func (aw *AgentWorker) AgentToolExecuteActivity(ctx context.Context, input Agent
 		if t.Name() == toolName {
 			result, err := t.Execute(ctx, args)
 			if err != nil {
-				content = "Tool execution failed: " + err.Error()
 				return "", err
 			}
 			content = fmt.Sprintf("%v", result)

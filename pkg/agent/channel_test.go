@@ -21,7 +21,7 @@ func TestAgentChannel_PublishSubscribe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
-	defer closeFn()
+	defer func() { _ = closeFn() }()
 
 	go func() {
 		if err := c.Publish(ctx, "ch1", []byte("msg1")); err != nil {
@@ -41,9 +41,9 @@ func TestAgentChannel_MultipleSubscribers(t *testing.T) {
 	ctx := context.Background()
 
 	ch1, close1, _ := c.Subscribe(ctx, "ch")
-	defer close1()
+	defer func() { _ = close1() }()
 	ch2, close2, _ := c.Subscribe(ctx, "ch")
-	defer close2()
+	defer func() { _ = close2() }()
 
 	if err := c.Publish(ctx, "ch", []byte("broadcast")); err != nil {
 		t.Fatalf("Publish: %v", err)
@@ -61,7 +61,7 @@ func TestAgentChannel_CloseUnsubscribes(t *testing.T) {
 	ctx := context.Background()
 
 	ch, closeFn, _ := c.Subscribe(ctx, "ch")
-	closeFn()
+	_ = closeFn()
 
 	if err := c.Publish(ctx, "ch", []byte("x")); err != nil {
 		t.Fatalf("Publish after close: %v", err)

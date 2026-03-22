@@ -298,7 +298,7 @@ func (a *Agent) Run(ctx context.Context, input string, conversationID string) (*
 			a.logger.Error("failed to subscribe to agent events", zap.String("workflowID", workflowID), zap.Error(err))
 			return nil, err
 		}
-		defer closeEvent()
+		defer func() { _ = closeEvent() }()
 	}
 
 	hasWorkers := a.hasWorkers(ctx, a.taskQueue)
@@ -515,7 +515,7 @@ func (a *Agent) RunStream(ctx context.Context, input string, conversationID stri
 	a.logger.Debug("subscribed to agent events", zap.String("workflowID", workflowID))
 	defer func() {
 		if !streamStarted && closeEvent != nil {
-			closeEvent()
+			_ = closeEvent()
 		}
 	}()
 
@@ -547,7 +547,7 @@ func (a *Agent) RunStream(ctx context.Context, input string, conversationID stri
 	}()
 	go func() {
 		defer close(outCh)
-		defer closeEvent()
+		defer func() { _ = closeEvent() }()
 		defer cleanup()
 		if runCancel != nil {
 			defer runCancel()
