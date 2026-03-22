@@ -4,7 +4,7 @@
 #    cp cmd/config.sample.yaml cmd/config.yaml
 #
 # 2. Edit cmd/config.yaml with your values (API keys, Temporal host, etc.)
-# 3. Run: go run ./cmd   or   ./cmd/bin/agent -config cmd/config.yaml
+# 3. Run: go run ./cmd   or   ./cmd/bin/agentctl -config cmd/config.yaml
 #
 # Environment variables with AGENT_ prefix override file values.
 # Example: AGENT_LLM_APIKEY=sk-xxx AGENT_LLM_PROVIDER=openai go run ./cmd

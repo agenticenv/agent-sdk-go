@@ -58,11 +58,22 @@ go run ./cmd -config cmd/config.yaml
 From project root:
 
 ```bash
-go build -o cmd/bin/agent ./cmd
-./cmd/bin/agent
+make build
+./cmd/bin/agentctl
 ```
 
+Or build manually: `go build -o cmd/bin/agentctl ./cmd`
+
 The `cmd/bin/` directory is gitignored.
+
+## Install
+
+Install `agentctl` to `$(go env GOPATH)/bin` so you can run it from anywhere (ensure that directory is in your PATH):
+
+```bash
+make install
+agentctl -config cmd/config.yaml
+```
 
 ## Config file and env vars
 

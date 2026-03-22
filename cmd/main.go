@@ -75,7 +75,7 @@ func main() {
 	}()
 
 	opts := []agent.Option{
-		agent.WithName("agent-cli"),
+		agent.WithName("agentctl"),
 		agent.WithSystemPrompt("You are a helpful assistant."),
 		agent.WithTemporalConfig(&agent.TemporalConfig{
 			Host:      cfg.Temporal.Host,
