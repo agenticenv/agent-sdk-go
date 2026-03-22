@@ -472,6 +472,14 @@ a.Run(ctx, "What's my name?", convID) // agent uses history: "Alice"
 
 ---
 
+## Development
+
+Contributors: see **[CONTRIBUTING.md](CONTRIBUTING.md)** for prerequisites (Go version, Temporal setup), development workflow, and guidelines.
+
+Quick commands: `make test` | `make lint` | `make tidy` | `make test-coverage`
+
+---
+
 ## Setup and run examples
 
 ```bash

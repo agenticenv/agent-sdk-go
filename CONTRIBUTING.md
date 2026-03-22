@@ -1,0 +1,175 @@
+# Contributing to Temporal Agent SDK for Go
+
+Thank you for your interest in contributing. This document explains how to set up your environment and what we expect from contributors.
+
+## Prerequisites
+
+Before contributing, ensure you have:
+
+| Requirement | Version / Notes |
+|-------------|-----------------|
+| **Go** | 1.21 or higher (see `go.mod` for the module minimum) |
+| **Temporal server** | Required for running examples and integration-style tests |
+| **golangci-lint** | Required for `make lint` — install: `go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest` |
+
+## Temporal Service Setup
+
+Contributors must have Temporal running locally to run examples and validate agent behavior.
+
+### Option 1: Docker (recommended)
+
+```bash
+docker run --rm -p 7233:7233 -p 8233:8233 temporalio/temporal:latest server start-dev --ip 0.0.0.0
+```
+
+- **Temporal gRPC:** localhost:7233  
+- **Web UI:** http://localhost:8233  
+
+Keep this container running in a terminal while developing.
+
+### Option 2: Temporal CLI
+
+```bash
+temporal server start-dev
+```
+
+Install the CLI: [Temporal CLI setup](https://docs.temporal.io/cli/setup-cli)
+
+### More options
+
+- **Temporal Cloud:** [Production deployment](https://docs.temporal.io/production-deployment)  
+- **Self-hosted:** [Self-hosted deployment guide](https://docs.temporal.io/self-hosted-guide/deployment)  
+
+Examples use `TEMPORAL_HOST`, `TEMPORAL_PORT`, and `TEMPORAL_NAMESPACE` from `.env` (defaults: localhost, 7233, default).
+
+## Development Workflow
+
+### 1. Clone and prepare
+
+```bash
+git clone https://github.com/vvsynapse/temporal-agent-sdk-go.git
+cd temporal-agent-sdk-go
+go mod download
+```
+
+### 2. Run tests
+
+```bash
+make test
+```
+
+Or run tests for a specific package:
+
+```bash
+go test ./pkg/agent/... -count=1 -v
+```
+
+### 3. Run linters
+
+```bash
+make lint
+```
+
+This runs `go vet` and `golangci-lint`. All contributions must pass lint with zero errors.
+
+### 4. Generate coverage
+
+```bash
+make test-coverage
+# Open coverage.html in a browser
+```
+
+### 5. Run examples (optional)
+
+Copy the env sample and set your LLM API key:
+
+```bash
+cp examples/env.sample examples/.env
+# Edit examples/.env: set LLM_APIKEY, LLM_MODEL
+```
+
+Then run any example:
+
+```bash
+go run ./examples/simple_agent "Hello"
+```
+
+See [examples/README.md](examples/README.md) for all examples and env vars.
+
+## Ways to Contribute
+
+### Propose a feature
+
+Before implementing a new feature, **open an issue** to propose and discuss it. This helps:
+
+- Align on scope and design before you spend time coding
+- Avoid duplicate work if someone else is already working on it
+- Get feedback from maintainers early
+
+Use the **Feature** or **Enhancement** label if available, and include: use case, proposed API or behavior, and any alternatives you considered.
+
+### Report bugs
+
+Found a bug? **Open an issue** with:
+
+- Steps to reproduce
+- Expected vs actual behavior
+- Go version, OS, and (if relevant) Temporal and LLM provider versions
+- Minimal code or config that reproduces the problem
+
+### Share testing feedback
+
+Using the SDK and ran into issues, unclear docs, or confusing behavior? **Raise an issue** even if you’re not sure it’s a bug. Testers and early adopters are valuable; include as much context as you can (version, setup, what you tried).
+
+### Code contributions
+
+1. **Discuss first** for larger changes — open an issue or discussion before a big PR.
+2. **Small fixes** (typos, docs, obvious bugs) can go directly to a PR.
+3. **Pull requests** — see [What Contributors Must Follow](#what-contributors-must-follow) below.
+
+## What Contributors Must Follow
+
+1. **Code quality**
+   - Run `make lint` and `make test` before submitting a PR. PRs must pass both.
+   - Run `make tidy` before committing if you add or remove dependencies.
+
+2. **Tests**
+   - Add tests for new features and bug fixes.
+   - Unit tests go in `*_test.go` files alongside the code.
+
+3. **Commits**
+   - Use clear, descriptive commit messages.
+   - Prefer one logical change per commit.
+
+4. **Pull requests**
+   - Open a PR against the default branch.
+   - Describe the change and why it's needed.
+   - Reference any related issues.
+
+5. **Scope**
+   - Keep changes focused. For larger work, consider splitting into multiple PRs.
+   - For new LLM providers: implement `interfaces.LLMClient` (see `pkg/interfaces/llm.go` and existing providers in `pkg/llm/`).
+   - For new tools: implement `interfaces.Tool` (see `pkg/interfaces/tools.go` and `pkg/tools/`).
+
+## Project Layout
+
+| Path | Purpose |
+|------|---------|
+| `pkg/agent/` | Agent core, workflow, config |
+| `pkg/llm/` | LLM providers (OpenAI, Anthropic, Gemini) |
+| `pkg/interfaces/` | Interfaces for LLM clients, tools, messages |
+| `pkg/tools/` | Built-in and custom tools |
+| `pkg/conversation/` | Message history (in-memory, Redis) |
+| `cmd/` | agentctl CLI |
+| `examples/` | Example programs |
+
+## Getting Help
+
+| Need | Where |
+|------|-------|
+| **Feature idea or design discussion** | [Open an issue](https://github.com/vvsynapse/temporal-agent-sdk-go/issues) (use Feature/Enhancement label if available) |
+| **Bug report** | [Open an issue](https://github.com/vvsynapse/temporal-agent-sdk-go/issues) with repro steps |
+| **Question or general discussion** | [GitHub Discussions](https://github.com/vvsynapse/temporal-agent-sdk-go/discussions) |
+| **Security concern** | See [SECURITY.md](SECURITY.md) |
+
+We follow typical open source flow: discuss in issues/discussions first for non-trivial changes, then implement and open a PR when ready.
