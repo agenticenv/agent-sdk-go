@@ -1,4 +1,4 @@
-# temporal-agent-sdk-go
+# Temporal Agent SDK for Go
 
 Temporal-native AI agent SDK for building agents with [Temporal](https://temporal.io).
 
