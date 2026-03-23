@@ -3,6 +3,8 @@
 
 version: 2
 
+project_name: temporal-agent-sdk-go
+
 builds:
   - id: agentctl
     main: ./cmd
