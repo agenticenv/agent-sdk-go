@@ -1,6 +1,6 @@
 # Temporal Agent SDK for Go
 
-[![CI](https://github.com/vvsynapse/temporal-agent-sdk-go/actions/workflows/ci.yml/badge.svg)](https://github.com/vvsynapse/temporal-agent-sdk-go/actions) ·
+[![CI](https://github.com/vvsynapse/temporal-agent-sdk-go/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/vvsynapse/temporal-agent-sdk-go/actions)
 [![Release](https://img.shields.io/github/v/release/vvsynapse/temporal-agent-sdk-go?label=Release)](https://github.com/vvsynapse/temporal-agent-sdk-go/releases)
 [![Go Reference](https://pkg.go.dev/badge/github.com/vvsynapse/temporal-agent-sdk-go.svg)](https://pkg.go.dev/github.com/vvsynapse/temporal-agent-sdk-go)
 [![Go Report Card](https://goreportcard.com/badge/github.com/vvsynapse/temporal-agent-sdk-go)](https://goreportcard.com/report/github.com/vvsynapse/temporal-agent-sdk-go)
