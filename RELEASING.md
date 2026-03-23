@@ -9,15 +9,15 @@ Only users with **push access** to the repository can create tags and trigger re
 ## How it works
 
 1. **You create and push a tag** (e.g. `v0.0.1`, `v1.0.0`, `v2.0.3`)
-2. **GitHub Actions runs** the Release workflow
-3. **Builds** `agentctl` for Linux amd64
-4. **Creates a GitHub Release** with the tag and attaches `agentctl-{version}-linux-amd64.tar.gz`
+2. **GitHub Actions runs** the Release workflow via [GoReleaser](https://goreleaser.com)
+3. **Builds** `agentctl` for Linux, macOS, and Windows (amd64 and arm64 where supported)
+4. **Creates a GitHub Release** with archives (tar.gz / zip) and a checksums file
 
 ## Checklist before tagging
 
 - [ ] CI is green on `main` (lint, test, build pass — see [Actions](https://github.com/vvsynapse/temporal-agent-sdk-go/actions))
 - [ ] `make lint` and `make test` pass locally (or rely on CI)
-- [ ] CHANGELOG or release notes updated (if you maintain one)
+- [ ] Commit messages follow [conventional commits](https://www.conventionalcommits.org) for categorized changelog (feat:, fix:, docs:, etc.)
 - [ ] Version follows [semver](https://semver.org):
   - **Patch** (0.0.1 → 0.0.2): bug fixes, no API changes
   - **Minor** (0.1.0 → 0.2.0): new features, backward compatible
@@ -46,6 +46,8 @@ git push origin v0.0.1
 
 The workflow runs automatically when the tag is pushed. Check [Actions](https://github.com/vvsynapse/temporal-agent-sdk-go/actions) for status.
 
+**Changelog:** GoReleaser generates release notes from commits since the last tag. Use conventional commit prefixes (`feat:`, `fix:`, `docs:`, etc.) to group changes into Features, Bug Fixes, and Documentation in the release notes.
+
 ## Version examples
 
 | Tag     | Use case                     |
@@ -57,6 +59,16 @@ The workflow runs automatically when the tag is pushed. Check [Actions](https://
 | v2.0.0  | Major breaking release       |
 
 Any valid semver tag works: `v0.0.1`, `v1.0.0`, `v2.0.3`, etc.
+
+## Local dry run
+
+Test the release locally without publishing:
+
+```bash
+goreleaser release --snapshot
+```
+
+Use `goreleaser check` to validate the config.
 
 ## Notes
 

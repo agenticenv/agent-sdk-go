@@ -1,0 +1,68 @@
+# GoReleaser config — builds agentctl for multiple platforms, creates GitHub Release
+# See https://goreleaser.com/customization/
+
+version: 2
+
+builds:
+  - id: agentctl
+    main: ./cmd
+    binary: agentctl
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+
+archives:
+  - id: agentctl
+    format: tar.gz
+    format_overrides:
+      - goos: windows
+        format: zip
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  use: github
+  sort: asc
+  header: |
+    ## Temporal Agent SDK for Go
+
+    ### Install the SDK (library)
+
+    ```bash
+    go get github.com/vvsynapse/temporal-agent-sdk-go@{{ .Tag }}
+    ```
+
+    ### Install agentctl (CLI)
+
+    Download the archive for your platform from the **Assets** below (Linux, macOS, Windows — amd64 and arm64). Then extract and add to your `PATH`.
+
+    ---
+
+  groups:
+    - title: "## Features"
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: "## Bug Fixes"
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: "## Documentation"
+      regexp: '^.*?docs?(\([[:word:]]+\))??!?:.+$'
+      order: 2
+    - title: "## Tests"
+      regexp: '^.*?test(\([[:word:]]+\))??!?:.+$'
+      order: 3
+    - title: "## CI/CD"
+      regexp: '^.*?ci(\([[:word:]]+\))??!?:.+$'
+      order: 4
+    - title: "## Maintenance"
+      regexp: '^.*?chore(\([[:word:]]+\))??!?:.+$'
+      order: 5
+    - title: "## Other"
+      order: 999

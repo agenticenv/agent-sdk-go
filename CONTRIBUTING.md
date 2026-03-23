@@ -168,7 +168,13 @@ Using the SDK and ran into issues, unclear docs, or confusing behavior? **Raise 
    - Unit tests go in `*_test.go` files alongside the code.
 
 3. **Commits**
-   - Use clear, descriptive commit messages.
+   - Use [conventional commits](https://www.conventionalcommits.org) — these drive the release changelog:
+     - `feat: add streaming support` — features
+     - `fix: handle nil pointer in config` — bug fixes
+     - `docs: update README examples` — documentation
+     - `test: add unit tests for agent` — tests
+     - `ci: update release workflow` — CI/CD
+     - `chore: bump dependencies` — maintenance
    - Prefer one logical change per commit.
 
 4. **Pull requests**
