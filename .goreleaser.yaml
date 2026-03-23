@@ -27,9 +27,7 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
-changelog:
-  use: github
-  sort: asc
+release:
   header: |
     ## Temporal Agent SDK for Go
 
@@ -44,7 +42,12 @@ changelog:
     Download the archive for your platform from the **Assets** below (Linux, macOS, Windows — amd64 and arm64). Then extract and add to your `PATH`.
 
     ---
+  footer: |
+    **Full Changelog**: https://github.com/vvsynapse/temporal-agent-sdk-go/compare/{{ if .PreviousTag }}{{ .PreviousTag }}...{{ end }}{{ .Tag }}
 
+changelog:
+  use: github
+  sort: asc
   groups:
     - title: "## Features"
       regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
