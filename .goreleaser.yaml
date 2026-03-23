@@ -51,23 +51,23 @@ changelog:
   use: github
   sort: asc
   groups:
-    - title: "## Features"
+    - title: "Features"
       regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
       order: 0
-    - title: "## Bug Fixes"
+    - title: "Bug Fixes"
       regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
       order: 1
-    - title: "## Documentation"
+    - title: "Documentation"
       regexp: '^.*?docs?(\([[:word:]]+\))??!?:.+$'
       order: 2
-    - title: "## Tests"
+    - title: "Tests"
       regexp: '^.*?test(\([[:word:]]+\))??!?:.+$'
       order: 3
-    - title: "## CI/CD"
+    - title: "CI/CD"
       regexp: '^.*?ci(\([[:word:]]+\))??!?:.+$'
       order: 4
-    - title: "## Maintenance"
+    - title: "Maintenance"
       regexp: '^.*?chore(\([[:word:]]+\))??!?:.+$'
       order: 5
-    - title: "## Other"
+    - title: "Other"
       order: 999
