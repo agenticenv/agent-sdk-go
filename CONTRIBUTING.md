@@ -46,17 +46,47 @@ Examples use `TEMPORAL_HOST`, `TEMPORAL_PORT`, and `TEMPORAL_NAMESPACE` from `.e
 
 ### 1. Clone and prepare
 
+**Fork** the repo on GitHub (if you don't have push access), then clone your fork:
+
 ```bash
-git clone https://github.com/vvsynapse/temporal-agent-sdk-go.git
+git clone https://github.com/<your-username>/temporal-agent-sdk-go.git
 cd temporal-agent-sdk-go
+git remote add upstream https://github.com/vvsynapse/temporal-agent-sdk-go.git
 go mod download
 ```
 
-### 2. Run tests
+(If you have push access, you may clone the main repo and create branches there.)
+
+### 2. Create a branch for your changes
+
+Create a branch from `main` for each change. Do not push directly to `main`.
+
+```bash
+git checkout main
+git pull upstream main    # or origin main if using main repo
+git checkout -b <branch-name>
+```
+
+**Branch naming** (common open source practice):
+
+| Prefix | Use for |
+|--------|---------|
+| `feat/` | New features (e.g. `feat/add-retry`, `feat/streaming-improvements`) |
+| `fix/` | Bug fixes (e.g. `fix/nil-pointer`, `fix/timeout-handling`) |
+| `docs/` | Documentation only (e.g. `docs/readme`, `docs/api-examples`) |
+| `test/` | Test additions or fixes (e.g. `test/llm-provider`) |
+| `refactor/` | Code refactoring, no behavior change |
+| `chore/` | Maintenance (deps, tooling, config) |
+
+Keep your branch short and descriptive. Sync with `main` before opening a PR: `git pull upstream main` (or rebase if you prefer). Push your branch to your fork and open a PR against `main`.
+
+### 3. Run tests
 
 ```bash
 make test
 ```
+
+**CI runs automatically** on pull requests and pushes to `main`. Lint and test must pass before merge — fix any CI failures in your PR.
 
 Or run tests for a specific package:
 
@@ -64,7 +94,7 @@ Or run tests for a specific package:
 go test ./pkg/agent/... -count=1 -v
 ```
 
-### 3. Run linters
+### 4. Run linters
 
 ```bash
 make lint
@@ -72,14 +102,14 @@ make lint
 
 This runs `go vet` and `golangci-lint`. All contributions must pass lint with zero errors.
 
-### 4. Generate coverage
+### 5. Generate coverage
 
 ```bash
 make test-coverage
 # Open coverage.html in a browser
 ```
 
-### 5. Run examples (optional)
+### 6. Run examples (optional)
 
 Copy the env sample and set your LLM API key:
 
@@ -162,6 +192,10 @@ Using the SDK and ran into issues, unclear docs, or confusing behavior? **Raise 
 | `pkg/conversation/` | Message history (in-memory, Redis) |
 | `cmd/` | agentctl CLI |
 | `examples/` | Example programs |
+
+## Releasing (maintainers only)
+
+See **[RELEASING.md](RELEASING.md)** for how to cut releases — tag-triggered workflow, checklist, and version rules.
 
 ## Getting Help
 

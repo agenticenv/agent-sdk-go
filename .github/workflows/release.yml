@@ -1,0 +1,64 @@
+# Release: builds agentctl for Linux, creates GitHub Release
+# Trigger: push a tag (v0.0.1, v1.0.0, v2.0.3, etc.)
+# See RELEASING.md for maintainer checklist
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Set version from tag
+        id: version
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+
+      - name: Build agentctl
+        run: |
+          GOOS=linux GOARCH=amd64 go build -o agentctl ./cmd
+
+      - name: Create archive
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          tar czvf "agentctl-${VERSION}-linux-amd64.tar.gz" agentctl
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentctl-linux-amd64
+          path: agentctl-${{ steps.version.outputs.VERSION }}-linux-amd64.tar.gz
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: agentctl-linux-amd64
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: agentctl-*-linux-amd64.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
