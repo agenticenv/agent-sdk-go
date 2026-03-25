@@ -32,6 +32,12 @@ type ApprovalRequest struct {
 	ToolName string         `json:"tool_name"`
 	Args     map[string]any `json:"args"`
 	Respond  ApprovalSender `json:"-"`
+	// Kind matches ToolApprovalEvent: distinguish normal tools from sub-agent delegation.
+	Kind ToolApprovalKind `json:"kind,omitempty"`
+	// AgentName is the agent running the workflow that requested approval.
+	AgentName string `json:"agent_name,omitempty"`
+	// DelegateToName is set for delegation: human-friendly target specialist name.
+	DelegateToName string `json:"delegate_to_name,omitempty"`
 }
 
 // OnApproval completes a tool approval when using RunStream. Pass the string from ev.Approval

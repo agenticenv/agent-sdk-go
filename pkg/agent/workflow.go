@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -34,15 +35,26 @@ var (
 	defaultMaxIterations int = 5
 )
 
+// SubAgentRoute tells the workflow how to delegate to a sub-agent: child AgentWorkflow on TaskQueue,
+// with nested routes for that sub-agent's own sub-agents (frozen at parent run start).
+type SubAgentRoute struct {
+	TaskQueue   string                   `json:"task_queue"`
+	ChildRoutes map[string]SubAgentRoute `json:"child_routes,omitempty"`
+}
+
 // AgentWorkflowInput is the input to AgentWorkflow. EventWorkflowID is set when streaming or approval is used.
 // StreamingEnabled enables partial content streaming (from WithStream).
 // ConversationID is set when conversation is used; workflow fetches messages and writes assistant/tool via activities.
+// SubAgentDepth is 0 for a top-level user run; each child workflow increments it (runtime cap vs maxSubAgentDepth).
+// SubAgentRoutes maps sub-agent tool name -> route; built from WithSubAgents when the run starts.
 type AgentWorkflowInput struct {
-	UserPrompt       string           `json:"user_prompt,omitempty"`
-	EventWorkflowID  string           `json:"event_workflow_id,omitempty"`
-	StreamingEnabled bool             `json:"streaming_enabled,omitempty"`
-	ConversationID   string           `json:"conversation_id,omitempty"`
-	EventTypes       []AgentEventType `json:"event_types,omitempty"`
+	UserPrompt       string                   `json:"user_prompt,omitempty"`
+	EventWorkflowID  string                   `json:"event_workflow_id,omitempty"`
+	StreamingEnabled bool                     `json:"streaming_enabled,omitempty"`
+	ConversationID   string                   `json:"conversation_id,omitempty"`
+	EventTypes       []AgentEventType         `json:"event_types,omitempty"`
+	SubAgentDepth    int                      `json:"sub_agent_depth,omitempty"`
+	SubAgentRoutes   map[string]SubAgentRoute `json:"sub_agent_routes,omitempty"`
 }
 
 // AgentLLMInput is the input to AgentLLMActivity. When ConversationID is set, activity fetches messages from store.
@@ -292,19 +304,22 @@ func (aw *AgentWorker) AgentWorkflow(ctx workflow.Context, input AgentWorkflowIn
 
 			var content string
 			if approvalStatus == ApprovalStatusApproved {
-				var result string
-				execInput := AgentToolExecuteInput{
-					ToolName:       tc.ToolName,
-					Args:           tc.Args,
-					ConversationID: input.ConversationID,
-					ToolCallID:     tc.ToolCallID,
-				}
-				errExec := workflow.ExecuteActivity(execCtx, aw.AgentToolExecuteActivity, execInput).Get(execCtx, &result)
-				if errExec != nil {
-					content = "Tool execution failed: " + errExec.Error()
-					// ToolExecute activity adds tool message for both success and failure when conversation
+				if route, ok := input.SubAgentRoutes[tc.ToolName]; ok {
+					content = aw.delegateToSubAgent(ctx, input, tc, route)
 				} else {
-					content = result
+					var result string
+					execInput := AgentToolExecuteInput{
+						ToolName:       tc.ToolName,
+						Args:           tc.Args,
+						ConversationID: input.ConversationID,
+						ToolCallID:     tc.ToolCallID,
+					}
+					errExec := workflow.ExecuteActivity(execCtx, aw.AgentToolExecuteActivity, execInput).Get(execCtx, &result)
+					if errExec != nil {
+						content = "Tool execution failed: " + errExec.Error()
+					} else {
+						content = result
+					}
 				}
 			} else {
 				content = "Tool execution was rejected by the user."
@@ -530,6 +545,25 @@ func (aw *AgentWorker) AgentLLMActivity(ctx context.Context, input AgentLLMInput
 	return aw.llmResponseToResult(resp, tools)
 }
 
+func toolApprovalMetadata(aw *AgentWorker, toolName string) (kind ToolApprovalKind, agentName, delegateToName string) {
+	if aw == nil || aw.config == nil {
+		return ToolApprovalKindTool, "", ""
+	}
+	agentName = strings.TrimSpace(aw.config.Name)
+	kind = ToolApprovalKindTool
+	for _, t := range aw.config.toolsList() {
+		if t.Name() != toolName {
+			continue
+		}
+		if at, ok := t.(AgentTool); ok {
+			kind = ToolApprovalKindDelegation
+			delegateToName = subAgentLabel(at.SubAgent())
+		}
+		break
+	}
+	return kind, agentName, delegateToName
+}
+
 // AgentToolApprovalActivity blocks until the driver completes it via CompleteActivity.
 // Sends approval request as AgentEventToolApproval on event channel (same channel for Run and RunStream).
 func (aw *AgentWorker) AgentToolApprovalActivity(ctx context.Context, input AgentToolApprovalInput) (ApprovalStatus, error) {
@@ -540,13 +574,17 @@ func (aw *AgentWorker) AgentToolApprovalActivity(ctx context.Context, input Agen
 	workflowID := info.WorkflowExecution.ID
 	taskTokenB64 := base64.StdEncoding.EncodeToString(info.TaskToken)
 
+	kind, agentName, delegateToName := toolApprovalMetadata(aw, input.ToolName)
 	ev := &AgentEvent{
 		Type: AgentEventToolApproval,
 		Approval: &ToolApprovalEvent{
-			ToolCallID:    input.ToolCallID,
-			ToolName:      input.ToolName,
-			Args:          input.Args,
-			ApprovalToken: taskTokenB64,
+			ToolCallID:     input.ToolCallID,
+			ToolName:       input.ToolName,
+			Args:           input.Args,
+			ApprovalToken:  taskTokenB64,
+			Kind:           kind,
+			AgentName:      agentName,
+			DelegateToName: delegateToName,
 		},
 		Timestamp: time.Now(),
 	}
@@ -669,6 +707,53 @@ func (aw *AgentWorker) AgentToolExecuteActivity(ctx context.Context, input Agent
 	}
 	logger.Warn("unknown tool", zap.String("tool", toolName))
 	return "", fmt.Errorf("unknown tool: %s", toolName)
+}
+
+func (aw *AgentWorker) delegateToSubAgent(ctx workflow.Context, input AgentWorkflowInput, tc ToolCallRequest, route SubAgentRoute) string {
+	if strings.TrimSpace(route.TaskQueue) == "" {
+		return "Sub-agent delegation failed: sub-agent task queue is not configured."
+	}
+	maxDepth := aw.config.maxSubAgentDepth
+	if maxDepth <= 0 {
+		maxDepth = defaultMaxSubAgentDepth
+	}
+	if input.SubAgentDepth >= maxDepth {
+		return fmt.Sprintf("Sub-agent delegation refused: maximum nesting depth (%d) reached for this agent.", maxDepth)
+	}
+	childInput := AgentWorkflowInput{
+		UserPrompt:       subAgentQueryFromArgs(tc.Args),
+		EventWorkflowID:  input.EventWorkflowID,
+		StreamingEnabled: input.StreamingEnabled,
+		ConversationID:   "",
+		EventTypes:       input.EventTypes,
+		SubAgentDepth:    input.SubAgentDepth + 1,
+		SubAgentRoutes:   route.ChildRoutes,
+	}
+	var childSuffix string
+	if err := workflow.SideEffect(ctx, func(workflow.Context) interface{} {
+		return uuid.New().String()
+	}).Get(&childSuffix); err != nil {
+		return "Sub-agent workflow failed: " + err.Error()
+	}
+	parentID := workflow.GetInfo(ctx).WorkflowExecution.ID
+	childWfID := fmt.Sprintf("%s-sub-%s-%s", parentID, tc.ToolCallID, childSuffix)
+	childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
+		WorkflowID: childWfID,
+		TaskQueue:  route.TaskQueue,
+	})
+	var childResp AgentResponse
+	if err := workflow.ExecuteChildWorkflow(childCtx, aw.AgentWorkflow, childInput).Get(childCtx, &childResp); err != nil {
+		return "Sub-agent workflow failed: " + err.Error()
+	}
+	return childResp.Content
+}
+
+func subAgentQueryFromArgs(args map[string]any) string {
+	if args == nil {
+		return ""
+	}
+	q, _ := args[subAgentToolParamQuery].(string)
+	return q
 }
 
 func retryPolicy(maxAttempts int32) *temporal.RetryPolicy {

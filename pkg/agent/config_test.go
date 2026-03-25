@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/interfaces"
@@ -100,6 +101,96 @@ func TestAgentConfig_RequiresApproval(t *testing.T) {
 	}
 }
 
+func TestAgentConfig_validateSubAgents_duplicateRootSubs(t *testing.T) {
+	s := &Agent{agentConfig: agentConfig{Name: "Same"}}
+	c := &agentConfig{subAgents: []*Agent{s, s}, maxSubAgentDepth: 3}
+	err := c.validateSubAgents()
+	if err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("want duplicate error, got %v", err)
+	}
+}
+
+func TestAgentConfig_validateSubAgents_nilSubAgent(t *testing.T) {
+	c := &agentConfig{subAgents: []*Agent{nil}, maxSubAgentDepth: 3}
+	err := c.validateSubAgents()
+	if err == nil || !strings.Contains(err.Error(), "nil") {
+		t.Fatalf("want nil sub-agent error, got %v", err)
+	}
+}
+
+func TestAgentConfig_validateSubAgents_cycleAB(t *testing.T) {
+	a := &Agent{agentConfig: agentConfig{Name: "A"}}
+	b := &Agent{agentConfig: agentConfig{Name: "B"}}
+	a.subAgents = []*Agent{b}
+	b.subAgents = []*Agent{a}
+	c := &agentConfig{subAgents: []*Agent{a}, maxSubAgentDepth: 5}
+	err := c.validateSubAgents()
+	if err == nil || !strings.Contains(err.Error(), "cycle") {
+		t.Fatalf("want cycle error, got %v", err)
+	}
+}
+
+func TestAgentConfig_validateSubAgents_depthExceeded(t *testing.T) {
+	d1 := &Agent{agentConfig: agentConfig{Name: "d1"}}
+	d2 := &Agent{agentConfig: agentConfig{Name: "d2"}}
+	d3 := &Agent{agentConfig: agentConfig{Name: "d3"}}
+	d4 := &Agent{agentConfig: agentConfig{Name: "d4"}}
+	d1.subAgents = []*Agent{d2}
+	d2.subAgents = []*Agent{d3}
+	d3.subAgents = []*Agent{d4}
+	c := &agentConfig{subAgents: []*Agent{d1}, maxSubAgentDepth: 3}
+	err := c.validateSubAgents()
+	if err == nil || !strings.Contains(err.Error(), "depth") {
+		t.Fatalf("want depth error, got %v", err)
+	}
+}
+
+func TestAgentConfig_validateSubAgents_okWithinDepth(t *testing.T) {
+	d1 := &Agent{agentConfig: agentConfig{Name: "d1"}}
+	d2 := &Agent{agentConfig: agentConfig{Name: "d2"}}
+	d3 := &Agent{agentConfig: agentConfig{Name: "d3"}}
+	d1.subAgents = []*Agent{d2}
+	d2.subAgents = []*Agent{d3}
+	c := &agentConfig{subAgents: []*Agent{d1}, maxSubAgentDepth: 3}
+	if err := c.validateSubAgents(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAgentConfig_validateToolsAndSubAgentNames_conflict(t *testing.T) {
+	sub := &Agent{agentConfig: agentConfig{Name: "Math"}}
+	c := &agentConfig{
+		tools:     []interfaces.Tool{mockTool{name: "subagent_Math"}},
+		subAgents: []*Agent{sub},
+	}
+	err := c.validateToolsAndSubAgentNames()
+	if err == nil || !strings.Contains(err.Error(), "conflicts") {
+		t.Fatalf("want conflict error, got %v", err)
+	}
+}
+
+func TestAgentConfig_toolsList_includesSubAgents(t *testing.T) {
+	sub := &Agent{agentConfig: agentConfig{Name: "Helper", ID: "id-sub"}}
+	c := &agentConfig{
+		tools:     []interfaces.Tool{mockTool{name: "echo"}},
+		subAgents: []*Agent{sub},
+	}
+	list := c.toolsList()
+	if len(list) != 2 {
+		t.Fatalf("toolsList len = %d, want 2", len(list))
+	}
+	if list[0].Name() != "echo" {
+		t.Errorf("first tool = %s", list[0].Name())
+	}
+	if list[1].Name() != "subagent_Helper" {
+		t.Errorf("sub tool name = %s", list[1].Name())
+	}
+	at, ok := list[1].(AgentTool)
+	if !ok || at.SubAgent() != sub {
+		t.Errorf("second tool should be AgentTool wrapping sub")
+	}
+}
+
 func TestAgentConfig_HasApprovalTools(t *testing.T) {
 	c := &agentConfig{
 		tools:              []interfaces.Tool{mockToolWithApproval{mockTool: mockTool{name: "x"}, needApproval: true}},
@@ -141,5 +232,5 @@ type mockToolWithApproval struct {
 func (m mockToolWithApproval) ApprovalRequired() bool { return m.needApproval }
 
 // Ensure mockToolWithApproval implements both interfaces
-var _ interfaces.Tool        = (*mockToolWithApproval)(nil)
+var _ interfaces.Tool = (*mockToolWithApproval)(nil)
 var _ interfaces.ToolApproval = (*mockToolWithApproval)(nil)

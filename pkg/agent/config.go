@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -85,6 +86,12 @@ type agentConfig struct {
 	enableRemoteWorkers bool // true: run event worker & workflow. false (default): use agentChannel only. Agent only.
 	remoteWorker        bool // true when AgentWorker; activities use UpdateWorkflow
 	agentWorker         bool
+
+	// subAgents
+	// subAgents are direct children; each is exposed to the LLM via NewSubAgentTool (see toolsList).
+	subAgents []*Agent
+	// maxSubAgentDepth limits nesting depth from this agent (direct subs = 1). Default 2 when unset or <= 0.
+	maxSubAgentDepth int
 }
 
 // defaultTimeout is used when no deadline set, to avoid blocking forever when no workers run.
@@ -241,6 +248,19 @@ func WithLLMSampling(s *LLMSampling) Option {
 	return func(c *agentConfig) { c.llmSampling = s }
 }
 
+// WithSubAgents registers sub-agents. Each is exposed to the parent LLM as a tool (AgentTool).
+// Execution is via workflow (child workflow), not Tool.Execute — see future workflow integration.
+// The sub-agent graph is validated at agent build: no cycles, depth <= WithMaxSubAgentDepth (default 2).
+func WithSubAgents(subAgents ...*Agent) Option {
+	return func(c *agentConfig) { c.subAgents = subAgents }
+}
+
+// WithMaxSubAgentDepth sets the maximum sub-agent nesting depth from this agent (direct children = 1).
+// Default is 2 when unset or <= 0. Applies to Agent and AgentWorker.
+func WithMaxSubAgentDepth(depth int) Option {
+	return func(c *agentConfig) { c.maxSubAgentDepth = depth }
+}
+
 // buildAgentConfig applies options, validates, and creates the Temporal client.
 // remoteWorker is false for Agent (local); NewAgentWorker overrides to true.
 func buildAgentConfig(opts []Option) (*agentConfig, error) {
@@ -276,6 +296,15 @@ func buildAgentConfig(opts []Option) (*agentConfig, error) {
 	}
 	if c.conversationSize <= 0 {
 		c.conversationSize = 20
+	}
+	if c.maxSubAgentDepth <= 0 {
+		c.maxSubAgentDepth = defaultMaxSubAgentDepth
+	}
+	if err := c.validateSubAgents(); err != nil {
+		return nil, err
+	}
+	if err := c.validateToolsAndSubAgentNames(); err != nil {
+		return nil, err
 	}
 	if c.timeout == 0 {
 		c.timeout = defaultTimeout
@@ -348,10 +377,110 @@ func buildAgentConfigForWorker(opts []Option) (*agentConfig, error) {
 }
 
 func (c *agentConfig) toolsList() []interfaces.Tool {
+	var base []interfaces.Tool
 	if c.toolRegistry != nil {
-		return c.toolRegistry.Tools()
+		base = c.toolRegistry.Tools()
+	} else {
+		base = c.tools
 	}
-	return c.tools
+	if len(c.subAgents) == 0 {
+		return base
+	}
+	out := make([]interfaces.Tool, len(base), len(base)+len(c.subAgents))
+	copy(out, base)
+	for _, sa := range c.subAgents {
+		if st := NewSubAgentTool(sa); st != nil {
+			out = append(out, st)
+		}
+	}
+	return out
+}
+
+// validateSubAgents checks for nil sub-agents, duplicate roots, cycles, and max nesting depth.
+func (c *agentConfig) validateSubAgents() error {
+	if len(c.subAgents) == 0 {
+		return nil
+	}
+	maxDepth := c.maxSubAgentDepth
+	if maxDepth <= 0 {
+		maxDepth = defaultMaxSubAgentDepth
+	}
+	seen := make(map[*Agent]struct{}, len(c.subAgents))
+	for _, s := range c.subAgents {
+		if s == nil {
+			return fmt.Errorf("sub-agent must not be nil")
+		}
+		if _, dup := seen[s]; dup {
+			return fmt.Errorf("duplicate sub-agent %q in WithSubAgents", subAgentLabel(s))
+		}
+		seen[s] = struct{}{}
+	}
+	for _, s := range c.subAgents {
+		path := map[*Agent]struct{}{s: {}}
+		if err := dfsSubAgentDepth(s, path, 1, maxDepth); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func dfsSubAgentDepth(a *Agent, path map[*Agent]struct{}, depth, maxDepth int) error {
+	if depth > maxDepth {
+		return fmt.Errorf("sub-agent depth exceeds max (%d): at %q", maxDepth, subAgentLabel(a))
+	}
+	for _, child := range a.subAgents {
+		if child == nil {
+			return fmt.Errorf("sub-agent %q has a nil entry in WithSubAgents", subAgentLabel(a))
+		}
+		if _, cycle := path[child]; cycle {
+			return fmt.Errorf("sub-agent cycle detected involving %q and %q", subAgentLabel(a), subAgentLabel(child))
+		}
+		path[child] = struct{}{}
+		if err := dfsSubAgentDepth(child, path, depth+1, maxDepth); err != nil {
+			return err
+		}
+		delete(path, child)
+	}
+	return nil
+}
+
+func subAgentLabel(a *Agent) string {
+	if a == nil {
+		return "<nil>"
+	}
+	if n := strings.TrimSpace(a.Name); n != "" {
+		return n
+	}
+	return a.ID
+}
+
+// validateToolsAndSubAgentNames ensures tool names are unique across WithTools/registry and sub-agent tools.
+func (c *agentConfig) validateToolsAndSubAgentNames() error {
+	var base []interfaces.Tool
+	if c.toolRegistry != nil {
+		base = c.toolRegistry.Tools()
+	} else {
+		base = c.tools
+	}
+	names := make(map[string]struct{})
+	for _, t := range base {
+		n := t.Name()
+		if _, ok := names[n]; ok {
+			return fmt.Errorf("duplicate tool name %q in WithTools or registry", n)
+		}
+		names[n] = struct{}{}
+	}
+	for _, sa := range c.subAgents {
+		if sa == nil {
+			continue
+		}
+		n := SubAgentToolName(sa)
+		if _, ok := names[n]; ok {
+			return fmt.Errorf("sub-agent tool name %q conflicts with an existing tool", n)
+		}
+		names[n] = struct{}{}
+	}
+	return nil
 }
 
 // responseFormatForLLM returns the response format for LLM requests.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -158,22 +159,22 @@ func (a *Agent) ensureEventWorkflowStarted(ctx context.Context) (string, error) 
 	if a.activeEventWorkflowID != "" {
 		return a.activeEventWorkflowID, nil
 	}
-	eid := eventWorkflowIDPrefix + a.Name + "-" + a.ID
 
-	a.logger.Debug("executing event workflow", zap.String("eid", eid))
+	eventWorkflowID := a.getEventWorkflowID()
+	a.logger.Debug("executing event workflow", zap.String("eventWorkflowID", eventWorkflowID))
 
 	_, err := a.temporalClient.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
-		ID:                       eid,
+		ID:                       eventWorkflowID,
 		TaskQueue:                getEventTaskQueue(a.taskQueue),
 		WorkflowIDConflictPolicy: enumspb.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING,
 	}, a.AgentEventWorkflow)
 	if err != nil {
-		a.logger.Error("failed to start event workflow", zap.String("eid", eid), zap.Error(err))
+		a.logger.Error("failed to start event workflow", zap.String("eventWorkflowID", eventWorkflowID), zap.Error(err))
 		return "", err
 	}
-	a.activeEventWorkflowID = eid
-	a.logger.Info("event workflow started", zap.String("eventWorkflowID", eid))
-	return eid, nil
+	a.activeEventWorkflowID = eventWorkflowID
+	a.logger.Info("event workflow started", zap.String("eventWorkflowID", eventWorkflowID))
+	return eventWorkflowID, nil
 }
 
 func getEventTaskQueue(taskQueue string) string {
@@ -265,8 +266,7 @@ func (a *Agent) Run(ctx context.Context, input string, conversationID string) (*
 		defer cancel()
 	}
 
-	id := uuid.New().String()
-	workflowID := fmt.Sprintf("%s-%s", a.Name, id)
+	workflowID := a.getWorkflowID(false)
 	cleanup, err := a.beginRun(workflowID)
 	if err != nil {
 		return nil, err
@@ -279,6 +279,8 @@ func (a *Agent) Run(ctx context.Context, input string, conversationID string) (*
 		EventWorkflowID:  "",
 		ConversationID:   conversationID,
 		EventTypes:       []AgentEventType{},
+		SubAgentDepth:    0,
+		SubAgentRoutes:   a.buildSubAgentRoutes(),
 	}
 	if a.enableRemoteWorkers {
 		a.createEventWorker()
@@ -376,9 +378,12 @@ func (a *Agent) Run(ctx context.Context, input string, conversationID string) (*
 			}
 			approvalCtx, cancel := context.WithTimeout(runCtx, a.approvalTimeout)
 			a.approvalHandler(approvalCtx, &ApprovalRequest{
-				ToolName: ev.Approval.ToolName,
-				Args:     ev.Approval.Args,
-				Respond:  onApproval,
+				ToolName:       ev.Approval.ToolName,
+				Args:           ev.Approval.Args,
+				Respond:        onApproval,
+				Kind:           ev.Approval.Kind,
+				AgentName:      ev.Approval.AgentName,
+				DelegateToName: ev.Approval.DelegateToName,
 			})
 			cancel()
 		case resp := <-approvalResponseCh:
@@ -417,9 +422,12 @@ func (a *Agent) RunAsync(ctx context.Context, input string, conversationID strin
 			saved = a.approvalHandler
 			a.approvalHandler = func(handlerCtx context.Context, req *ApprovalRequest) {
 				out := &ApprovalRequest{
-					ToolName: req.ToolName,
-					Args:     copyApprovalArgs(req.Args),
-					Respond:  req.Respond,
+					ToolName:       req.ToolName,
+					Args:           copyApprovalArgs(req.Args),
+					Respond:        req.Respond,
+					Kind:           req.Kind,
+					AgentName:      req.AgentName,
+					DelegateToName: req.DelegateToName,
 				}
 				select {
 				case apprCh <- out:
@@ -464,8 +472,7 @@ func (a *Agent) RunStream(ctx context.Context, input string, conversationID stri
 		return nil, err
 	}
 
-	id := uuid.New().String()
-	workflowID := fmt.Sprintf("%s-%s", a.Name, id)
+	workflowID := a.getWorkflowID(true)
 	cleanup, err := a.beginRun(workflowID)
 	if err != nil {
 		return nil, err
@@ -493,6 +500,8 @@ func (a *Agent) RunStream(ctx context.Context, input string, conversationID stri
 		StreamingEnabled: a.streamEnabled,
 		ConversationID:   conversationID,
 		EventTypes:       []AgentEventType{AgentEventAll},
+		SubAgentDepth:    0,
+		SubAgentRoutes:   a.buildSubAgentRoutes(),
 	}
 
 	runCtx := ctx
@@ -597,10 +606,13 @@ func copyEventWithShortApprovalToken(ev *AgentEvent, shortToken string) *AgentEv
 	c := *ev
 	if c.Approval != nil {
 		c.Approval = &ToolApprovalEvent{
-			ToolCallID:    ev.Approval.ToolCallID,
-			ToolName:      ev.Approval.ToolName,
-			Args:          ev.Approval.Args,
-			ApprovalToken: shortToken,
+			ToolCallID:     ev.Approval.ToolCallID,
+			ToolName:       ev.Approval.ToolName,
+			Args:           ev.Approval.Args,
+			ApprovalToken:  shortToken,
+			Kind:           ev.Approval.Kind,
+			AgentName:      ev.Approval.AgentName,
+			DelegateToName: ev.Approval.DelegateToName,
 		}
 	}
 	return &c
@@ -614,4 +626,43 @@ func (a *Agent) validateConversationID(conversationID string) error {
 		return fmt.Errorf("conversationID is required when using conversation")
 	}
 	return nil
+}
+
+func (a *Agent) getWorkflowID(isStream bool) string {
+	id := uuid.New().String()
+	if isStream {
+		return fmt.Sprintf("agent-stream-%s-%s", a.Name, id)
+	}
+	return fmt.Sprintf("agent-run-%s-%s", a.Name, id)
+}
+
+func (a *Agent) getEventWorkflowID() string {
+	id := uuid.New().String()
+	return fmt.Sprintf("agent-event-%s-%s", a.Name, id)
+}
+
+// buildSubAgentRoutes snapshots sub-agent tool names, task queues, and nested routes for workflow input.
+func (a *Agent) buildSubAgentRoutes() map[string]SubAgentRoute {
+	if a == nil || len(a.subAgents) == 0 {
+		return nil
+	}
+	out := make(map[string]SubAgentRoute, len(a.subAgents))
+	for _, sub := range a.subAgents {
+		if sub == nil {
+			continue
+		}
+		tq := strings.TrimSpace(sub.taskQueue)
+		if tq == "" {
+			continue
+		}
+		name := SubAgentToolName(sub)
+		out[name] = SubAgentRoute{
+			TaskQueue:   tq,
+			ChildRoutes: sub.buildSubAgentRoutes(),
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
