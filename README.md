@@ -22,6 +22,7 @@
 - **Streaming** — Partial content and thinking deltas via `RunStream`
 - **Tools** — Built-in tools and custom tools via `interfaces.Tool`
 - **Tool approval** — Optional approval flow before executing tools
+- **Sub-agents** — Main agent can delegate work to specialist agents you register
 - **Temporal-native** — Durable execution, retries, visibility
 
 ## Getting started
@@ -202,9 +203,64 @@ result, _ := a.Run(ctx, "What's the weather in Tokyo?", "")
 
 [examples/agent_with_tools](examples/agent_with_tools)
 
+### Sub-agents
+
+Build each specialist with **`NewAgent`** (own **`TaskQueue`**, LLM, tools, prompts). Register them on the main agent with **`WithSubAgents`**. Use **`WithName`** and **`WithDescription`** on specialists when you want clearer labels for the main agent’s model. Use **`WithMaxSubAgentDepth`** only if the default nesting limit is not enough. Run **`Run`**, **`RunStream`**, or **`RunAsync`** on the main agent. With **`WithConversation`**, delegated work does not reuse the main agent’s `conversationID`. If you use **`DisableWorker`**, pair each **`NewAgentWorker`** with the same options as the **`NewAgent`** that runs that agent.
+
+```go
+mathAgent, _ := agent.NewAgent(
+    agent.WithName("MathSpecialist"),
+    agent.WithDescription("Arithmetic; uses calculator tools."),
+    agent.WithTemporalConfig(&agent.TemporalConfig{
+        Host: "localhost", Port: 7233, Namespace: "default",
+        TaskQueue: "my-app-math",
+    }),
+    agent.WithLLMClient(llmClient),
+    agent.WithToolRegistry(mathTools),
+    agent.WithToolApprovalPolicy(agent.AutoToolApprovalPolicy()),
+)
+defer mathAgent.Close()
+
+mainAgent, _ := agent.NewAgent(
+    agent.WithName("Main agent"),
+    agent.WithSystemPrompt("You are a helpful assistant."),
+    agent.WithTemporalConfig(&agent.TemporalConfig{
+        Host: "localhost", Port: 7233, Namespace: "default",
+        TaskQueue: "my-app-main-agent",
+    }),
+    agent.WithLLMClient(llmClient),
+    agent.WithSubAgents(mathAgent),
+    agent.WithMaxSubAgentDepth(2),
+    agent.WithToolApprovalPolicy(agent.AutoToolApprovalPolicy()),
+)
+defer mainAgent.Close()
+
+result, _ := mainAgent.Run(ctx, "What is 144 divided by 12?", "")
+```
+
+[examples/agent_with_subagents](examples/agent_with_subagents)
+
 ### Tool approval
 
-By default tools require approval. Use `WithApprovalHandler` on the agent (required for Run). Each `ApprovalRequest` includes `Respond`; call `req.Respond(Approved|Rejected)` when ready (same as RunAsync):
+By default tools require approval, including delegation to sub-agents registered with **`WithSubAgents`**—they follow the same **`WithToolApprovalPolicy`** as your other tools. Use `WithApprovalHandler` on the agent (required for Run when any tool needs approval). See [examples/agent_with_subagents](examples/agent_with_subagents).
+
+#### Tools vs agent policy
+
+- **`WithToolApprovalPolicy`** applies to **every** tool the agent exposes: registry / `WithTools` **and** sub-agent delegation. Default is require-all; `AutoToolApprovalPolicy()` skips all; `AllowlistToolApprovalPolicy("echo", "subagent_MathSpecialist", ...)` skips only those names.
+- Custom tools may implement **`interfaces.ToolApproval`**; with a normal **`NewAgent`** build, a default policy is always set, so **`WithToolApprovalPolicy` wins** for that agent (see `requiresApproval` in `config.go`).
+
+#### Sub-agents and approval
+
+- **`ApprovalRequest`** and **`ToolApprovalEvent`** (RunStream) include **`Kind`** (`tool` or `delegation`), **`AgentName`** (agent running the workflow), and **`DelegateToName`** (target specialist when `Kind` is `delegation`). Use them to show different UI labels while keeping one approval flow.
+- **Parent (main agent):** one policy for its whole list—e.g. `RequireAll` → approving `subagent_MathSpecialist` is the same flow as approving `calculator` on that agent. `AutoToolApprovalPolicy()` → no approval for delegation or other tools on that agent.
+- **Specialist:** separate agent, **its own** `WithToolApprovalPolicy`. Calculator calls inside the specialist use **that** policy, not the parent’s.
+
+```text
+Main agent: WithToolApprovalPolicy(RequireAll)     → delegate to math → user approval
+Math agent:  WithToolApprovalPolicy(Auto)         → calculator inside specialist → no approval
+```
+
+Each `ApprovalRequest` includes `Respond`; call `req.Respond(Approved|Rejected)` when ready (same as RunAsync):
 
 ```go
 a, _ := agent.NewAgent(
@@ -468,6 +524,8 @@ a.Run(ctx, "What's my name?", convID) // agent uses history: "Alice"
 | **WithConversation**        | Message history store. Use `inmem` for single process; `redis` for remote workers. Pass same `conversationID` to `Run` and `RunStream` for a session. See [Conversation](#conversation-message-history). |
 | **WithConversationSize**    | Max messages to fetch for LLM context (default 20). Only applies when `WithConversation` is set.                                                                                                         |
 | **WithEnableRemoteWorkers** | Set `true` when using `DisableWorker` with approval or streaming.                                                                                                                                        |
+| **WithSubAgents**           | Attach specialist agents the main agent can delegate to. Each needs its own task queue and worker. See [Sub-agents](#sub-agents).                                                                       |
+| **WithMaxSubAgentDepth**    | Maximum delegation hops from this agent (default 2). See [Sub-agents](#sub-agents).                                                                                                                       |
 | **WithMaxIterations**       | Max LLM rounds (default 5).                                                                                                                                                                              |
 | **WithStream**              | Enable `RunStream` partial content streaming.                                                                                                                                                            |
 | **WithLLMSampling**         | Per-agent sampling (`Temperature`, `MaxTokens`, `TopP`, `TopK`). Pass `&agent.LLMSampling{...}`; nil fields = provider default. Extensible for more params.                                              |

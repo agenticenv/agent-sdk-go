@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/interfaces"
 	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/logger"
@@ -102,4 +103,78 @@ func (m *mockConversation) ListMessages(ctx context.Context, id string, opts ...
 	return nil, nil
 }
 func (m *mockConversation) Clear(ctx context.Context, id string) error { return nil }
-func (m *mockConversation) IsDistributed() bool                          { return false }
+func (m *mockConversation) IsDistributed() bool                        { return false }
+
+func TestSubAgentQueryFromArgs(t *testing.T) {
+	if subAgentQueryFromArgs(nil) != "" {
+		t.Error("nil args")
+	}
+	if subAgentQueryFromArgs(map[string]any{}) != "" {
+		t.Error("empty map")
+	}
+	if got := subAgentQueryFromArgs(map[string]any{"query": "hello"}); got != "hello" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestSubAgentChildWorkflowTimeout(t *testing.T) {
+	if got := subAgentChildWorkflowTimeout(nil); got != defaultTimeout {
+		t.Fatalf("nil worker: got %v want %v", got, defaultTimeout)
+	}
+	aw := &AgentWorker{config: &agentConfig{timeout: 2 * time.Minute}}
+	if got := subAgentChildWorkflowTimeout(aw); got != 2*time.Minute {
+		t.Fatalf("custom timeout: got %v", got)
+	}
+	aw.config.timeout = 0
+	if got := subAgentChildWorkflowTimeout(aw); got != defaultTimeout {
+		t.Fatalf("zero timeout: got %v want %v", got, defaultTimeout)
+	}
+}
+
+func TestBuildWorkflowSubAgentRoutes_flat(t *testing.T) {
+	child := &Agent{agentConfig: agentConfig{Name: "Child", taskQueue: "q-child"}}
+	parent := &Agent{agentConfig: agentConfig{Name: "Parent", taskQueue: "q-parent", subAgents: []*Agent{child}}}
+	got := parent.buildSubAgentRoutes()
+	if got == nil {
+		t.Fatal("expected routes")
+	}
+	key := SubAgentToolName(child)
+	r, ok := got[key]
+	if !ok {
+		t.Fatalf("missing %q in %v", key, got)
+	}
+	if r.TaskQueue != "q-child" || r.ChildRoutes != nil {
+		t.Fatalf("route = %+v", r)
+	}
+}
+
+func TestBuildWorkflowSubAgentRoutes_nested(t *testing.T) {
+	leaf := &Agent{agentConfig: agentConfig{Name: "Leaf", taskQueue: "q-leaf"}}
+	mid := &Agent{agentConfig: agentConfig{Name: "Mid", taskQueue: "q-mid", subAgents: []*Agent{leaf}}}
+	root := &Agent{agentConfig: agentConfig{Name: "Root", taskQueue: "q-root", subAgents: []*Agent{mid}}}
+	got := root.buildSubAgentRoutes()
+	midKey := SubAgentToolName(mid)
+	rMid, ok := got[midKey]
+	if !ok {
+		t.Fatalf("missing mid %q", midKey)
+	}
+	if rMid.ChildRoutes == nil {
+		t.Fatal("expected nested child routes")
+	}
+	leafKey := SubAgentToolName(leaf)
+	rLeaf, ok := rMid.ChildRoutes[leafKey]
+	if !ok {
+		t.Fatalf("missing leaf %q", leafKey)
+	}
+	if rLeaf.TaskQueue != "q-leaf" || len(rLeaf.ChildRoutes) != 0 {
+		t.Fatalf("leaf route = %+v", rLeaf)
+	}
+}
+
+func TestBuildWorkflowSubAgentRoutes_skipsEmptyTaskQueue(t *testing.T) {
+	skip := &Agent{agentConfig: agentConfig{Name: "X", taskQueue: "  "}}
+	parent := &Agent{agentConfig: agentConfig{subAgents: []*Agent{skip}}}
+	if got := parent.buildSubAgentRoutes(); len(got) != 0 {
+		t.Fatalf("want empty, got %v", got)
+	}
+}

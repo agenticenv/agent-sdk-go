@@ -18,7 +18,6 @@ var (
 	agentEventActivityMaxAttempts int32         = 3
 
 	agentEventName              = "agent-event"
-	eventWorkflowIDPrefix       = "event-"
 	eventWorkflowCompleteSignal = "complete" // received when agent Close is called
 )
 
@@ -69,6 +68,16 @@ type AgentEvent struct {
 	WorkflowID string                 `json:"workflow_id,omitempty"` // run workflow ID; for correlation only
 }
 
+// ToolApprovalKind classifies what the user is approving (same event type for RunStream).
+type ToolApprovalKind string
+
+const (
+	// ToolApprovalKindTool is a normal tool execution (default when Kind is empty for older payloads).
+	ToolApprovalKindTool ToolApprovalKind = "tool"
+	// ToolApprovalKindDelegation is approval to run a registered sub-agent (delegate).
+	ToolApprovalKindDelegation ToolApprovalKind = "delegation"
+)
+
 // ToolApprovalEvent is the payload for AgentEventToolApproval (RunStream).
 // Use with Agent.OnApproval when the user approves or rejects; see streaming examples.
 type ToolApprovalEvent struct {
@@ -76,6 +85,12 @@ type ToolApprovalEvent struct {
 	ToolName      string         `json:"tool_name"`
 	Args          map[string]any `json:"args,omitempty"`
 	ApprovalToken string         `json:"approval_token,omitempty"`
+	// Kind is tool vs sub-agent delegation; use for UI copy.
+	Kind ToolApprovalKind `json:"kind,omitempty"`
+	// AgentName is the agent executing this workflow (main agent or specialist).
+	AgentName string `json:"agent_name,omitempty"`
+	// DelegateToName is set when Kind is delegation: display name of the target sub-agent.
+	DelegateToName string `json:"delegate_to_name,omitempty"`
 }
 
 type ToolCallStatus string

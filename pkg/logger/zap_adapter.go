@@ -43,6 +43,15 @@ func parseLevel(s string) zapcore.Level {
 	}
 }
 
+func levelEncoderForOutput(output string) zapcore.LevelEncoder {
+	// Color codes (e.g. \x1b[34m) are for TTYs; files show raw ESC sequences as garbage like "[34mINFO[0m".
+	o := strings.ToLower(strings.TrimSpace(output))
+	if o == "stdout" || o == "stderr" {
+		return zapcore.CapitalColorLevelEncoder
+	}
+	return zapcore.CapitalLevelEncoder
+}
+
 func newZapLoggerConfig(level zapcore.Level, output string) zap.Config {
 	encodeConfig := zapcore.EncoderConfig{
 		TimeKey:        "ts",
@@ -52,7 +61,7 @@ func newZapLoggerConfig(level zapcore.Level, output string) zap.Config {
 		MessageKey:     "msg",
 		StacktraceKey:  "stacktrace",
 		LineEnding:     zapcore.DefaultLineEnding,
-		EncodeLevel:    zapcore.CapitalColorLevelEncoder,
+		EncodeLevel:    levelEncoderForOutput(output),
 		EncodeTime:     zapcore.ISO8601TimeEncoder,
 		EncodeDuration: zapcore.MillisDurationEncoder,
 		EncodeCaller:   zapcore.ShortCallerEncoder,
