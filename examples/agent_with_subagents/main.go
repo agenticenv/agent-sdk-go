@@ -15,7 +15,7 @@ import (
 	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/tools/calculator"
 )
 
-// Coordinator uses the default tool approval policy (RequireAll): delegating to the
+// Main agent uses the default tool approval policy (RequireAll): delegating to the
 // math specialist requires approval (stdin y/n). The specialist uses AutoToolApprovalPolicy
 // so its own tools (e.g. calculator) do not prompt.
 func main() {
@@ -37,7 +37,7 @@ func main() {
 
 	baseQueue := cfg.TaskQueue
 	mathQueue := baseQueue + "-math-specialist"
-	coordQueue := baseQueue + "-coordinator"
+	mainQueue := baseQueue + "-main-agent"
 
 	mathReg := tools.NewRegistry()
 	mathReg.Register(calculator.New())
@@ -62,15 +62,15 @@ func main() {
 	}
 	defer mathSpecialist.Close()
 
-	coordinator, err := agent.NewAgent(
-		agent.WithName("Coordinator"),
+	mainAgent, err := agent.NewAgent(
+		agent.WithName("Main agent"),
 		agent.WithDescription("General assistant."),
 		agent.WithSystemPrompt("You are a helpful assistant."),
 		agent.WithTemporalConfig(&agent.TemporalConfig{
 			Host:      cfg.Host,
 			Port:      cfg.Port,
 			Namespace: cfg.Namespace,
-			TaskQueue: coordQueue,
+			TaskQueue: mainQueue,
 		}),
 		agent.WithLLMClient(llmClient),
 		agent.WithSubAgents(mathSpecialist),
@@ -80,9 +80,9 @@ func main() {
 		agent.WithLogger(config.NewLoggerFromLogConfig(cfg)),
 	)
 	if err != nil {
-		log.Fatalf("coordinator agent: %v", err)
+		log.Fatalf("main agent: %v", err)
 	}
-	defer coordinator.Close()
+	defer mainAgent.Close()
 
 	prompt := strings.Join(os.Args[1:], " ")
 	if prompt == "" {
@@ -90,13 +90,13 @@ func main() {
 	}
 
 	fmt.Println("user:", prompt)
-	fmt.Println("Coordinator tool calls (including delegation to the specialist) ask for approval: type y or n.")
-	resp, err := coordinator.Run(context.Background(), prompt, "")
+	fmt.Println("Main agent tool calls (including delegation to the specialist) ask for approval: type y or n.")
+	resp, err := mainAgent.Run(context.Background(), prompt, "")
 	if err != nil {
 		log.Printf("run failed: %v", err)
 		return
 	}
-	fmt.Println("coordinator:", resp.Content)
+	fmt.Println("main agent:", resp.Content)
 }
 
 func makeToolApprovalHandler(lineCh <-chan string) agent.ApprovalHandler {

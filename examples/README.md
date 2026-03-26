@@ -33,7 +33,7 @@ The examples use `TEMPORAL_HOST`, `TEMPORAL_PORT`, `TEMPORAL_NAMESPACE` from `.e
 | `agent_with_run_async` | `RunAsync` — `resultCh` + `approvalCh`; use `req.Respond` (no `WithApprovalHandler`) |
 | `agent_with_custom_tools` | Custom tools via `WithTools` — implementing `interfaces.Tool` |
 | `multiple_agents` | Multiple agents with `WithInstanceId` — sequential or concurrent |
-| `agent_with_subagents` | Coordinator + math specialist — `WithSubAgents`, separate task queues |
+| `agent_with_subagents` | Main agent + math specialist — `WithSubAgents`, separate task queues |
 | `agent_with_worker` | Agent and worker in separate processes — `DisableWorker` + `NewAgentWorker` |
 
 ## Setup
@@ -92,9 +92,9 @@ go run ./agent_with_stream_conversation
 go run ./agent_with_stream_conversation "What is 5 * 8?"
 ```
 
-### Sub-agents (coordinator + specialist)
+### Sub-agents (main agent + specialist)
 
-Two agents in one process: coordinator with a math specialist registered via `WithSubAgents`. Requires workers on **both** task queues (each `NewAgent` starts its own embedded worker). Coordinator uses default tool approval (**RequireAll**): delegating to the specialist prompts on **stdin** (`y` / `n`). Specialist uses **AutoToolApprovalPolicy** so calculator does not prompt. Same stdin pattern as [agent_with_tools_approval](#tools--approval-custom-tools-multiple-agents-worker-split).
+Two agents in one process: main agent with a math specialist registered via `WithSubAgents`. Requires workers on **both** task queues (each `NewAgent` starts its own embedded worker). Main agent uses default tool approval (**RequireAll**): delegating to the specialist prompts on **stdin** (`y` / `n`). Specialist uses **AutoToolApprovalPolicy** so calculator does not prompt. Same stdin pattern as [agent_with_tools_approval](#tools--approval-custom-tools-multiple-agents-worker-split).
 
 ```bash
 go run ./agent_with_subagents "What is 987 times 654?"

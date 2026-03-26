@@ -8,12 +8,12 @@ import (
 
 func TestToolApprovalMetadata_regularTool(t *testing.T) {
 	cfg := &agentConfig{
-		Name:  "Coordinator",
+		Name:  "Main agent",
 		tools: []interfaces.Tool{mockTool{name: "echo"}},
 	}
 	aw := &AgentWorker{config: cfg}
 	kind, agent, delegate := toolApprovalMetadata(aw, "echo")
-	if kind != ToolApprovalKindTool || agent != "Coordinator" || delegate != "" {
+	if kind != ToolApprovalKindTool || agent != "Main agent" || delegate != "" {
 		t.Fatalf("got kind=%q agent=%q delegate=%q", kind, agent, delegate)
 	}
 }
@@ -21,7 +21,7 @@ func TestToolApprovalMetadata_regularTool(t *testing.T) {
 func TestToolApprovalMetadata_delegation(t *testing.T) {
 	sub := &Agent{agentConfig: agentConfig{Name: "MathPro"}}
 	cfg := &agentConfig{
-		Name:      "Coordinator",
+		Name:      "Main agent",
 		subAgents: []*Agent{sub},
 	}
 	aw := &AgentWorker{config: cfg}
@@ -30,7 +30,7 @@ func TestToolApprovalMetadata_delegation(t *testing.T) {
 	if kind != ToolApprovalKindDelegation {
 		t.Fatalf("kind = %q, want delegation", kind)
 	}
-	if agent != "Coordinator" {
+	if agent != "Main agent" {
 		t.Fatalf("agent = %q", agent)
 	}
 	if delegate != "MathPro" {

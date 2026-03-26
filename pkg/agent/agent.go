@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -663,6 +664,16 @@ func (a *Agent) buildSubAgentRoutes() map[string]SubAgentRoute {
 	}
 	if len(out) == 0 {
 		return nil
+	}
+	if a.logger != nil {
+		names := make([]string, 0, len(out))
+		for k := range out {
+			names = append(names, k)
+		}
+		sort.Strings(names)
+		a.logger.Debug("built sub-agent routes for workflow input",
+			zap.Strings("subAgentToolNames", names),
+			zap.Int("routeCount", len(out)))
 	}
 	return out
 }

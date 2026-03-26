@@ -80,7 +80,7 @@ func (t *subAgentTool) Execute(_ context.Context, _ map[string]any) (any, error)
 func (t *subAgentTool) SubAgent() *Agent { return t.agent }
 
 // SubAgentToolName returns the tool name the parent LLM and workflow routing use for this sub-agent.
-// Single source: NewSubAgentTool, validateToolsAndSubAgentNames, and buildWorkflowSubAgentRoutes must use this (or Name() on the tool).
+// Single source: NewSubAgentTool, validateToolsAndSubAgentNames, and buildSubAgentRoutes must use this (or Name() on the tool).
 //
 // Display names are not used verbatim: runs of non-alphanumeric ASCII become a single underscore; leading/trailing
 // underscores are trimmed. An empty or all-symbol name falls back to subagent_<Agent.ID> so the name stays stable and API-safe.

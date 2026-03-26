@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/interfaces"
 	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/logger"
@@ -113,6 +114,20 @@ func TestSubAgentQueryFromArgs(t *testing.T) {
 	}
 	if got := subAgentQueryFromArgs(map[string]any{"query": "hello"}); got != "hello" {
 		t.Errorf("got %q", got)
+	}
+}
+
+func TestSubAgentChildWorkflowTimeout(t *testing.T) {
+	if got := subAgentChildWorkflowTimeout(nil); got != defaultTimeout {
+		t.Fatalf("nil worker: got %v want %v", got, defaultTimeout)
+	}
+	aw := &AgentWorker{config: &agentConfig{timeout: 2 * time.Minute}}
+	if got := subAgentChildWorkflowTimeout(aw); got != 2*time.Minute {
+		t.Fatalf("custom timeout: got %v", got)
+	}
+	aw.config.timeout = 0
+	if got := subAgentChildWorkflowTimeout(aw); got != defaultTimeout {
+		t.Fatalf("zero timeout: got %v want %v", got, defaultTimeout)
 	}
 }
 

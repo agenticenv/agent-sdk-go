@@ -22,7 +22,7 @@
 - **Streaming** — Partial content and thinking deltas via `RunStream`
 - **Tools** — Built-in tools and custom tools via `interfaces.Tool`
 - **Tool approval** — Optional approval flow before executing tools
-- **Sub-agents** — Coordinator can delegate work to specialist agents you register
+- **Sub-agents** — Main agent can delegate work to specialist agents you register
 - **Temporal-native** — Durable execution, retries, visibility
 
 ## Getting started
@@ -205,7 +205,7 @@ result, _ := a.Run(ctx, "What's the weather in Tokyo?", "")
 
 ### Sub-agents
 
-Build each specialist with **`NewAgent`** (own **`TaskQueue`**, LLM, tools, prompts). Register them on the coordinator with **`WithSubAgents`**. Use **`WithName`** and **`WithDescription`** on specialists when you want clearer labels for the coordinator’s model. Use **`WithMaxSubAgentDepth`** only if the default nesting limit is not enough. Run **`Run`**, **`RunStream`**, or **`RunAsync`** on the coordinator. With **`WithConversation`**, delegated work does not reuse the coordinator’s `conversationID`. If you use **`DisableWorker`**, pair each **`NewAgentWorker`** with the same options as the **`NewAgent`** that runs that agent.
+Build each specialist with **`NewAgent`** (own **`TaskQueue`**, LLM, tools, prompts). Register them on the main agent with **`WithSubAgents`**. Use **`WithName`** and **`WithDescription`** on specialists when you want clearer labels for the main agent’s model. Use **`WithMaxSubAgentDepth`** only if the default nesting limit is not enough. Run **`Run`**, **`RunStream`**, or **`RunAsync`** on the main agent. With **`WithConversation`**, delegated work does not reuse the main agent’s `conversationID`. If you use **`DisableWorker`**, pair each **`NewAgentWorker`** with the same options as the **`NewAgent`** that runs that agent.
 
 ```go
 mathAgent, _ := agent.NewAgent(
@@ -221,21 +221,21 @@ mathAgent, _ := agent.NewAgent(
 )
 defer mathAgent.Close()
 
-coordinator, _ := agent.NewAgent(
-    agent.WithName("Coordinator"),
+mainAgent, _ := agent.NewAgent(
+    agent.WithName("Main agent"),
     agent.WithSystemPrompt("You are a helpful assistant."),
     agent.WithTemporalConfig(&agent.TemporalConfig{
         Host: "localhost", Port: 7233, Namespace: "default",
-        TaskQueue: "my-app-coordinator",
+        TaskQueue: "my-app-main-agent",
     }),
     agent.WithLLMClient(llmClient),
     agent.WithSubAgents(mathAgent),
     agent.WithMaxSubAgentDepth(2),
     agent.WithToolApprovalPolicy(agent.AutoToolApprovalPolicy()),
 )
-defer coordinator.Close()
+defer mainAgent.Close()
 
-result, _ := coordinator.Run(ctx, "What is 144 divided by 12?", "")
+result, _ := mainAgent.Run(ctx, "What is 144 divided by 12?", "")
 ```
 
 [examples/agent_with_subagents](examples/agent_with_subagents)
@@ -252,11 +252,11 @@ By default tools require approval, including delegation to sub-agents registered
 #### Sub-agents and approval
 
 - **`ApprovalRequest`** and **`ToolApprovalEvent`** (RunStream) include **`Kind`** (`tool` or `delegation`), **`AgentName`** (agent running the workflow), and **`DelegateToName`** (target specialist when `Kind` is `delegation`). Use them to show different UI labels while keeping one approval flow.
-- **Parent (coordinator):** one policy for its whole list—e.g. `RequireAll` → approving `subagent_MathSpecialist` is the same flow as approving `calculator` on that agent. `AutoToolApprovalPolicy()` → no approval for delegation or other tools on that agent.
+- **Parent (main agent):** one policy for its whole list—e.g. `RequireAll` → approving `subagent_MathSpecialist` is the same flow as approving `calculator` on that agent. `AutoToolApprovalPolicy()` → no approval for delegation or other tools on that agent.
 - **Specialist:** separate agent, **its own** `WithToolApprovalPolicy`. Calculator calls inside the specialist use **that** policy, not the parent’s.
 
 ```text
-Coordinator: WithToolApprovalPolicy(RequireAll)     → delegate to math → user approval
+Main agent: WithToolApprovalPolicy(RequireAll)     → delegate to math → user approval
 Math agent:  WithToolApprovalPolicy(Auto)         → calculator inside specialist → no approval
 ```
 
@@ -524,7 +524,7 @@ a.Run(ctx, "What's my name?", convID) // agent uses history: "Alice"
 | **WithConversation**        | Message history store. Use `inmem` for single process; `redis` for remote workers. Pass same `conversationID` to `Run` and `RunStream` for a session. See [Conversation](#conversation-message-history). |
 | **WithConversationSize**    | Max messages to fetch for LLM context (default 20). Only applies when `WithConversation` is set.                                                                                                         |
 | **WithEnableRemoteWorkers** | Set `true` when using `DisableWorker` with approval or streaming.                                                                                                                                        |
-| **WithSubAgents**           | Attach specialist agents the coordinator can delegate to. Each needs its own task queue and worker. See [Sub-agents](#sub-agents).                                                                       |
+| **WithSubAgents**           | Attach specialist agents the main agent can delegate to. Each needs its own task queue and worker. See [Sub-agents](#sub-agents).                                                                       |
 | **WithMaxSubAgentDepth**    | Maximum delegation hops from this agent (default 2). See [Sub-agents](#sub-agents).                                                                                                                       |
 | **WithMaxIterations**       | Max LLM rounds (default 5).                                                                                                                                                                              |
 | **WithStream**              | Enable `RunStream` partial content streaming.                                                                                                                                                            |

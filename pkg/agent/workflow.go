@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/interfaces"
+	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/temporal"
@@ -109,6 +110,11 @@ type AgentToolApprovalInput struct {
 func (aw *AgentWorker) AgentWorkflow(ctx workflow.Context, input AgentWorkflowInput) (*AgentResponse, error) {
 	logger := workflow.GetLogger(ctx)
 	logger.Info("agent workflow started")
+	if n := len(input.SubAgentRoutes); n > 0 {
+		logger.Debug("agent workflow sub-agent routes snapshot",
+			zap.Int("routeCount", n),
+			zap.Int("subAgentDepth", input.SubAgentDepth))
+	}
 	eventWorkflowID := input.EventWorkflowID
 	agentWorkflowID := workflow.GetInfo(ctx).WorkflowExecution.ID
 
@@ -305,8 +311,18 @@ func (aw *AgentWorker) AgentWorkflow(ctx workflow.Context, input AgentWorkflowIn
 			var content string
 			if approvalStatus == ApprovalStatusApproved {
 				if route, ok := input.SubAgentRoutes[tc.ToolName]; ok {
+					logger.Info("executing tool call",
+						zap.String("executionKind", "sub_agent"),
+						zap.String("tool", tc.ToolName),
+						zap.String("toolCallID", tc.ToolCallID),
+						zap.String("childTaskQueue", strings.TrimSpace(route.TaskQueue)),
+						zap.Int("subAgentDepth", input.SubAgentDepth))
 					content = aw.delegateToSubAgent(ctx, input, tc, route)
 				} else {
+					logger.Info("executing tool call",
+						zap.String("executionKind", "tool"),
+						zap.String("tool", tc.ToolName),
+						zap.String("toolCallID", tc.ToolCallID))
 					var result string
 					execInput := AgentToolExecuteInput{
 						ToolName:       tc.ToolName,
@@ -575,6 +591,12 @@ func (aw *AgentWorker) AgentToolApprovalActivity(ctx context.Context, input Agen
 	taskTokenB64 := base64.StdEncoding.EncodeToString(info.TaskToken)
 
 	kind, agentName, delegateToName := toolApprovalMetadata(aw, input.ToolName)
+	if kind == ToolApprovalKindDelegation {
+		logger.Debug("tool approval targets sub-agent delegation",
+			zap.String("tool", input.ToolName),
+			zap.String("delegateTo", delegateToName),
+			zap.String("mainAgent", agentName))
+	}
 	ev := &AgentEvent{
 		Type: AgentEventToolApproval,
 		Approval: &ToolApprovalEvent{
@@ -710,7 +732,11 @@ func (aw *AgentWorker) AgentToolExecuteActivity(ctx context.Context, input Agent
 }
 
 func (aw *AgentWorker) delegateToSubAgent(ctx workflow.Context, input AgentWorkflowInput, tc ToolCallRequest, route SubAgentRoute) string {
+	logger := workflow.GetLogger(ctx)
 	if strings.TrimSpace(route.TaskQueue) == "" {
+		logger.Warn("sub-agent delegation skipped: empty child task queue",
+			zap.String("tool", tc.ToolName),
+			zap.String("toolCallID", tc.ToolCallID))
 		return "Sub-agent delegation failed: sub-agent task queue is not configured."
 	}
 	maxDepth := aw.config.maxSubAgentDepth
@@ -718,10 +744,16 @@ func (aw *AgentWorker) delegateToSubAgent(ctx workflow.Context, input AgentWorkf
 		maxDepth = defaultMaxSubAgentDepth
 	}
 	if input.SubAgentDepth >= maxDepth {
+		logger.Warn("sub-agent delegation refused: max nesting depth",
+			zap.Int("subAgentDepth", input.SubAgentDepth),
+			zap.Int("maxDepth", maxDepth),
+			zap.String("tool", tc.ToolName),
+			zap.String("toolCallID", tc.ToolCallID))
 		return fmt.Sprintf("Sub-agent delegation refused: maximum nesting depth (%d) reached for this agent.", maxDepth)
 	}
+	query := subAgentQueryFromArgs(tc.Args)
 	childInput := AgentWorkflowInput{
-		UserPrompt:       subAgentQueryFromArgs(tc.Args),
+		UserPrompt:       query,
 		EventWorkflowID:  input.EventWorkflowID,
 		StreamingEnabled: input.StreamingEnabled,
 		ConversationID:   "",
@@ -733,18 +765,41 @@ func (aw *AgentWorker) delegateToSubAgent(ctx workflow.Context, input AgentWorkf
 	if err := workflow.SideEffect(ctx, func(workflow.Context) interface{} {
 		return uuid.New().String()
 	}).Get(&childSuffix); err != nil {
+		logger.Warn("sub-agent child workflow id generation failed", zap.Error(err))
 		return "Sub-agent workflow failed: " + err.Error()
 	}
 	parentID := workflow.GetInfo(ctx).WorkflowExecution.ID
 	childWfID := fmt.Sprintf("%s-sub-%s-%s", parentID, tc.ToolCallID, childSuffix)
+	childTO := subAgentChildWorkflowTimeout(aw)
+	logger.Debug("starting sub-agent child workflow",
+		zap.String("childWorkflowID", childWfID),
+		zap.String("childTaskQueue", strings.TrimSpace(route.TaskQueue)),
+		zap.String("tool", tc.ToolName),
+		zap.String("toolCallID", tc.ToolCallID),
+		zap.Int("parentSubAgentDepth", input.SubAgentDepth),
+		zap.Int("childSubAgentDepth", childInput.SubAgentDepth),
+		zap.Int("nestedChildRouteCount", len(route.ChildRoutes)),
+		zap.Duration("workflowExecutionTimeout", childTO),
+		zap.Int("delegatedQueryLen", len(query)))
 	childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
-		WorkflowID: childWfID,
-		TaskQueue:  route.TaskQueue,
+		WorkflowID:               childWfID,
+		TaskQueue:                route.TaskQueue,
+		WorkflowExecutionTimeout: childTO,
+		ParentClosePolicy:        enumspb.PARENT_CLOSE_POLICY_REQUEST_CANCEL,
+		WaitForCancellation:      true,
 	})
 	var childResp AgentResponse
 	if err := workflow.ExecuteChildWorkflow(childCtx, aw.AgentWorkflow, childInput).Get(childCtx, &childResp); err != nil {
+		logger.Warn("sub-agent child workflow failed",
+			zap.String("childWorkflowID", childWfID),
+			zap.String("tool", tc.ToolName),
+			zap.Error(err))
 		return "Sub-agent workflow failed: " + err.Error()
 	}
+	logger.Debug("sub-agent child workflow completed",
+		zap.String("childWorkflowID", childWfID),
+		zap.String("tool", tc.ToolName),
+		zap.Int("responseContentLen", len(childResp.Content)))
 	return childResp.Content
 }
 
@@ -754,6 +809,16 @@ func subAgentQueryFromArgs(args map[string]any) string {
 	}
 	q, _ := args[subAgentToolParamQuery].(string)
 	return q
+}
+
+// subAgentChildWorkflowTimeout caps how long the main agent waits on a delegated sub-agent run.
+// Uses the main agent worker's agent timeout (same package as delegateToSubAgent); sub-agent workers may define
+// their own limits separately, but this bounds the child execution from the main agent's perspective.
+func subAgentChildWorkflowTimeout(aw *AgentWorker) time.Duration {
+	if aw != nil && aw.config != nil && aw.config.timeout > 0 {
+		return aw.config.timeout
+	}
+	return defaultTimeout
 }
 
 func retryPolicy(maxAttempts int32) *temporal.RetryPolicy {

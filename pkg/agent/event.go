@@ -87,7 +87,7 @@ type ToolApprovalEvent struct {
 	ApprovalToken string         `json:"approval_token,omitempty"`
 	// Kind is tool vs sub-agent delegation; use for UI copy.
 	Kind ToolApprovalKind `json:"kind,omitempty"`
-	// AgentName is the agent executing this workflow (coordinator or specialist).
+	// AgentName is the agent executing this workflow (main agent or specialist).
 	AgentName string `json:"agent_name,omitempty"`
 	// DelegateToName is set when Kind is delegation: display name of the target sub-agent.
 	DelegateToName string `json:"delegate_to_name,omitempty"`
