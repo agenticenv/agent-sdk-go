@@ -8,13 +8,13 @@
 
 Temporal-native AI agent SDK for Go to build durable, long-running agents on [Temporal](https://temporal.io)
 
-> Unlike typical agent SDKs, this runs agents as durable workflows—so they survive failures, restarts, and long-running execution.
-> Enables safe execution of real-world actions with retries, persistence, and approval workflows.
+> - Unlike typical agent SDKs, this runs agents as durable workflows—so they survive failures, restarts, and long-running execution.
+> - Enables safe execution of real-world actions with retries, persistence, and approval workflows.
 
 ---
 
-> **Note:** This project is not affiliated with Temporal Technologies. It is a community SDK for building AI agents on the Temporal platform.
-> **Stable:** v1.0.0 — Follows [semantic versioning](https://semver.org/). Backward compatibility is maintained within major versions.
+> - **Note:** This project is not affiliated with Temporal Technologies. It is a community SDK for building AI agents on the Temporal platform.
+> - **Stable:** v1.0.0 — Follows [semantic versioning](https://semver.org/). Backward compatibility is maintained within major versions.
 
 ## What is this?
 
