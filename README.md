@@ -6,15 +6,27 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/vvsynapse/temporal-agent-sdk-go)](https://goreportcard.com/report/github.com/vvsynapse/temporal-agent-sdk-go)
 [![License](https://img.shields.io/github/license/vvsynapse/temporal-agent-sdk-go?label=License)](LICENSE)
 
-[Temporal](https://temporal.io)-native Go AI agent SDK for building agents.
+Temporal-native AI agent SDK for Go to build durable, long-running agents on [Temporal](https://temporal.io)
+
+> Unlike typical agent SDKs, this runs agents as durable workflows—so they survive failures, restarts, and long-running execution.
+> Enables safe execution of real-world actions with retries, persistence, and approval workflows.
+
+---
 
 > **Note:** This project is not affiliated with Temporal Technologies. It is a community SDK for building AI agents on the Temporal platform.
-
 > **Stable:** v1.0.0 — Follows [semantic versioning](https://semver.org/). Backward compatibility is maintained within major versions.
 
 ## What is this?
 
-**temporal-agent-sdk-go** lets you build AI agents that run on Temporal. The agent uses an LLM (OpenAI, Anthropic, or Gemini) to reason and optionally call tools. Temporal handles orchestration—giving you durability, retries, and visibility.
+**temporal-agent-sdk-go** is a Temporal-native AI agent SDK for Go that lets you build durable, fault-tolerant, long-running agents. It integrates with LLMs (OpenAI, Anthropic, Gemini) for reasoning and tool use, while [Temporal](https://temporal.io) handles orchestration—providing retries, state persistence, and execution visibility. Agents can reliably run across failures, resume from state, and support human-in-the-loop approval workflows.
+
+## Why Temporal for Agents?
+
+- Reliable tool execution (retries, idempotency, and failure recovery)
+- Human-in-the-loop workflows (pause for approval before tool execution or task delegation to sub-agents)
+- Agent delegation and orchestration (coordinate multi-step and multi-agent workflows)
+- Durable long-running agents (run for minutes to days without losing state)
+- Full execution visibility (trace, debug, and replay agent behavior)
 
 ## Capabilities
 
@@ -27,7 +39,7 @@
 
 ## Getting started
 
-Prerequisites: [Temporal](https://docs.temporal.io/self-hosted-guide) running, Go 1.21+.
+Prerequisites: [Temporal](https://docs.temporal.io/self-hosted-guide) running, Go 1.21+, and an API key for your chosen LLM provider.
 
 ### Create an agent and run
 
@@ -122,13 +134,11 @@ llmClient, err := gemini.NewClient(
 
 ### Supported LLMs
 
-
 | Provider      | Package             | Notes                     |
 | ------------- | ------------------- | ------------------------- |
 | **OpenAI**    | `pkg/llm/openai`    | GPT-4o, GPT-4o-mini, etc. |
 | **Anthropic** | `pkg/llm/anthropic` | Claude models             |
 | **Gemini**    | `pkg/llm/gemini`    | gemini-2.5-flash, etc.    |
-
 
 You can add support for other LLM providers by implementing the `interfaces.LLMClient` interface in `[pkg/interfaces/llm.go](pkg/interfaces/llm.go)`. The interface requires:
 
@@ -171,7 +181,7 @@ When streaming is enabled, the agent emits `ContentDelta` (partial tokens) and t
 
 **Recommended pattern:** Track whether you already displayed content via `ContentDelta` or `Content`, and skip printing `Complete`'s content when so. Use `ev.Content` from `AgentEventComplete` as the canonical final result for programmatic use (e.g. logging, storage).
 
-```
+```text
 ContentDelta → "The result is 40."   (streamed, shown to user)
 ContentDelta → ...
 Complete     → "The result is 40."   (don't re-print; use ev.Content in code)
@@ -205,7 +215,9 @@ result, _ := a.Run(ctx, "What's the weather in Tokyo?", "")
 
 ### Sub-agents
 
-Build each specialist with **`NewAgent`** (own **`TaskQueue`**, LLM, tools, prompts). Register them on the main agent with **`WithSubAgents`**. Use **`WithName`** and **`WithDescription`** on specialists when you want clearer labels for the main agent’s model. Use **`WithMaxSubAgentDepth`** only if the default nesting limit is not enough. Run **`Run`**, **`RunStream`**, or **`RunAsync`** on the main agent. With **`WithConversation`**, delegated work does not reuse the main agent’s `conversationID`. If you use **`DisableWorker`**, pair each **`NewAgentWorker`** with the same options as the **`NewAgent`** that runs that agent.
+Build each specialist with **`NewAgent`** (own **`TaskQueue`**, LLM, tools, prompts). Register them on the main agent with **`WithSubAgents`**. Use **`WithName`** and **`WithDescription`** on specialists when you want clearer labels for the main agent’s model. Use **`WithMaxSubAgentDepth`** only if the default nesting limit is not enough. Run **`Run`**, **`RunStream`**, or **`RunAsync`** on the main agent. Sub-agents always run without a conversation ID—they do not inherit the main agent session history. If you use **`DisableWorker`**, pair each **`NewAgentWorker`** with the same options as the **`NewAgent`** that runs that agent.
+
+For streaming scenarios, the main agent is the single subscription point. When using `RunStream`, events from all delegated sub-agents fan in to the same main-agent stream, including sub-agent tool approvals and tool call/result events.
 
 ```go
 mathAgent, _ := agent.NewAgent(
@@ -240,6 +252,8 @@ result, _ := mainAgent.Run(ctx, "What is 144 divided by 12?", "")
 
 [examples/agent_with_subagents](examples/agent_with_subagents)
 
+**RunStream event fan-in:** Subscribe once on the main agent and you receive events from the whole delegation tree, including sub-agent tool calls and approvals. Use `ev.Approval.AgentName` to identify which agent emitted an approval request.
+
 ### Tool approval
 
 By default tools require approval, including delegation to sub-agents registered with **`WithSubAgents`**—they follow the same **`WithToolApprovalPolicy`** as your other tools. Use `WithApprovalHandler` on the agent (required for Run when any tool needs approval). See [examples/agent_with_subagents](examples/agent_with_subagents).
@@ -251,13 +265,14 @@ By default tools require approval, including delegation to sub-agents registered
 
 #### Sub-agents and approval
 
-- **`ApprovalRequest`** and **`ToolApprovalEvent`** (RunStream) include **`Kind`** (`tool` or `delegation`), **`AgentName`** (agent running the workflow), and **`DelegateToName`** (target specialist when `Kind` is `delegation`). Use them to show different UI labels while keeping one approval flow.
+- **`ApprovalRequest`** and **`ToolApprovalEvent`** (RunStream) include **`Kind`** (`tool` or `delegation`), **`AgentName`** (the agent that requested approval: main agent or sub-agent), and **`DelegateToName`** (target specialist when `Kind` is `delegation`). Use them to show different UI labels while keeping one approval flow.
 - **Parent (main agent):** one policy for its whole list—e.g. `RequireAll` → approving `subagent_MathSpecialist` is the same flow as approving `calculator` on that agent. `AutoToolApprovalPolicy()` → no approval for delegation or other tools on that agent.
 - **Specialist:** separate agent, **its own** `WithToolApprovalPolicy`. Calculator calls inside the specialist use **that** policy, not the parent’s.
 
 ```text
 Main agent: WithToolApprovalPolicy(RequireAll)     → delegate to math → user approval
 Math agent:  WithToolApprovalPolicy(Auto)         → calculator inside specialist → no approval
+Math agent:  WithToolApprovalPolicy(RequireAll)   → calculator inside specialist → approval (fan-in on main stream)
 ```
 
 Each `ApprovalRequest` includes `Respond`; call `req.Respond(Approved|Rejected)` when ready (same as RunAsync):
@@ -425,7 +440,7 @@ a, _ := agent.NewAgent(
     agent.WithLLMClient(...),
     agent.DisableWorker(),
 )
-result, _ := a.Run(ctx, "Hello")
+result, _ := a.Run(ctx, "Hello", "")
 ```
 
 [examples/agent_with_worker](examples/agent_with_worker)
@@ -438,12 +453,10 @@ Pass `agent.WithConversation(conv)` to persist message history for multi-turn co
 
 Choose implementation by deployment:
 
-
 | Deployment                                                        | Use                                                       |
 | ----------------------------------------------------------------- | --------------------------------------------------------- |
 | **Single process** (agent and worker in same process)             | `inmem.NewInMemoryConversation`                           |
 | **Remote workers** (`DisableWorker` or `WithEnableRemoteWorkers`) | `redis.NewRedisConversation` or another distributed store |
-
 
 To add a new conversation store (e.g., Postgres, MongoDB), implement the `interfaces.Conversation` interface in `[pkg/interfaces/conversation.go](pkg/interfaces/conversation.go)`. The interface requires `AddMessage`, `ListMessages`, `Clear`, and `IsDistributed`. See `pkg/conversation/inmem` and `pkg/conversation/redis` for reference.
 
@@ -514,23 +527,19 @@ a.Run(ctx, "What's my name?", convID) // agent uses history: "Alice"
 
 ## Configuration
 
-
-| Option                      | Description                                                                                                                                                                                              |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **WithTemporalConfig**      | Temporal connection (Host, Port, Namespace, TaskQueue). Use for simple setups. See [Temporal connection](#temporal-connection).                                                                          |
-| **WithTemporalClient**      | Pre-configured Temporal client. Use for TLS, API key auth, Temporal Cloud. Requires `WithTaskQueue`. Agent does not close the client.                                                                    |
-| **WithTaskQueue**           | Task queue name. Required when using `WithTemporalClient`. Ignored when using `WithTemporalConfig`.                                                                                                      |
-| **WithResponseFormat**      | LLM response format. Omit for text-only. Use `&interfaces.ResponseFormat{Type, Name, Schema}` for JSON with schema. See [Response format](#response-format).                                             |
-| **WithConversation**        | Message history store. Use `inmem` for single process; `redis` for remote workers. Pass same `conversationID` to `Run` and `RunStream` for a session. See [Conversation](#conversation-message-history). |
-| **WithConversationSize**    | Max messages to fetch for LLM context (default 20). Only applies when `WithConversation` is set.                                                                                                         |
-| **WithEnableRemoteWorkers** | Set `true` when using `DisableWorker` with approval or streaming.                                                                                                                                        |
-| **WithSubAgents**           | Attach specialist agents the main agent can delegate to. Each needs its own task queue and worker. See [Sub-agents](#sub-agents).                                                                       |
-| **WithMaxSubAgentDepth**    | Maximum delegation hops from this agent (default 2). See [Sub-agents](#sub-agents).                                                                                                                       |
-| **WithMaxIterations**       | Max LLM rounds (default 5).                                                                                                                                                                              |
-| **WithStream**              | Enable `RunStream` partial content streaming.                                                                                                                                                            |
-| **WithLLMSampling**         | Per-agent sampling (`Temperature`, `MaxTokens`, `TopP`, `TopK`). Pass `&agent.LLMSampling{...}`; nil fields = provider default. Extensible for more params.                                              |
-| **WithApprovalTimeout**     | Max wait per tool approval; must be less than agent timeout. Defaults to timeout−30s when tools require approval. Capped at 31 days.                                                                     |
-
+- **`WithTemporalConfig`**: Temporal connection (Host, Port, Namespace, TaskQueue). Use for simple setups. See [Temporal connection](#temporal-connection).
+- **`WithTemporalClient`**: Pre-configured Temporal client. Use for TLS, API key auth, Temporal Cloud. Requires `WithTaskQueue`. Agent does not close the client.
+- **`WithTaskQueue`**: Task queue name. Required when using `WithTemporalClient`. Ignored when using `WithTemporalConfig`.
+- **`WithResponseFormat`**: LLM response format. Omit for text-only. Use `&interfaces.ResponseFormat{Type, Name, Schema}` for JSON with schema. See [Response format](#response-format).
+- **`WithConversation`**: Message history store. Use `inmem` for single process; `redis` for remote workers. Pass same `conversationID` to `Run` and `RunStream` for a session. See [Conversation](#conversation-message-history).
+- **`WithConversationSize`**: Max messages to fetch for LLM context (default 20). Only applies when `WithConversation` is set.
+- **`WithEnableRemoteWorkers`**: Set `true` when using `DisableWorker` with approval or streaming.
+- **`WithSubAgents`**: Attach specialist agents the main agent can delegate to. Each needs its own task queue and worker. See [Sub-agents](#sub-agents).
+- **`WithMaxSubAgentDepth`**: Maximum delegation hops from this agent (default 2). See [Sub-agents](#sub-agents).
+- **`WithMaxIterations`**: Max LLM rounds (default 5).
+- **`WithStream`**: Enable `RunStream` partial content streaming.
+- **`WithLLMSampling`**: Per-agent sampling (`Temperature`, `MaxTokens`, `TopP`, `TopK`). Pass `&agent.LLMSampling{...}`; nil fields = provider default. Extensible for more params.
+- **`WithApprovalTimeout`**: Max wait per tool approval; must be less than agent timeout. Defaults to timeout−30s when tools require approval. Capped at 31 days.
 
 **Env config:** [examples/README.md](examples/README.md) for examples; [cmd/README.md](cmd/README.md) for CLI.
 
@@ -539,6 +548,7 @@ a.Run(ctx, "What's my name?", convID) // agent uses history: "Alice"
 ## Development
 
 Contributors: see **[CONTRIBUTING.md](CONTRIBUTING.md)** for prerequisites (Go version, Temporal setup), development workflow, and guidelines.
+Project policies: **[SECURITY.md](SECURITY.md)** for vulnerability reporting and **[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)** for community standards.
 
 Quick commands: `make test` | `make lint` | `make tidy` | `make test-coverage`
 
@@ -572,3 +582,25 @@ Or run with a custom config path: `go run ./cmd -config /path/to/config.yaml`.
 - **Env overrides** — `AGENT_LLM_APIKEY`, `AGENT_TEMPORAL_HOST`, etc. override file values
 
 See **[cmd/README.md](cmd/README.md)** for CLI details and env vars.
+
+## Production Readiness Checklist
+
+Before using in production, ensure:
+
+- [ ] Configure retries and timeout policies for workflows
+- [ ] Human-in-the-loop approval for critical tool execution or agent delegation
+- [ ] Validate LLM inputs/outputs and sanitize outputs
+- [ ] Implement error handling and fallback logic
+- [ ] Enable observability (logs, metrics, tracing via Temporal)
+- [ ] Secure API keys and external integrations
+- [ ] Test workflow replay and recovery
+- [ ] Monitor long-running workflows
+- [ ] Set `WithMaxSubAgentDepth` to prevent unbounded delegation chains
+- [ ] Define sub-agent approval policy explicitly (`RequireAll`, `Auto`, or `Allowlist`) based on risk
+- [ ] Verify sub-agent event and approval fan-in behavior in `RunStream` during integration tests
+
+---
+
+## Disclaimer
+
+This project is provided "as is" under the MIT License. When building AI agents that execute real-world actions, ensure appropriate safeguards, validation, and human-in-the-loop approval workflows are in place. You are responsible for compliance, access control, and operational safety in your deployment. For security issues, follow **[SECURITY.md](SECURITY.md)**.
