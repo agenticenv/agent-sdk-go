@@ -48,9 +48,13 @@ type SubAgentRoute struct {
 // ConversationID is set when conversation is used; workflow fetches messages and writes assistant/tool via activities.
 // SubAgentDepth is 0 for a top-level user run; each child workflow increments it (runtime cap vs maxSubAgentDepth).
 // SubAgentRoutes maps sub-agent tool name -> route; built from WithSubAgents when the run starts.
+// LocalChannelName is the in-process pub/sub channel name used for in-memory event fan-in across the
+// delegation tree. Set once at the top level (agent_event_<main-workflow-id>) and propagated unchanged
+// to all sub-agents. Contrast with EventWorkflowID which is used for out-of-process (remote) routing.
 type AgentWorkflowInput struct {
 	UserPrompt       string                   `json:"user_prompt,omitempty"`
 	EventWorkflowID  string                   `json:"event_workflow_id,omitempty"`
+	LocalChannelName string                   `json:"local_channel_name,omitempty"`
 	StreamingEnabled bool                     `json:"streaming_enabled,omitempty"`
 	ConversationID   string                   `json:"conversation_id,omitempty"`
 	EventTypes       []AgentEventType         `json:"event_types,omitempty"`
@@ -68,10 +72,11 @@ type AgentLLMInput struct {
 
 // AgentLLMStreamInput is the input to AgentLLMStreamActivity.
 type AgentLLMStreamInput struct {
-	ConversationID  string               `json:"conversation_id,omitempty"`
-	Messages        []interfaces.Message `json:"messages,omitempty"`
-	EventWorkflowID string               `json:"event_workflow_id,omitempty"`
-	SkipTools       bool                 `json:"skip_tools,omitempty"`
+	ConversationID   string               `json:"conversation_id,omitempty"`
+	Messages         []interfaces.Message `json:"messages,omitempty"`
+	EventWorkflowID  string               `json:"event_workflow_id,omitempty"`
+	LocalChannelName string               `json:"local_channel_name,omitempty"`
+	SkipTools        bool                 `json:"skip_tools,omitempty"`
 }
 
 // AgentLLMResult is the return value of AgentLLMActivity. Workflow uses it to decide: return content or execute tools.
@@ -98,10 +103,11 @@ type AgentToolExecuteInput struct {
 }
 
 type AgentToolApprovalInput struct {
-	ToolName        string         `json:"tool_name"`
-	Args            map[string]any `json:"args"`
-	ToolCallID      string         `json:"tool_call_id"`
-	EventWorkflowID string         `json:"event_workflow_id"`
+	ToolName         string         `json:"tool_name"`
+	Args             map[string]any `json:"args"`
+	ToolCallID       string         `json:"tool_call_id"`
+	EventWorkflowID  string         `json:"event_workflow_id"`
+	LocalChannelName string         `json:"local_channel_name,omitempty"`
 }
 
 // AgentWorkflow runs the agent loop: LLM → tool calls → approval/execute → feed results back to LLM → repeat.
@@ -116,7 +122,7 @@ func (aw *AgentWorker) AgentWorkflow(ctx workflow.Context, input AgentWorkflowIn
 			zap.Int("subAgentDepth", input.SubAgentDepth))
 	}
 	eventWorkflowID := input.EventWorkflowID
-	agentWorkflowID := workflow.GetInfo(ctx).WorkflowExecution.ID
+	agentName := strings.TrimSpace(aw.config.Name)
 
 	maxIter := aw.config.maxIterations
 	if maxIter <= 0 {
@@ -194,7 +200,11 @@ func (aw *AgentWorker) AgentWorkflow(ctx workflow.Context, input AgentWorkflowIn
 		if ev.Timestamp.IsZero() {
 			ev.Timestamp = workflow.Now(ctx)
 		}
-		upd := &AgentEventUpdate{AgentWorkflowID: agentWorkflowID, Event: ev}
+		upd := &AgentEventUpdate{
+			SourceAgentName:  agentName,
+			LocalChannelName: input.LocalChannelName,
+			Event:            ev,
+		}
 		// SendAgentEventUpdateActivity routes via event workflow when eventWorkflowID is set, else in-memory agentChannel
 		_ = workflow.ExecuteActivity(sendEventCtx, aw.SendAgentEventUpdateActivity, eventWorkflowID, upd).Get(ctx, nil)
 	}
@@ -213,9 +223,10 @@ func (aw *AgentWorker) AgentWorkflow(ctx workflow.Context, input AgentWorkflowIn
 		}
 
 		streamInput := AgentLLMStreamInput{
-			ConversationID:  input.ConversationID,
-			Messages:        messages,
-			EventWorkflowID: eventWorkflowID,
+			ConversationID:   input.ConversationID,
+			Messages:         messages,
+			EventWorkflowID:  eventWorkflowID,
+			LocalChannelName: input.LocalChannelName,
 		}
 
 		if useStreaming {
@@ -297,10 +308,11 @@ func (aw *AgentWorker) AgentWorkflow(ctx workflow.Context, input AgentWorkflowIn
 				logger.Info("approval required for tool", zap.String("toolName", tc.ToolName), zap.Int("argCount", len(tc.Args)))
 				var status ApprovalStatus
 				approvalInput := AgentToolApprovalInput{
-					ToolCallID:      tc.ToolCallID,
-					ToolName:        tc.ToolName,
-					Args:            tc.Args,
-					EventWorkflowID: eventWorkflowID,
+					ToolCallID:       tc.ToolCallID,
+					ToolName:         tc.ToolName,
+					Args:             tc.Args,
+					EventWorkflowID:  eventWorkflowID,
+					LocalChannelName: input.LocalChannelName,
 				}
 				if err := workflow.ExecuteActivity(approvalCtx, aw.AgentToolApprovalActivity, approvalInput).Get(approvalCtx, &status); err != nil {
 					return nil, err
@@ -389,6 +401,7 @@ func (aw *AgentWorker) AgentLLMStreamActivity(ctx context.Context, input AgentLL
 	logger := activity.GetLogger(ctx)
 	info := activity.GetInfo(ctx)
 	agentWorkflowID := info.WorkflowExecution.ID
+	agentName := strings.TrimSpace(aw.config.Name)
 
 	messages := input.Messages
 	if input.ConversationID != "" {
@@ -427,7 +440,11 @@ func (aw *AgentWorker) AgentLLMStreamActivity(ctx context.Context, input AgentLL
 		if ev == nil {
 			return
 		}
-		upd := &AgentEventUpdate{AgentWorkflowID: agentWorkflowID, Event: ev}
+		upd := &AgentEventUpdate{
+			SourceAgentName:  agentName,
+			LocalChannelName: input.LocalChannelName,
+			Event:            ev,
+		}
 		if input.EventWorkflowID != "" {
 			_, _ = aw.config.temporalClient.UpdateWorkflow(ctx, client.UpdateWorkflowOptions{
 				WorkflowID:   input.EventWorkflowID,
@@ -437,8 +454,7 @@ func (aw *AgentWorker) AgentLLMStreamActivity(ctx context.Context, input AgentLL
 			})
 		} else if aw.agentChannel != nil {
 			data, _ := json.Marshal(ev)
-			channel := agentEventChannelPrefix + agentWorkflowID
-			_ = aw.agentChannel.Publish(ctx, channel, data)
+			_ = aw.agentChannel.Publish(ctx, input.LocalChannelName, data)
 		}
 	}
 
@@ -587,7 +603,6 @@ func (aw *AgentWorker) AgentToolApprovalActivity(ctx context.Context, input Agen
 	logger.Debug("agent tool approval activity started", zap.String("tool", input.ToolName), zap.Bool("viaEventWorkflow", input.EventWorkflowID != ""))
 
 	info := activity.GetInfo(ctx)
-	workflowID := info.WorkflowExecution.ID
 	taskTokenB64 := base64.StdEncoding.EncodeToString(info.TaskToken)
 
 	kind, agentName, delegateToName := toolApprovalMetadata(aw, input.ToolName)
@@ -613,7 +628,11 @@ func (aw *AgentWorker) AgentToolApprovalActivity(ctx context.Context, input Agen
 
 	// Route via event workflow when eventWorkflowID is set (Agent sets this when enableRemoteWorkers is true)
 	if input.EventWorkflowID != "" {
-		upd := &AgentEventUpdate{AgentWorkflowID: workflowID, Event: ev}
+		upd := &AgentEventUpdate{
+			SourceAgentName:  agentName,
+			LocalChannelName: input.LocalChannelName,
+			Event:            ev,
+		}
 		_, err := aw.config.temporalClient.UpdateWorkflow(ctx, client.UpdateWorkflowOptions{
 			WorkflowID:   input.EventWorkflowID,
 			UpdateName:   agentEventName,
@@ -632,11 +651,10 @@ func (aw *AgentWorker) AgentToolApprovalActivity(ctx context.Context, input Agen
 		if err != nil {
 			return ApprovalStatusNone, err
 		}
-		channel := agentEventChannelPrefix + workflowID
-		if err := aw.agentChannel.Publish(ctx, channel, data); err != nil {
+		if err := aw.agentChannel.Publish(ctx, input.LocalChannelName, data); err != nil {
 			return ApprovalStatusNone, err
 		}
-		logger.Debug("approval event published to event channel", zap.String("channel", channel), zap.String("tool", input.ToolName))
+		logger.Debug("approval event published to event channel", zap.String("channel", input.LocalChannelName), zap.String("tool", input.ToolName))
 	}
 	logger.Debug("approval request sent, waiting for completion", zap.String("tool", input.ToolName))
 	return ApprovalStatusPending, activity.ErrResultPending
@@ -652,7 +670,7 @@ func (aw *AgentWorker) SendAgentEventUpdateActivity(ctx context.Context, eventWo
 	}
 
 	if upd.Event != nil {
-		logger.Debug("send agent event update activity", zap.String("eventType", string(upd.Event.Type)), zap.String("agentWorkflowID", upd.AgentWorkflowID))
+		logger.Debug("send agent event update activity", zap.String("eventType", string(upd.Event.Type)), zap.String("sourceAgent", upd.SourceAgentName))
 	}
 
 	// Route via event workflow when eventWorkflowID is set (Agent sets this when enableRemoteWorkers is true)
@@ -666,7 +684,7 @@ func (aw *AgentWorker) SendAgentEventUpdateActivity(ctx context.Context, eventWo
 		if err != nil {
 			return err
 		}
-		logger.Debug("agent event sent to event workflow", zap.String("eventWorkflowID", eventWorkflowID), zap.String("agentWorkflowID", upd.AgentWorkflowID))
+		logger.Debug("agent event sent to event workflow", zap.String("eventWorkflowID", eventWorkflowID), zap.String("sourceAgent", upd.SourceAgentName))
 	} else {
 		if aw.agentChannel == nil {
 			return fmt.Errorf("agentChannel required when eventWorkflowID is empty")
@@ -675,13 +693,12 @@ func (aw *AgentWorker) SendAgentEventUpdateActivity(ctx context.Context, eventWo
 		if err != nil {
 			return err
 		}
-		channel := agentEventChannelPrefix + upd.AgentWorkflowID
-		if err := aw.agentChannel.Publish(ctx, channel, data); err != nil {
+		if err := aw.agentChannel.Publish(ctx, upd.LocalChannelName, data); err != nil {
 			return err
 		}
-		logger.Debug("agent event sent to channel", zap.String("channel", channel), zap.String("agentWorkflowID", upd.AgentWorkflowID))
+		logger.Debug("agent event sent to channel", zap.String("channel", upd.LocalChannelName), zap.String("sourceAgent", upd.SourceAgentName))
 	}
-	logger.Debug("agent event update activity completed", zap.String("agentWorkflowID", upd.AgentWorkflowID))
+	logger.Debug("agent event update activity completed", zap.String("sourceAgent", upd.SourceAgentName))
 	return nil
 }
 
@@ -751,16 +768,19 @@ func (aw *AgentWorker) delegateToSubAgent(ctx workflow.Context, input AgentWorkf
 			zap.String("toolCallID", tc.ToolCallID))
 		return fmt.Sprintf("Sub-agent delegation refused: maximum nesting depth (%d) reached for this agent.", maxDepth)
 	}
+
 	query := subAgentQueryFromArgs(tc.Args)
 	childInput := AgentWorkflowInput{
 		UserPrompt:       query,
 		EventWorkflowID:  input.EventWorkflowID,
+		LocalChannelName: input.LocalChannelName,
 		StreamingEnabled: input.StreamingEnabled,
 		ConversationID:   "",
 		EventTypes:       input.EventTypes,
 		SubAgentDepth:    input.SubAgentDepth + 1,
 		SubAgentRoutes:   route.ChildRoutes,
 	}
+
 	var childSuffix string
 	if err := workflow.SideEffect(ctx, func(workflow.Context) interface{} {
 		return uuid.New().String()
@@ -768,9 +788,11 @@ func (aw *AgentWorker) delegateToSubAgent(ctx workflow.Context, input AgentWorkf
 		logger.Warn("sub-agent child workflow id generation failed", zap.Error(err))
 		return "Sub-agent workflow failed: " + err.Error()
 	}
+
 	parentID := workflow.GetInfo(ctx).WorkflowExecution.ID
 	childWfID := fmt.Sprintf("%s-sub-%s-%s", parentID, tc.ToolCallID, childSuffix)
 	childTO := subAgentChildWorkflowTimeout(aw)
+
 	logger.Debug("starting sub-agent child workflow",
 		zap.String("childWorkflowID", childWfID),
 		zap.String("childTaskQueue", strings.TrimSpace(route.TaskQueue)),
@@ -781,6 +803,7 @@ func (aw *AgentWorker) delegateToSubAgent(ctx workflow.Context, input AgentWorkf
 		zap.Int("nestedChildRouteCount", len(route.ChildRoutes)),
 		zap.Duration("workflowExecutionTimeout", childTO),
 		zap.Int("delegatedQueryLen", len(query)))
+
 	childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
 		WorkflowID:               childWfID,
 		TaskQueue:                route.TaskQueue,
@@ -788,6 +811,7 @@ func (aw *AgentWorker) delegateToSubAgent(ctx workflow.Context, input AgentWorkf
 		ParentClosePolicy:        enumspb.PARENT_CLOSE_POLICY_REQUEST_CANCEL,
 		WaitForCancellation:      true,
 	})
+
 	var childResp AgentResponse
 	if err := workflow.ExecuteChildWorkflow(childCtx, aw.AgentWorkflow, childInput).Get(childCtx, &childResp); err != nil {
 		logger.Warn("sub-agent child workflow failed",
@@ -796,10 +820,12 @@ func (aw *AgentWorker) delegateToSubAgent(ctx workflow.Context, input AgentWorkf
 			zap.Error(err))
 		return "Sub-agent workflow failed: " + err.Error()
 	}
+
 	logger.Debug("sub-agent child workflow completed",
 		zap.String("childWorkflowID", childWfID),
 		zap.String("tool", tc.ToolName),
 		zap.Int("responseContentLen", len(childResp.Content)))
+
 	return childResp.Content
 }
 

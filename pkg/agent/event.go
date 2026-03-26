@@ -27,10 +27,13 @@ func eventChannelName(runID string) string {
 }
 
 // AgentEventUpdate is the payload for agent-event updates when using one event workflow per agent.
-// RunID is the run workflow ID; Event is the event to publish.
+// SourceAgentName is the name of the agent that emitted the event (main agent or a sub-agent).
+// LocalChannelName is the in-process pub/sub channel name (agent_event_<main-workflow-id>)
+// all nodes in the delegation tree publish to.
 type AgentEventUpdate struct {
-	AgentWorkflowID string      `json:"agent_workflow_id"`
-	Event           *AgentEvent `json:"event"`
+	SourceAgentName  string      `json:"source_agent_name"`
+	LocalChannelName string      `json:"local_channel_name,omitempty"`
+	Event            *AgentEvent `json:"event"`
 }
 
 var (
@@ -131,7 +134,7 @@ func (a *Agent) AgentEventWorkflow(ctx workflow.Context) error {
 	err := workflow.SetUpdateHandlerWithOptions(ctx, agentEventName, func(ctx workflow.Context, upd *AgentEventUpdate) error {
 		noOfEvents++
 		logger.Debug("received agent event",
-			zap.String("agentWorkflowID", upd.AgentWorkflowID),
+			zap.String("sourceAgent", upd.SourceAgentName),
 			zap.String("eventType", func() string {
 				if upd.Event != nil {
 					return string(upd.Event.Type)
@@ -157,12 +160,12 @@ func (a *Agent) AgentEventWorkflow(ctx workflow.Context) error {
 			if upd == nil {
 				return
 			}
-			if err := workflow.ExecuteActivity(actCtx, a.EventPublishActivity, upd.AgentWorkflowID, upd.Event).Get(ctx, nil); err != nil {
+			if err := workflow.ExecuteActivity(actCtx, a.EventPublishActivity, upd.LocalChannelName, upd.Event).Get(ctx, nil); err != nil {
 				evType := ""
 				if upd.Event != nil {
 					evType = string(upd.Event.Type)
 				}
-				logger.Warn("agent event activity failed", zap.Error(err), zap.String("eventType", evType), zap.String("agentWorkflowID", upd.AgentWorkflowID))
+				logger.Warn("agent event activity failed", zap.Error(err), zap.String("eventType", evType), zap.String("sourceAgent", upd.SourceAgentName))
 			}
 			processedCount++
 		}
@@ -199,14 +202,14 @@ func (a *Agent) AgentEventWorkflow(ctx workflow.Context) error {
 	return workflow.NewContinueAsNewError(ctx, a.AgentEventWorkflow)
 }
 
-// EventPublishActivity publishes an event to the per-run channel agent_event_{runID}.
-func (a *Agent) EventPublishActivity(ctx context.Context, workflowID string, event *AgentEvent) error {
+// EventPublishActivity publishes an event to the given channel (agent_event_<main-workflow-id>).
+func (a *Agent) EventPublishActivity(ctx context.Context, channel string, event *AgentEvent) error {
 	logger := activity.GetLogger(ctx)
 	evType := ""
 	if event != nil {
 		evType = string(event.Type)
 	}
-	logger.Debug("agent event activity", zap.String("workflowID", workflowID), zap.String("eventType", evType))
+	logger.Debug("agent event activity", zap.String("channel", channel), zap.String("eventType", evType))
 	if event == nil {
 		return fmt.Errorf("event is nil")
 	}
@@ -214,7 +217,6 @@ func (a *Agent) EventPublishActivity(ctx context.Context, workflowID string, eve
 	if err != nil {
 		return err
 	}
-	channel := eventChannelName(workflowID)
 	if err := a.agentChannel.Publish(ctx, channel, data); err != nil {
 		logger.Error("failed to publish agent event", zap.String("channel", channel), zap.Error(err))
 		return fmt.Errorf("failed to publish agent event: %w", err)
@@ -222,10 +224,9 @@ func (a *Agent) EventPublishActivity(ctx context.Context, workflowID string, eve
 	return nil
 }
 
-// subscribeToAgentEvents returns a channel that receives AgentEvent from the per-run event channel.
-func (a *Agent) subscribeToAgentEvents(ctx context.Context, runID string) (<-chan *AgentEvent, func() error, error) {
-	channel := eventChannelName(runID)
-	a.logger.Debug("subscribing to agent events", zap.String("channel", channel), zap.String("runID", runID))
+// subscribeToAgentEvents returns a channel that receives AgentEvent from the given event channel.
+func (a *Agent) subscribeToAgentEvents(ctx context.Context, channel string) (<-chan *AgentEvent, func() error, error) {
+	a.logger.Debug("subscribing to agent events", zap.String("channel", channel))
 	ch, closeFn, err := a.agentChannel.Subscribe(ctx, channel)
 	if err != nil {
 		a.logger.Error("failed to subscribe to agent events", zap.String("channel", channel), zap.Error(err))

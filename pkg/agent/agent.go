@@ -71,8 +71,28 @@ func buildAgent(opts []Option) (*Agent, error) {
 	if !a.disableWorker {
 		a.localAgentWorker = newAgentWorkerFromConfig(cfg, a.agentChannel)
 	}
+	// Sub-agents must share the parent's in-memory pub/sub so Run/RunStream subscribers on the main run receive
+	// delegation events and approvals from specialist workflows in the same process.
+	for _, sub := range a.subAgents {
+		if sub != nil {
+			wireInMemoryEventChannelToSubAgents(a, sub)
+		}
+	}
 
 	return a, nil
+}
+
+func wireInMemoryEventChannelToSubAgents(root, agent *Agent) {
+	if agent == nil || root == nil || root.agentChannel == nil {
+		return
+	}
+	agent.agentChannel = root.agentChannel
+	if agent.localAgentWorker != nil {
+		agent.localAgentWorker.agentChannel = root.agentChannel
+	}
+	for _, child := range agent.subAgents {
+		wireInMemoryEventChannelToSubAgents(root, child)
+	}
 }
 
 // hasWorkers returns true if there are pollers on the given task queue.
@@ -278,6 +298,7 @@ func (a *Agent) Run(ctx context.Context, input string, conversationID string) (*
 		UserPrompt:       input,
 		StreamingEnabled: false,
 		EventWorkflowID:  "",
+		LocalChannelName: eventChannelName(workflowID),
 		ConversationID:   conversationID,
 		EventTypes:       []AgentEventType{},
 		SubAgentDepth:    0,
@@ -296,7 +317,7 @@ func (a *Agent) Run(ctx context.Context, input string, conversationID string) (*
 	var closeEvent func() error
 	if a.approvalHandler != nil {
 		wfInput.EventTypes = []AgentEventType{AgentEventToolApproval}
-		eventCh, closeEvent, err = a.subscribeToAgentEvents(runCtx, workflowID)
+		eventCh, closeEvent, err = a.subscribeToAgentEvents(runCtx, wfInput.LocalChannelName)
 		if err != nil {
 			a.logger.Error("failed to subscribe to agent events", zap.String("workflowID", workflowID), zap.Error(err))
 			return nil, err
@@ -498,6 +519,7 @@ func (a *Agent) RunStream(ctx context.Context, input string, conversationID stri
 	wfInput := AgentWorkflowInput{
 		UserPrompt:       input,
 		EventWorkflowID:  eventWorkflowID,
+		LocalChannelName: eventChannelName(workflowID),
 		StreamingEnabled: a.streamEnabled,
 		ConversationID:   conversationID,
 		EventTypes:       []AgentEventType{AgentEventAll},
@@ -517,12 +539,12 @@ func (a *Agent) RunStream(ctx context.Context, input string, conversationID stri
 		}
 	}()
 
-	eventCh, closeEvent, err := a.subscribeToAgentEvents(runCtx, workflowID)
+	eventCh, closeEvent, err := a.subscribeToAgentEvents(runCtx, wfInput.LocalChannelName)
 	if err != nil {
-		a.logger.Error("failed to subscribe to agent events", zap.String("workflowID", workflowID), zap.Error(err))
+		a.logger.Error("failed to subscribe to agent events", zap.String("channel", wfInput.LocalChannelName), zap.Error(err))
 		return nil, err
 	}
-	a.logger.Debug("subscribed to agent events", zap.String("workflowID", workflowID))
+	a.logger.Debug("subscribed to agent events", zap.String("channel", wfInput.LocalChannelName))
 	defer func() {
 		if !streamStarted && closeEvent != nil {
 			_ = closeEvent()

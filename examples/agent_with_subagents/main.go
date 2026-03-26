@@ -15,9 +15,15 @@ import (
 	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/tools/calculator"
 )
 
-// Main agent uses the default tool approval policy (RequireAll): delegating to the
-// math specialist requires approval (stdin y/n). The specialist uses AutoToolApprovalPolicy
-// so its own tools (e.g. calculator) do not prompt.
+// This example demonstrates that tool approval events from a sub-agent (MathSpecialist)
+// flow up to the main agent's RunStream subscriber on the same in-memory channel.
+//
+// Approval flow:
+//  1. Main agent asks to delegate to MathSpecialist → approval prompt (kind: delegation)
+//  2. MathSpecialist calls the calculator tool    → approval prompt (kind: tool, from sub-agent)
+//
+// Both approvals arrive on the main agent's RunStream event channel, proving that
+// sub-agent events fan-in to the root agent's LocalChannelName.
 func main() {
 	cfg := config.LoadFromEnv()
 
@@ -42,6 +48,8 @@ func main() {
 	mathReg := tools.NewRegistry()
 	mathReg.Register(calculator.New())
 
+	// MathSpecialist uses RequireAllToolApprovalPolicy so its calculator tool
+	// also requires approval — we observe this approval on the main agent's stream.
 	mathSpecialist, err := agent.NewAgent(
 		agent.WithName("MathSpecialist"),
 		agent.WithDescription("Arithmetic specialist with calculator tool."),
@@ -54,7 +62,7 @@ func main() {
 		}),
 		agent.WithLLMClient(llmClient),
 		agent.WithToolRegistry(mathReg),
-		agent.WithToolApprovalPolicy(agent.AutoToolApprovalPolicy()),
+		agent.WithToolApprovalPolicy(agent.RequireAllToolApprovalPolicy{}),
 		agent.WithLogger(config.NewLoggerFromLogConfig(cfg)),
 	)
 	if err != nil {
@@ -75,8 +83,7 @@ func main() {
 		agent.WithLLMClient(llmClient),
 		agent.WithSubAgents(mathSpecialist),
 		agent.WithMaxSubAgentDepth(2),
-		// Default RequireAllToolApprovalPolicy: sub-agent delegation follows same rules as any tool.
-		agent.WithApprovalHandler(makeToolApprovalHandler(lineCh)),
+		agent.WithStream(true),
 		agent.WithLogger(config.NewLoggerFromLogConfig(cfg)),
 	)
 	if err != nil {
@@ -90,36 +97,52 @@ func main() {
 	}
 
 	fmt.Println("user:", prompt)
-	fmt.Println("Main agent tool calls (including delegation to the specialist) ask for approval: type y or n.")
-	resp, err := mainAgent.Run(context.Background(), prompt, "")
-	if err != nil {
-		log.Printf("run failed: %v", err)
-		return
-	}
-	fmt.Println("main agent:", resp.Content)
-}
+	fmt.Println("All approvals (main agent delegation + sub-agent calculator) are handled here.")
+	fmt.Println()
 
-func makeToolApprovalHandler(lineCh <-chan string) agent.ApprovalHandler {
-	return func(ctx context.Context, req *agent.ApprovalRequest) {
-		argsJSON, _ := json.MarshalIndent(req.Args, "", "  ")
-		title := "Tool approval"
-		if req.Kind == agent.ToolApprovalKindDelegation {
-			title = "Delegate to specialist"
-		}
-		fmt.Printf("\n--- %s ---\nAgent: %s\n", title, req.AgentName)
-		if req.DelegateToName != "" {
-			fmt.Printf("Delegate to: %s\n", req.DelegateToName)
-		}
-		fmt.Printf("Args:\n%s\nApprove delegation? (y/n): ", string(argsJSON))
-		select {
-		case <-ctx.Done():
-			return
-		case line, ok := <-lineCh:
-			if ok && strings.TrimSpace(strings.ToLower(line)) == "y" {
-				_ = req.Respond(agent.ApprovalStatusApproved)
-			} else if ok {
-				_ = req.Respond(agent.ApprovalStatusRejected)
+	eventCh, err := mainAgent.RunStream(context.Background(), prompt, "")
+	if err != nil {
+		log.Fatalf("run stream failed: %v", err)
+	}
+
+	for ev := range eventCh {
+		switch ev.Type {
+		case agent.AgentEventToolApproval:
+			ap := ev.Approval
+			if ap == nil {
+				continue
 			}
+			argsJSON, _ := json.MarshalIndent(ap.Args, "", "  ")
+			title := "Tool approval"
+			if ap.Kind == agent.ToolApprovalKindDelegation {
+				title = "Delegate to specialist"
+			}
+			fmt.Printf("\n--- %s ---\n", title)
+			fmt.Printf("Source agent : %s\n", ap.AgentName)
+			if ap.DelegateToName != "" {
+				fmt.Printf("Delegate to  : %s\n", ap.DelegateToName)
+			}
+			fmt.Printf("Tool         : %s\n", ap.ToolName)
+			fmt.Printf("Args:\n%s\nApprove? (y/n): ", string(argsJSON))
+
+			approved := false
+			select {
+			case line, ok := <-lineCh:
+				approved = ok && strings.TrimSpace(strings.ToLower(line)) == "y"
+			}
+			status := agent.ApprovalStatusRejected
+			if approved {
+				status = agent.ApprovalStatusApproved
+			}
+			if err := mainAgent.OnApproval(context.Background(), ap.ApprovalToken, status); err != nil {
+				fmt.Printf("approval error: %v\n", err)
+			}
+
+		case agent.AgentEventContentDelta:
+			fmt.Print(ev.Content)
+
+		case agent.AgentEventComplete:
+			fmt.Printf("\nmain agent: %s\n", ev.Content)
 		}
 	}
 }
