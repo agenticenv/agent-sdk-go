@@ -1,12 +1,14 @@
-module github.com/vvsynapse/temporal-agent-sdk-go
+module github.com/vvsynapse/agent-sdk-go
 
 go 1.24.4
 
-replace github.com/vvsynapse/temporal-agent-sdk-go/pkg/tools => ./pkg/tools
-replace github.com/vvsynapse/temporal-agent-sdk-go/pkg/llm => ./pkg/llm
+replace github.com/vvsynapse/agent-sdk-go/pkg/tools => ./pkg/tools
+
+replace github.com/vvsynapse/agent-sdk-go/pkg/llm => ./pkg/llm
 
 require (
 	github.com/anthropics/anthropic-sdk-go v1.26.0
+	github.com/golang/mock v1.6.0
 	github.com/google/uuid v1.6.0
 	github.com/joho/godotenv v1.5.1
 	github.com/openai/openai-go/v3 v3.26.0
@@ -30,7 +32,6 @@ require (
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
-	github.com/golang/mock v1.6.0 // indirect
 	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/google/s2a-go v0.1.8 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.4 // indirect

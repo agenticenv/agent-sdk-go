@@ -8,7 +8,7 @@
 
 ## Reporting a Vulnerability
 
-Please report security vulnerabilities by opening a [GitHub Security Advisory](https://github.com/vvsynapse/temporal-agent-sdk-go/security/advisories/new). Do not open a public issue for security vulnerabilities.
+Please report security vulnerabilities by opening a [GitHub Security Advisory](https://github.com/vvsynapse/agent-sdk-go/security/advisories/new). Do not open a public issue for security vulnerabilities.
 
 We will acknowledge your report within 48 hours and will send a more detailed response within 7 days. Please do not publicly disclose the vulnerability until we have released a fix.
 

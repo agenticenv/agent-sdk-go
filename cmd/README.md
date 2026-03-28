@@ -1,5 +1,7 @@
 # CLI
 
+The `agentctl` CLI uses **agent-sdk-go** and therefore needs a **running Temporal server** — same as the library examples.
+
 Interactive conversation mode. Type prompts, get responses. Type `exit`, `quit`, or `bye` to end.
 
 ## Configuration

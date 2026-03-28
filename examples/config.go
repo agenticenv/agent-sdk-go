@@ -6,12 +6,12 @@ import (
 	"strings"
 
 	"github.com/joho/godotenv"
-	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/interfaces"
-	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/llm"
-	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/llm/anthropic"
-	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/llm/gemini"
-	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/llm/openai"
-	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/logger"
+	"github.com/vvsynapse/agent-sdk-go/pkg/interfaces"
+	"github.com/vvsynapse/agent-sdk-go/pkg/llm"
+	"github.com/vvsynapse/agent-sdk-go/pkg/llm/anthropic"
+	"github.com/vvsynapse/agent-sdk-go/pkg/llm/gemini"
+	"github.com/vvsynapse/agent-sdk-go/pkg/llm/openai"
+	"github.com/vvsynapse/agent-sdk-go/pkg/logger"
 	"go.temporal.io/sdk/log"
 )
 
@@ -54,7 +54,7 @@ func LoadFromEnv() *Config {
 		Host:      getEnv("TEMPORAL_HOST", "localhost"),
 		Port:      getEnvInt("TEMPORAL_PORT", 7233),
 		Namespace: getEnv("TEMPORAL_NAMESPACE", "default"),
-		TaskQueue: getEnv("TEMPORAL_TASKQUEUE", "temporal-agent-sdk-go"),
+		TaskQueue: getEnv("TEMPORAL_TASKQUEUE", "agent-sdk-go"),
 		LogLevel:  getEnv("LOG_LEVEL", "error"),
 		Provider:  interfaces.LLMProvider(getEnv("LLM_PROVIDER", "openai")),
 		APIKey:    getEnv("LLM_APIKEY", ""),

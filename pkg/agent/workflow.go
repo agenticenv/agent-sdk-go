@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/interfaces"
+	"github.com/vvsynapse/agent-sdk-go/pkg/interfaces"
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"

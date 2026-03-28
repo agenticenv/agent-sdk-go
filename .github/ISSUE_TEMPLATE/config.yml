@@ -1,5 +1,5 @@
 blank_issues_enabled: true
 contact_links:
   - name: GitHub Discussions
-    url: https://github.com/vvsynapse/temporal-agent-sdk-go/discussions
+    url: https://github.com/vvsynapse/agent-sdk-go/discussions
     about: Ask questions and discuss ideas

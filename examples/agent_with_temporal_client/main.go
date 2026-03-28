@@ -12,8 +12,8 @@ import (
 	"strconv"
 	"strings"
 
-	config "github.com/vvsynapse/temporal-agent-sdk-go/examples"
-	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/agent"
+	config "github.com/vvsynapse/agent-sdk-go/examples"
+	"github.com/vvsynapse/agent-sdk-go/pkg/agent"
 	"go.temporal.io/sdk/client"
 )
 

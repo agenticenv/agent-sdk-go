@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/interfaces"
+	"github.com/vvsynapse/agent-sdk-go/pkg/interfaces"
 )
 
 func TestBuildAgentConfig_NeitherTemporalConfigNorClient(t *testing.T) {

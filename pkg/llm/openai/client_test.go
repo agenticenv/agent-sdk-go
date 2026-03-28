@@ -6,8 +6,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/interfaces"
-	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/llm"
+	"github.com/vvsynapse/agent-sdk-go/pkg/interfaces"
+	"github.com/vvsynapse/agent-sdk-go/pkg/llm"
 )
 
 func TestNewClient_requiresAPIKey(t *testing.T) {

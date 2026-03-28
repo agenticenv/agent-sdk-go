@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/interfaces"
-	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/logger"
+	"github.com/vvsynapse/agent-sdk-go/pkg/interfaces"
+	"github.com/vvsynapse/agent-sdk-go/pkg/logger"
 )
 
 func TestGetEventTaskQueue(t *testing.T) {

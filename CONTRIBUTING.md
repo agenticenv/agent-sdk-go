@@ -1,6 +1,6 @@
-# Contributing to Temporal Agent SDK for Go
+# Contributing to agent-sdk-go
 
-Thank you for your interest in contributing. This document explains how to set up your environment and what we expect from contributors.
+Thank you for your interest in contributing. **agent-sdk-go** is a community Go SDK for AI agents that **run on [Temporal](https://temporal.io)** (workflows + activities); you need a Temporal server to run examples. This document explains how to set up your environment and what we expect from contributors.
 
 ## Prerequisites
 
@@ -49,9 +49,9 @@ Examples use `TEMPORAL_HOST`, `TEMPORAL_PORT`, and `TEMPORAL_NAMESPACE` from `.e
 **Fork** the repo on GitHub (if you don't have push access), then clone your fork:
 
 ```bash
-git clone https://github.com/<your-username>/temporal-agent-sdk-go.git
-cd temporal-agent-sdk-go
-git remote add upstream https://github.com/vvsynapse/temporal-agent-sdk-go.git
+git clone https://github.com/<your-username>/agent-sdk-go.git
+cd agent-sdk-go
+git remote add upstream https://github.com/vvsynapse/agent-sdk-go.git
 go mod download
 ```
 
@@ -207,9 +207,9 @@ See **[RELEASING.md](RELEASING.md)** for how to cut releases — tag-triggered w
 
 | Need | Where |
 |------|-------|
-| **Feature idea or design discussion** | [Open an issue](https://github.com/vvsynapse/temporal-agent-sdk-go/issues) (use Feature/Enhancement label if available) |
-| **Bug report** | [Open an issue](https://github.com/vvsynapse/temporal-agent-sdk-go/issues) with repro steps |
-| **Question or general discussion** | [GitHub Discussions](https://github.com/vvsynapse/temporal-agent-sdk-go/discussions) |
+| **Feature idea or design discussion** | [Open an issue](https://github.com/vvsynapse/agent-sdk-go/issues) (use Feature/Enhancement label if available) |
+| **Bug report** | [Open an issue](https://github.com/vvsynapse/agent-sdk-go/issues) with repro steps |
+| **Question or general discussion** | [GitHub Discussions](https://github.com/vvsynapse/agent-sdk-go/discussions) |
 | **Security concern** | See [SECURITY.md](SECURITY.md) |
 
 We follow typical open source flow: discuss in issues/discussions first for non-trivial changes, then implement and open a PR when ready.

@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/interfaces"
+	"github.com/vvsynapse/agent-sdk-go/pkg/interfaces"
 )
 
 // mockTool for registry tests (avoids import cycle with calculator/echo).

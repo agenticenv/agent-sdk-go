@@ -4,8 +4,8 @@ import (
 	"context"
 	"strings"
 
-	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/interfaces"
-	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/tools"
+	"github.com/vvsynapse/agent-sdk-go/pkg/interfaces"
+	"github.com/vvsynapse/agent-sdk-go/pkg/tools"
 )
 
 var _ interfaces.Tool = (*WordCount)(nil)

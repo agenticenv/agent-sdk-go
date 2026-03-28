@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/interfaces"
-	"github.com/vvsynapse/temporal-agent-sdk-go/pkg/tools"
+	"github.com/vvsynapse/agent-sdk-go/pkg/interfaces"
+	"github.com/vvsynapse/agent-sdk-go/pkg/tools"
 )
 
 var _ interfaces.Tool = (*Wikipedia)(nil)
@@ -103,7 +103,7 @@ func (w *Wikipedia) Execute(ctx context.Context, args map[string]any) (any, erro
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "temporal-agent-sdk-go/1.0")
+	req.Header.Set("User-Agent", "agent-sdk-go/1.0")
 	resp, err := w.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("wikipedia request: %w", err)
