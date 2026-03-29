@@ -187,13 +187,15 @@ When streaming is enabled, the agent emits `ContentDelta` (partial tokens) and t
 
 **Recommended pattern:** Track whether you already displayed content via `ContentDelta` or `Content`, and skip printing `Complete`'s content when so. Use `ev.Content` from `AgentEventComplete` as the canonical final result for programmatic use (e.g. logging, storage).
 
+**Sub-agents:** You may see several `complete` events on one stream; it ends after the **main** assistant’s final `complete`. Use **`ev.AgentName`** to tell specialist from main when you print or log output.
+
 ```text
 ContentDelta → "The result is 40."   (streamed, shown to user)
 ContentDelta → ...
 Complete     → "The result is 40."   (don't re-print; use ev.Content in code)
 ```
 
-**Event types:** `ContentDelta` (streamed tokens), `Content` (full block when not streaming), `ToolCall`, `ToolResult`, `Complete` (final response), `Error`.
+**Event types:** `ContentDelta` (streamed tokens), `Content` (full block when not streaming), `ToolCall`, `ToolResult`, `Approval` (human gate for a tool call or delegation; use `ev.Approval.Kind`), `Complete` (final response), `Error`.
 
 See [examples/agent_with_stream_conversation](examples/agent_with_stream_conversation) for a full example: RunStream with conversation and the event-handling pattern.
 
@@ -258,7 +260,7 @@ result, _ := mainAgent.Run(ctx, "What is 144 divided by 12?", "")
 
 [examples/agent_with_subagents](examples/agent_with_subagents)
 
-**RunStream event fan-in:** Subscribe once on the main agent and you receive events from the whole delegation tree, including sub-agent tool calls and approvals. Use `ev.Approval.AgentName` to identify which agent emitted an approval request.
+**RunStream event fan-in:** Subscribe once on the main agent and you receive events from the whole delegation tree, including sub-agent tool calls and approvals. Use **`ev.AgentName`** on each `AgentEvent` to see which agent produced the event (content, tools, approvals, complete). The approval payload is `ev.Approval` (`ApprovalEvent`); the requesting agent is **not** duplicated there—use `ev.AgentName`.
 
 ### Tool approval
 
@@ -271,7 +273,7 @@ By default tools require approval, including delegation to sub-agents registered
 
 #### Sub-agents and approval
 
-- `**ApprovalRequest`** and `**ToolApprovalEvent**` (RunStream) include `**Kind**` (`tool` or `delegation`), `**AgentName**` (the agent that requested approval: main agent or sub-agent), and `**DelegateToName**` (target specialist when `Kind` is `delegation`). Use them to show different UI labels while keeping one approval flow.
+- `**ApprovalRequest`** (Run / RunAsync) and stream `**ev.Approval**` (`**ApprovalEvent**`) include `**Kind**` (`tool` or `delegation`) and `**DelegateToName**` (target specialist when `Kind` is `delegation`). The agent that asked for approval is on **`ev.AgentName`** for RunStream (and `req.AgentName` on `ApprovalRequest`).
 - **Parent (main agent):** one policy for its whole list—e.g. `RequireAll` → approving `subagent_MathSpecialist` is the same flow as approving `calculator` on that agent. `AutoToolApprovalPolicy()` → no approval for delegation or other tools on that agent.
 - **Specialist:** separate agent, **its own** `WithToolApprovalPolicy`. Calculator calls inside the specialist use **that** policy, not the parent’s.
 
@@ -294,11 +296,11 @@ a, _ := agent.NewAgent(
 a.Run(ctx, prompt, "")
 ```
 
-**RunStream** — receive `AgentEventToolApproval` and call `agent.OnApproval`:
+**RunStream** — receive `AgentEventApproval` and call `agent.OnApproval`:
 
 ```go
 for ev := range eventCh {
-    if ev.Type == agent.AgentEventToolApproval && ev.Approval != nil {
+    if ev.Type == agent.AgentEventApproval && ev.Approval != nil {
         // Show UI, then:
         a.OnApproval(ctx, ev.Approval.ApprovalToken, agent.ApprovalStatusApproved)
     }

@@ -59,7 +59,6 @@ func LoadFromEnv() *Config {
 		Provider:  interfaces.LLMProvider(getEnv("LLM_PROVIDER", "openai")),
 		APIKey:    getEnv("LLM_APIKEY", ""),
 		Model:     getEnv("LLM_MODEL", "gpt-4o"),
-		BaseURL:   getEnv("LLM_BASEURL", "https://api.openai.com/v1"),
 	}
 	return cfg
 }

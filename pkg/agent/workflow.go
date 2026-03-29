@@ -51,6 +51,7 @@ type SubAgentRoute struct {
 // LocalChannelName is the in-process pub/sub channel name used for in-memory event fan-in across the
 // delegation tree. Set once at the top level (agent_event_<main-workflow-id>) and propagated unchanged
 // to all sub-agents. Contrast with EventWorkflowID which is used for out-of-process (remote) routing.
+// EventTypes is set by the SDK; a single "*" element means emit all event kinds (used for RunStream).
 type AgentWorkflowInput struct {
 	UserPrompt       string                   `json:"user_prompt,omitempty"`
 	EventWorkflowID  string                   `json:"event_workflow_id,omitempty"`
@@ -179,13 +180,14 @@ func (aw *AgentWorker) AgentWorkflow(ctx workflow.Context, input AgentWorkflowIn
 		if ev == nil {
 			return
 		}
+		ev.AgentName = agentName
 		eventTypes := input.EventTypes
 		if len(eventTypes) == 0 {
 			return
 		}
 		emit := false
 		for _, et := range eventTypes {
-			if et == AgentEventAll {
+			if et == agentEventAll {
 				emit = true
 				break
 			}
@@ -201,7 +203,7 @@ func (aw *AgentWorker) AgentWorkflow(ctx workflow.Context, input AgentWorkflowIn
 			ev.Timestamp = workflow.Now(ctx)
 		}
 		upd := &AgentEventUpdate{
-			SourceAgentName:  agentName,
+			AgentName:        agentName,
 			LocalChannelName: input.LocalChannelName,
 			Event:            ev,
 		}
@@ -441,7 +443,7 @@ func (aw *AgentWorker) AgentLLMStreamActivity(ctx context.Context, input AgentLL
 			return
 		}
 		upd := &AgentEventUpdate{
-			SourceAgentName:  agentName,
+			AgentName:        agentName,
 			LocalChannelName: input.LocalChannelName,
 			Event:            ev,
 		}
@@ -464,10 +466,10 @@ func (aw *AgentWorker) AgentLLMStreamActivity(ctx context.Context, input AgentLL
 			continue
 		}
 		if chunk.ContentDelta != "" {
-			emitDelta(&AgentEvent{Type: AgentEventContentDelta, Content: chunk.ContentDelta, Timestamp: time.Now()})
+			emitDelta(&AgentEvent{Type: AgentEventContentDelta, AgentName: agentName, Content: chunk.ContentDelta, Timestamp: time.Now()})
 		}
 		if chunk.ThinkingDelta != "" {
-			emitDelta(&AgentEvent{Type: AgentEventThinkingDelta, Content: chunk.ThinkingDelta, Timestamp: time.Now()})
+			emitDelta(&AgentEvent{Type: AgentEventThinkingDelta, AgentName: agentName, Content: chunk.ThinkingDelta, Timestamp: time.Now()})
 		}
 	}
 	if err := stream.Err(); err != nil {
@@ -597,7 +599,7 @@ func toolApprovalMetadata(aw *AgentWorker, toolName string) (kind ToolApprovalKi
 }
 
 // AgentToolApprovalActivity blocks until the driver completes it via CompleteActivity.
-// Sends approval request as AgentEventToolApproval on event channel (same channel for Run and RunStream).
+// Sends approval request as AgentEventApproval on event channel (same channel for Run and RunStream).
 func (aw *AgentWorker) AgentToolApprovalActivity(ctx context.Context, input AgentToolApprovalInput) (ApprovalStatus, error) {
 	logger := activity.GetLogger(ctx)
 	logger.Debug("agent tool approval activity started", zap.String("tool", input.ToolName), zap.Bool("viaEventWorkflow", input.EventWorkflowID != ""))
@@ -613,14 +615,14 @@ func (aw *AgentWorker) AgentToolApprovalActivity(ctx context.Context, input Agen
 			zap.String("mainAgent", agentName))
 	}
 	ev := &AgentEvent{
-		Type: AgentEventToolApproval,
-		Approval: &ToolApprovalEvent{
+		Type:      AgentEventApproval,
+		AgentName: agentName,
+		Approval: &ApprovalEvent{
 			ToolCallID:     input.ToolCallID,
 			ToolName:       input.ToolName,
 			Args:           input.Args,
 			ApprovalToken:  taskTokenB64,
 			Kind:           kind,
-			AgentName:      agentName,
 			DelegateToName: delegateToName,
 		},
 		Timestamp: time.Now(),
@@ -629,7 +631,7 @@ func (aw *AgentWorker) AgentToolApprovalActivity(ctx context.Context, input Agen
 	// Route via event workflow when eventWorkflowID is set (Agent sets this when enableRemoteWorkers is true)
 	if input.EventWorkflowID != "" {
 		upd := &AgentEventUpdate{
-			SourceAgentName:  agentName,
+			AgentName:        agentName,
 			LocalChannelName: input.LocalChannelName,
 			Event:            ev,
 		}
@@ -670,7 +672,7 @@ func (aw *AgentWorker) SendAgentEventUpdateActivity(ctx context.Context, eventWo
 	}
 
 	if upd.Event != nil {
-		logger.Debug("send agent event update activity", zap.String("eventType", string(upd.Event.Type)), zap.String("sourceAgent", upd.SourceAgentName))
+		logger.Debug("send agent event update activity", zap.String("eventType", string(upd.Event.Type)), zap.String("agent", upd.AgentName))
 	}
 
 	// Route via event workflow when eventWorkflowID is set (Agent sets this when enableRemoteWorkers is true)
@@ -684,7 +686,7 @@ func (aw *AgentWorker) SendAgentEventUpdateActivity(ctx context.Context, eventWo
 		if err != nil {
 			return err
 		}
-		logger.Debug("agent event sent to event workflow", zap.String("eventWorkflowID", eventWorkflowID), zap.String("sourceAgent", upd.SourceAgentName))
+		logger.Debug("agent event sent to event workflow", zap.String("eventWorkflowID", eventWorkflowID), zap.String("agent", upd.AgentName))
 	} else {
 		if aw.agentChannel == nil {
 			return fmt.Errorf("agentChannel required when eventWorkflowID is empty")
@@ -696,9 +698,9 @@ func (aw *AgentWorker) SendAgentEventUpdateActivity(ctx context.Context, eventWo
 		if err := aw.agentChannel.Publish(ctx, upd.LocalChannelName, data); err != nil {
 			return err
 		}
-		logger.Debug("agent event sent to channel", zap.String("channel", upd.LocalChannelName), zap.String("sourceAgent", upd.SourceAgentName))
+		logger.Debug("agent event sent to channel", zap.String("channel", upd.LocalChannelName), zap.String("agent", upd.AgentName))
 	}
-	logger.Debug("agent event update activity completed", zap.String("sourceAgent", upd.SourceAgentName))
+	logger.Debug("agent event update activity completed", zap.String("agent", upd.AgentName))
 	return nil
 }
 

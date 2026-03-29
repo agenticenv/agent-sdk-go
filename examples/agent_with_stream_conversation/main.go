@@ -159,7 +159,7 @@ func printEvent(ev *agent.AgentEvent, streamedContent bool) {
 		if ev.ToolCall != nil {
 			fmt.Printf("[tool_result] %s: %v\n", ev.ToolCall.ToolName, ev.ToolCall.Result)
 		}
-	case agent.AgentEventToolApproval:
+	case agent.AgentEventApproval:
 		// Handled in main loop; Approval events are not printed here
 	case agent.AgentEventError:
 		fmt.Printf("[error] %s\n", ev.Content)

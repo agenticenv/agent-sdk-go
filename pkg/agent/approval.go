@@ -32,7 +32,7 @@ type ApprovalRequest struct {
 	ToolName string         `json:"tool_name"`
 	Args     map[string]any `json:"args"`
 	Respond  ApprovalSender `json:"-"`
-	// Kind matches ToolApprovalEvent: distinguish normal tools from sub-agent delegation.
+	// Kind matches ApprovalEvent: distinguish normal tools from sub-agent delegation.
 	Kind ToolApprovalKind `json:"kind,omitempty"`
 	// AgentName is the agent running the workflow that requested approval.
 	AgentName string `json:"agent_name,omitempty"`

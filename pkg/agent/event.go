@@ -27,11 +27,11 @@ func eventChannelName(runID string) string {
 }
 
 // AgentEventUpdate is the payload for agent-event updates when using one event workflow per agent.
-// SourceAgentName is the name of the agent that emitted the event (main agent or a sub-agent).
+// AgentName is the name of the agent that emitted the event (main agent or a sub-agent).
 // LocalChannelName is the in-process pub/sub channel name (agent_event_<main-workflow-id>)
 // all nodes in the delegation tree publish to.
 type AgentEventUpdate struct {
-	SourceAgentName  string      `json:"source_agent_name"`
+	AgentName        string      `json:"agent_name"`
 	LocalChannelName string      `json:"local_channel_name,omitempty"`
 	Event            *AgentEvent `json:"event"`
 }
@@ -53,18 +53,25 @@ const (
 	AgentEventThinkingDelta AgentEventType = "thinking_delta" // Anthropic extended thinking stream
 	AgentEventToolCall      AgentEventType = "tool_call"
 	AgentEventToolResult    AgentEventType = "tool_result"
-	AgentEventToolApproval  AgentEventType = "tool_approval"
+	AgentEventApproval      AgentEventType = "approval"
 	AgentEventError         AgentEventType = "error"
-	AgentEventComplete      AgentEventType = "complete"
-	AgentEventAll           AgentEventType = "*" // matches all events
+	AgentEventComplete AgentEventType = "complete"
 )
 
+// agentEventAll is the workflow EventTypes sentinel meaning "emit every event type" (JSON "*").
+// Unexported so it is not part of the public SDK surface.
+const agentEventAll AgentEventType = "*"
+
 // AgentEvent is published to subscribers when the agent produces output or errors.
+// AgentName identifies which agent in a delegation tree emitted the event (main or sub-agent).
+// RunStream uses it so AgentEventComplete from a sub-agent does not close the root stream.
+// For AgentEventApproval, the requesting agent is also on AgentName (not duplicated on Approval).
 type AgentEvent struct {
 	Type       AgentEventType         `json:"type"`
+	AgentName  string                 `json:"agent_name,omitempty"`
 	Content    string                 `json:"content,omitempty"`
 	ToolCall   *ToolCallEvent         `json:"tool_call,omitempty"`
-	Approval   *ToolApprovalEvent     `json:"approval,omitempty"` // for AgentEventToolApproval
+	Approval   *ApprovalEvent         `json:"approval,omitempty"` // for AgentEventApproval
 	Error      error                  `json:"error,omitempty"`
 	Metadata   map[string]interface{} `json:"metadata,omitempty"`
 	Timestamp  time.Time              `json:"timestamp"`
@@ -81,17 +88,16 @@ const (
 	ToolApprovalKindDelegation ToolApprovalKind = "delegation"
 )
 
-// ToolApprovalEvent is the payload for AgentEventToolApproval (RunStream).
+// ApprovalEvent is the payload for AgentEventApproval (RunStream).
+// The agent that requested approval is on AgentEvent.AgentName, not repeated here.
 // Use with Agent.OnApproval when the user approves or rejects; see streaming examples.
-type ToolApprovalEvent struct {
+type ApprovalEvent struct {
 	ToolCallID    string         `json:"tool_call_id,omitempty"`
 	ToolName      string         `json:"tool_name"`
 	Args          map[string]any `json:"args,omitempty"`
 	ApprovalToken string         `json:"approval_token,omitempty"`
 	// Kind is tool vs sub-agent delegation; use for UI copy.
 	Kind ToolApprovalKind `json:"kind,omitempty"`
-	// AgentName is the agent executing this workflow (main agent or specialist).
-	AgentName string `json:"agent_name,omitempty"`
 	// DelegateToName is set when Kind is delegation: display name of the target sub-agent.
 	DelegateToName string `json:"delegate_to_name,omitempty"`
 }
@@ -134,7 +140,7 @@ func (a *Agent) AgentEventWorkflow(ctx workflow.Context) error {
 	err := workflow.SetUpdateHandlerWithOptions(ctx, agentEventName, func(ctx workflow.Context, upd *AgentEventUpdate) error {
 		noOfEvents++
 		logger.Debug("received agent event",
-			zap.String("sourceAgent", upd.SourceAgentName),
+			zap.String("agent", upd.AgentName),
 			zap.String("eventType", func() string {
 				if upd.Event != nil {
 					return string(upd.Event.Type)
@@ -165,7 +171,7 @@ func (a *Agent) AgentEventWorkflow(ctx workflow.Context) error {
 				if upd.Event != nil {
 					evType = string(upd.Event.Type)
 				}
-				logger.Warn("agent event activity failed", zap.Error(err), zap.String("eventType", evType), zap.String("sourceAgent", upd.SourceAgentName))
+				logger.Warn("agent event activity failed", zap.Error(err), zap.String("eventType", evType), zap.String("agent", upd.AgentName))
 			}
 			processedCount++
 		}

@@ -35,7 +35,7 @@ func TestCopyApprovalArgs(t *testing.T) {
 }
 
 func TestCopyEventWithShortApprovalToken(t *testing.T) {
-	ev := &AgentEvent{Type: AgentEventToolApproval, Approval: &ToolApprovalEvent{ToolName: "t", ApprovalToken: "long"}}
+	ev := &AgentEvent{Type: AgentEventApproval, Approval: &ApprovalEvent{ToolName: "t", ApprovalToken: "long"}}
 	got := copyEventWithShortApprovalToken(ev, "short")
 	if got == ev {
 		t.Error("should return a copy")
@@ -51,6 +51,25 @@ func TestCopyEventWithShortApprovalToken(t *testing.T) {
 	got2 := copyEventWithShortApprovalToken(evNoApproval, "x")
 	if got2.Approval != nil {
 		t.Error("ev with nil Approval should produce nil Approval in copy")
+	}
+}
+
+func TestStreamCompleteEndsRun(t *testing.T) {
+	root := "Main agent"
+	if streamCompleteEndsRun(nil, root) {
+		t.Error("nil event should not end run")
+	}
+	if streamCompleteEndsRun(&AgentEvent{Type: AgentEventContent}, root) {
+		t.Error("non-complete should not end run")
+	}
+	if !streamCompleteEndsRun(&AgentEvent{Type: AgentEventComplete, AgentName: ""}, root) {
+		t.Error("complete with empty agent should end run (legacy)")
+	}
+	if !streamCompleteEndsRun(&AgentEvent{Type: AgentEventComplete, AgentName: root}, root) {
+		t.Error("complete from root should end run")
+	}
+	if streamCompleteEndsRun(&AgentEvent{Type: AgentEventComplete, AgentName: "MathSpecialist"}, root) {
+		t.Error("complete from sub-agent should not end root run")
 	}
 }
 

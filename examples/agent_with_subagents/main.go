@@ -24,6 +24,9 @@ import (
 //
 // Both approvals arrive on the main agent's RunStream event channel, proving that
 // sub-agent events fan-in to the root agent's LocalChannelName.
+//
+// The main agent system prompt also asks the model to continue after delegation returns,
+// so you can observe another LLM round / streamed content on the main agent after the child workflow completes.
 func main() {
 	cfg := config.LoadFromEnv()
 
@@ -73,7 +76,12 @@ func main() {
 	mainAgent, err := agent.NewAgent(
 		agent.WithName("Main agent"),
 		agent.WithDescription("General assistant."),
-		agent.WithSystemPrompt("You are a helpful assistant."),
+		agent.WithSystemPrompt(
+			"You are the main assistant. For arithmetic, delegate using the MathSpecialist sub-agent tool. "+
+				"When the specialist's answer comes back, do not stop there: continue as the main agent—give the user a concise final reply that includes the result, "+
+				"then add one short sentence of your own (e.g. sanity check, related tip, or offer to help further). "+
+				"Always produce visible assistant text after delegation completes.",
+		),
 		agent.WithTemporalConfig(&agent.TemporalConfig{
 			Host:      cfg.Host,
 			Port:      cfg.Port,
@@ -93,7 +101,7 @@ func main() {
 
 	prompt := strings.Join(os.Args[1:], " ")
 	if prompt == "" {
-		prompt = "What is 987 multiplied by 654?"
+		prompt = "What is 987 multiplied by 654? After you get the exact value, say in one sentence whether that order of magnitude is typical for a quick mental estimate."
 	}
 
 	fmt.Println("user:", prompt)
@@ -107,7 +115,7 @@ func main() {
 
 	for ev := range eventCh {
 		switch ev.Type {
-		case agent.AgentEventToolApproval:
+		case agent.AgentEventApproval:
 			ap := ev.Approval
 			if ap == nil {
 				continue
@@ -118,7 +126,7 @@ func main() {
 				title = "Delegate to specialist"
 			}
 			fmt.Printf("\n--- %s ---\n", title)
-			fmt.Printf("Source agent : %s\n", ap.AgentName)
+			fmt.Printf("Source agent : %s\n", ev.AgentName)
 			if ap.DelegateToName != "" {
 				fmt.Printf("Delegate to  : %s\n", ap.DelegateToName)
 			}
@@ -142,7 +150,13 @@ func main() {
 			fmt.Print(ev.Content)
 
 		case agent.AgentEventComplete:
-			fmt.Printf("\nmain agent: %s\n", ev.Content)
+			// You may see two completes on one RunStream: specialist first, then main after it
+			// incorporates the tool result. Only the main agent's complete ends the stream.
+			who := strings.TrimSpace(ev.AgentName)
+			if who == "" {
+				who = "agent"
+			}
+			fmt.Printf("\n[%s complete] %s\n", who, ev.Content)
 		}
 	}
 }

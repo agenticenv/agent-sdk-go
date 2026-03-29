@@ -126,7 +126,7 @@ func main() {
 			if ev == nil {
 				continue
 			}
-			if ev.Type == agent.AgentEventToolApproval && ev.Approval != nil {
+			if ev.Type == agent.AgentEventApproval && ev.Approval != nil {
 				argsJSON, _ := json.MarshalIndent(ev.Approval.Args, "", "  ")
 				fmt.Printf("\n--- Tool approval required ---\nTool: %s\nArgs:\n%s\nApprove? (y/n): ", ev.Approval.ToolName, string(argsJSON))
 				line, ok := <-lineCh
@@ -176,7 +176,7 @@ func printEvent(ev *agent.AgentEvent, streamedContent bool) {
 			args, _ := json.Marshal(ev.ToolCall.Args)
 			fmt.Printf("\n[tool_call] %s args=%s\n", ev.ToolCall.ToolName, string(args))
 		}
-	case agent.AgentEventToolApproval:
+	case agent.AgentEventApproval:
 		// Handled in main loop; Approval events are not printed here
 	case agent.AgentEventToolResult:
 		if ev.ToolCall != nil {
@@ -187,7 +187,11 @@ func printEvent(ev *agent.AgentEvent, streamedContent bool) {
 	case agent.AgentEventComplete:
 		// Only print content if we didn't already display it via ContentDelta or Content
 		if ev.Content != "" && !streamedContent {
-			fmt.Print(ev.Content)
+			who := strings.TrimSpace(ev.AgentName)
+			if who == "" {
+				who = "agent"
+			}
+			fmt.Printf("\n[%s complete] %s\n", who, ev.Content)
 		}
 	default:
 		fmt.Printf("[%s] %+v\n", ev.Type, ev)

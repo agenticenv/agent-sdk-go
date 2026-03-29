@@ -265,7 +265,7 @@ func (a *Agent) Close() {
 	a.logger.Info("agent closed", zap.String("name", a.Name))
 }
 
-// Run starts the agent workflow and returns the result. Use WithApprovalHandler when tools require approval (Run only; handler uses req.Respond). RunStream uses AgentEventToolApproval + OnApproval.
+// Run starts the agent workflow and returns the result. Use WithApprovalHandler when tools require approval (Run only; handler uses req.Respond). RunStream uses AgentEventApproval + OnApproval.
 // Use WithTimeout or a context with deadline to avoid blocking.
 // When using WithConversation, pass the conversation ID (runtime id from user/session); agent and worker use the same ID.
 func (a *Agent) Run(ctx context.Context, input string, conversationID string) (*AgentResponse, error) {
@@ -316,7 +316,7 @@ func (a *Agent) Run(ctx context.Context, input string, conversationID string) (*
 	var eventCh <-chan *AgentEvent
 	var closeEvent func() error
 	if a.approvalHandler != nil {
-		wfInput.EventTypes = []AgentEventType{AgentEventToolApproval}
+		wfInput.EventTypes = []AgentEventType{AgentEventApproval}
 		eventCh, closeEvent, err = a.subscribeToAgentEvents(runCtx, wfInput.LocalChannelName)
 		if err != nil {
 			a.logger.Error("failed to subscribe to agent events", zap.String("workflowID", workflowID), zap.Error(err))
@@ -387,7 +387,7 @@ func (a *Agent) Run(ctx context.Context, input string, conversationID string) (*
 			}
 			return nil, runCtx.Err()
 		case ev := <-eventCh:
-			if ev == nil || ev.Type != AgentEventToolApproval || ev.Approval == nil || ev.Approval.ApprovalToken == "" {
+			if ev == nil || ev.Type != AgentEventApproval || ev.Approval == nil || ev.Approval.ApprovalToken == "" {
 				continue
 			}
 			approvalToken := ev.Approval.ApprovalToken
@@ -404,7 +404,7 @@ func (a *Agent) Run(ctx context.Context, input string, conversationID string) (*
 				Args:           ev.Approval.Args,
 				Respond:        onApproval,
 				Kind:           ev.Approval.Kind,
-				AgentName:      ev.Approval.AgentName,
+				AgentName:      ev.AgentName,
 				DelegateToName: ev.Approval.DelegateToName,
 			})
 			cancel()
@@ -484,8 +484,11 @@ func copyApprovalArgs(src map[string]any) map[string]any {
 }
 
 // RunStream starts the run and returns a channel of AgentEvent. Events are streamed until
-// AgentEventComplete. For tool approvals, receive AgentEventToolApproval and call OnApproval
-// as in the streaming examples.
+// AgentEventComplete from this agent (the root of the run). Complete events from delegated
+// sub-agents are still delivered but do not close the stream. After that root complete, the
+// channel stays open until the root workflow run finishes on Temporal (there is often more
+// work after the event, e.g. post-sub-agent activities), then closes.
+// For approvals (tool or delegation), receive AgentEventApproval and call OnApproval as in the streaming examples.
 // When using WithConversation, pass the conversation ID.
 func (a *Agent) RunStream(ctx context.Context, input string, conversationID string) (chan *AgentEvent, error) {
 	a.logger.Debug("run stream started", zap.String("agent", a.Name), zap.Int("inputLen", len(input)))
@@ -522,7 +525,7 @@ func (a *Agent) RunStream(ctx context.Context, input string, conversationID stri
 		LocalChannelName: eventChannelName(workflowID),
 		StreamingEnabled: a.streamEnabled,
 		ConversationID:   conversationID,
-		EventTypes:       []AgentEventType{AgentEventAll},
+		EventTypes:       []AgentEventType{agentEventAll},
 		SubAgentDepth:    0,
 		SubAgentRoutes:   a.buildSubAgentRoutes(),
 	}
@@ -571,7 +574,19 @@ func (a *Agent) RunStream(ctx context.Context, input string, conversationID stri
 	streamStarted = true
 	outCh := make(chan *AgentEvent, 64)
 	wfErrCh := make(chan error, 1)
+	var getWG sync.WaitGroup
+	getWG.Add(1)
 	go func() {
+		defer getWG.Done()
+		// cleanup/endRun only after Get returns. runCtx must stay valid until then so the workflow
+		// can finish (after root complete, work remains: e.g. SendAgentEventUpdateActivity—longer
+		// when a sub-agent child workflow just ran).
+		defer cleanup()
+		defer func() {
+			if runCancel != nil {
+				runCancel()
+			}
+		}()
 		var result AgentResponse
 		if err := workflowRun.Get(runCtx, &result); err != nil {
 			wfErrCh <- err
@@ -580,10 +595,6 @@ func (a *Agent) RunStream(ctx context.Context, input string, conversationID stri
 	go func() {
 		defer close(outCh)
 		defer func() { _ = closeEvent() }()
-		defer cleanup()
-		if runCancel != nil {
-			defer runCancel()
-		}
 		for {
 			select {
 			case <-runCtx.Done():
@@ -614,7 +625,11 @@ func (a *Agent) RunStream(ctx context.Context, input string, conversationID stri
 					continue
 				}
 				outCh <- ev
-				if ev.Type == AgentEventComplete {
+				if streamCompleteEndsRun(ev, a.Name) {
+					// Root complete is emitted before the workflow returns; after sub-agent delegation
+					// there is often more server-side work. Wait for Get+cleanup so the run reaches
+					// Completed before we close the channel (avoids Close() terminating a live run).
+					getWG.Wait()
 					return
 				}
 			}
@@ -624,17 +639,31 @@ func (a *Agent) RunStream(ctx context.Context, input string, conversationID stri
 	return outCh, nil
 }
 
+// streamCompleteEndsRun is true when this complete event should end RunStream for the root agent.
+// Sub-agent workflows emit AgentEventComplete too; those must not close the root stream.
+// Empty AgentName counts as root for backward compatibility.
+func streamCompleteEndsRun(ev *AgentEvent, rootName string) bool {
+	if ev == nil || ev.Type != AgentEventComplete {
+		return false
+	}
+	src := strings.TrimSpace(ev.AgentName)
+	root := strings.TrimSpace(rootName)
+	if src == "" {
+		return true
+	}
+	return src == root
+}
+
 // copyEventWithShortApprovalToken builds an event copy with a substituted approval identifier.
 func copyEventWithShortApprovalToken(ev *AgentEvent, shortToken string) *AgentEvent {
 	c := *ev
 	if c.Approval != nil {
-		c.Approval = &ToolApprovalEvent{
+		c.Approval = &ApprovalEvent{
 			ToolCallID:     ev.Approval.ToolCallID,
 			ToolName:       ev.Approval.ToolName,
 			Args:           ev.Approval.Args,
 			ApprovalToken:  shortToken,
 			Kind:           ev.Approval.Kind,
-			AgentName:      ev.Approval.AgentName,
 			DelegateToName: ev.Approval.DelegateToName,
 		}
 	}

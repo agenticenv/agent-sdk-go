@@ -73,7 +73,7 @@ func LoadConfig(path string) (*Config, error) {
 	v.SetDefault("temporal.taskQueue", "agent-sdk-go")
 	v.SetDefault("llm.provider", "openai")
 	v.SetDefault("llm.model", "gpt-4o")
-	v.SetDefault("llm.baseURL", "https://api.openai.com/v1")
+	v.SetDefault("llm.baseURL", "")
 	v.SetDefault("logger.level", "error")
 	v.SetDefault("logger.output", "logs/agent.log")
 
