@@ -29,11 +29,12 @@ Use this SDK when you want **LLM-driven agents** (tools, optional specialists) w
 ## Capabilities
 
 - **LLM integration** — OpenAI, Anthropic, and Gemini with tool/function calling
-- **Streaming** — Partial content and thinking deltas via `RunStream`
-- **Tools** — Built-in tools and custom tools via `interfaces.Tool`
+- **Streaming** — Partial content and thinking deltas via **RunStream**
+- **Tools** — Built-in tools and custom tools via **interfaces.Tool**
 - **Approval gates** — Optional human-in-the-loop approval before executing tools or delegating to sub-agents
 - **Sub-agents** — Delegate work to specialist agents you register
 - **Durable execution** — Agents survive restarts, run for minutes to days without losing state
+- **Distributed execution** — Agents run across **agent workers** and activities, horizontally scalable across multiple instances.
 - **Temporal runtime** — Agents run as workflows; durable execution, retries, and UI visibility come from Temporal
 
 ## Getting started
