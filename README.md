@@ -12,7 +12,7 @@ Build durable, long-running AI agents in Go — tool calling, human approvals, a
 >
 > **Runtime:** Requires a running Temporal cluster — [self-hosted](https://docs.temporal.io/self-hosted-guide) or [Temporal Cloud](https://temporal.io/cloud).
 >
-> **Version:** `v0.1.0` — Active development. Follows [semantic versioning](https://semver.org/); API may evolve before v1.0.0.
+> **Version:** `v0.0.10` — Active development. Follows [semantic versioning](https://semver.org/); API may evolve before v1.0.0.
 
 ## Overview
 
