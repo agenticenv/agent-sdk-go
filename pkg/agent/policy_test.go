@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/vvsynapse/agent-sdk-go/pkg/interfaces"
+	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 )
 
 // mockTool implements interfaces.Tool for policy tests.
@@ -12,8 +12,8 @@ type mockTool struct {
 	name string
 }
 
-func (m mockTool) Name() string                     { return m.name }
-func (m mockTool) Description() string              { return "mock" }
+func (m mockTool) Name() string                      { return m.name }
+func (m mockTool) Description() string               { return "mock" }
 func (m mockTool) Parameters() interfaces.JSONSchema { return interfaces.JSONSchema{} }
 func (m mockTool) Execute(ctx context.Context, args map[string]any) (any, error) {
 	return nil, nil
@@ -39,7 +39,7 @@ func TestAllowlistToolApprovalPolicy(t *testing.T) {
 	allowed := AllowlistToolApprovalPolicy("calculator", "echo")
 
 	tests := []struct {
-		toolName    string
+		toolName       string
 		expectApproval bool
 	}{
 		{"calculator", false},

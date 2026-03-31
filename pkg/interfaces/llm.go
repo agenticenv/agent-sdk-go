@@ -5,14 +5,14 @@ import (
 	"encoding/json"
 )
 
-//go:generate mockgen -destination=./mocks/mock_llm.go -package=mocks github.com/vvsynapse/agent-sdk-go/pkg/interfaces LLMClient
+//go:generate mockgen -destination=./mocks/mock_llm.go -package=mocks github.com/agenticenv/agent-sdk-go/pkg/interfaces LLMClient
 
 type LLMProvider string
 
 const (
 	LLMProviderOpenAI    LLMProvider = "openai"
 	LLMProviderAnthropic LLMProvider = "anthropic"
-	LLMProviderGemini   LLMProvider = "gemini"
+	LLMProviderGemini    LLMProvider = "gemini"
 )
 
 type LLMClient interface {

@@ -36,7 +36,7 @@ release:
     ### Install the SDK (library)
 
     ```bash
-    go get github.com/vvsynapse/agent-sdk-go@{{ .Tag }}
+    go get github.com/agenticenv/agent-sdk-go@{{ .Tag }}
     ```
 
     ### Install agentctl (CLI)
@@ -45,7 +45,7 @@ release:
 
     ---
   footer: |
-    **Full Changelog**: https://github.com/vvsynapse/agent-sdk-go/compare/{{ if .PreviousTag }}{{ .PreviousTag }}...{{ end }}{{ .Tag }}
+    **Full Changelog**: https://github.com/agenticenv/agent-sdk-go/compare/{{ if .PreviousTag }}{{ .PreviousTag }}...{{ end }}{{ .Tag }}
 
 changelog:
   use: github

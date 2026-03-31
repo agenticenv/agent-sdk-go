@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
+	"github.com/agenticenv/agent-sdk-go/pkg/logger"
 	"github.com/google/uuid"
-	"github.com/vvsynapse/agent-sdk-go/pkg/interfaces"
-	"github.com/vvsynapse/agent-sdk-go/pkg/logger"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/log"
 	"go.uber.org/zap"

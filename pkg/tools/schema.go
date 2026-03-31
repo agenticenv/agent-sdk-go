@@ -15,7 +15,7 @@
 package tools
 
 import (
-	"github.com/vvsynapse/agent-sdk-go/pkg/interfaces"
+	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 )
 
 // ParamString returns a JSON Schema for a string parameter.

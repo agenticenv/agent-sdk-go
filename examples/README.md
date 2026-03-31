@@ -1,6 +1,6 @@
 # Examples
 
-These programs exercise **agent-sdk-go** (`github.com/vvsynapse/agent-sdk-go`). The SDK **requires a Temporal cluster**: agents execute as Temporal workflows, so a running Temporal service is mandatory—not optional—for every example below.
+These programs exercise **agent-sdk-go** (`github.com/agenticenv/agent-sdk-go`). The SDK **requires a Temporal cluster**: agents execute as Temporal workflows, so a running Temporal service is mandatory—not optional—for every example below.
 
 ## Prerequisites
 

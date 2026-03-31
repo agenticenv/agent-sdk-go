@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-//go:generate mockgen -destination=./mocks/mock_conversation.go -package=mocks github.com/vvsynapse/agent-sdk-go/pkg/interfaces Conversation
+//go:generate mockgen -destination=./mocks/mock_conversation.go -package=mocks github.com/agenticenv/agent-sdk-go/pkg/interfaces Conversation
 
 type MessageRole string
 

@@ -7,8 +7,8 @@ import (
 	"os"
 	"strings"
 
-	config "github.com/vvsynapse/agent-sdk-go/examples"
-	"github.com/vvsynapse/agent-sdk-go/pkg/agent"
+	config "github.com/agenticenv/agent-sdk-go/examples"
+	"github.com/agenticenv/agent-sdk-go/pkg/agent"
 )
 
 func main() {

@@ -10,8 +10,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/redis/go-redis/v9"
-	"github.com/vvsynapse/agent-sdk-go/pkg/interfaces"
 )
 
 const keyPrefix = "conversation"

@@ -1,10 +1,10 @@
 # AI Agent SDK for Go, Powered by Temporal
 
-[![CI](https://github.com/vvsynapse/agent-sdk-go/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/vvsynapse/agent-sdk-go/actions)
-[![Release](https://img.shields.io/github/v/release/vvsynapse/agent-sdk-go?label=Release)](https://github.com/vvsynapse/agent-sdk-go/releases)
-[![Go Reference](https://pkg.go.dev/badge/github.com/vvsynapse/agent-sdk-go.svg)](https://pkg.go.dev/github.com/vvsynapse/agent-sdk-go)
-[![Go Report Card](https://goreportcard.com/badge/github.com/vvsynapse/agent-sdk-go)](https://goreportcard.com/report/github.com/vvsynapse/agent-sdk-go)
-[![License](https://img.shields.io/github/license/vvsynapse/agent-sdk-go?label=License)](LICENSE)
+[![CI](https://github.com/agenticenv/agent-sdk-go/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/agenticenv/agent-sdk-go/actions)
+[![Release](https://img.shields.io/github/v/release/agenticenv/agent-sdk-go?label=Release)](https://github.com/agenticenv/agent-sdk-go/releases)
+[![Go Reference](https://pkg.go.dev/badge/github.com/agenticenv/agent-sdk-go.svg)](https://pkg.go.dev/github.com/agenticenv/agent-sdk-go)
+[![Go Report Card](https://goreportcard.com/badge/github.com/agenticenv/agent-sdk-go)](https://goreportcard.com/report/github.com/agenticenv/agent-sdk-go)
+[![License](https://img.shields.io/github/license/agenticenv/agent-sdk-go?label=License)](LICENSE)
 
 Build durable, long-running AI agents in Go — tool calling, human approvals, and sub-agent delegation, powered by **[Temporal](https://temporal.io)**.
 
@@ -41,19 +41,19 @@ Use this SDK when you want **LLM-driven agents** (tools, optional specialists) w
 
 Prerequisites: a running [Temporal](https://docs.temporal.io/self-hosted-guide) environment (required — agents do not run without it), Go 1.21+, and credentials for whatever LLM you plug in.
 
-**Module:** `github.com/vvsynapse/agent-sdk-go`
+**Module:** `github.com/agenticenv/agent-sdk-go`
 
 ```bash
-go get github.com/vvsynapse/agent-sdk-go@latest
+go get github.com/agenticenv/agent-sdk-go@latest
 ```
 
 ### Create an agent and run
 
 ```go
 import (
-    "github.com/vvsynapse/agent-sdk-go/pkg/agent"
-    "github.com/vvsynapse/agent-sdk-go/pkg/llm"
-    "github.com/vvsynapse/agent-sdk-go/pkg/llm/openai"
+    "github.com/agenticenv/agent-sdk-go/pkg/agent"
+    "github.com/agenticenv/agent-sdk-go/pkg/llm"
+    "github.com/agenticenv/agent-sdk-go/pkg/llm/openai"
 )
 
 llmClient, _ := openai.NewClient(
@@ -386,7 +386,7 @@ a, _ := agent.NewAgent(
 **JSON with schema:** Use `interfaces.ResponseFormatJSON` and a valid JSON Schema. The schema must have `type: "object"` at the root with `properties`:
 
 ```go
-import "github.com/vvsynapse/agent-sdk-go/pkg/interfaces"
+import "github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 
 a, _ := agent.NewAgent(
     agent.WithTemporalConfig(...),
@@ -511,8 +511,8 @@ result, _ := a.Run(ctx, "Hello", "session-1")
 
 ```go
 import (
-    "github.com/vvsynapse/agent-sdk-go/pkg/agent"
-    "github.com/vvsynapse/agent-sdk-go/pkg/conversation/inmem"
+    "github.com/agenticenv/agent-sdk-go/pkg/agent"
+    "github.com/agenticenv/agent-sdk-go/pkg/conversation/inmem"
 )
 
 conv := inmem.NewInMemoryConversation(inmem.WithMaxSize(100))

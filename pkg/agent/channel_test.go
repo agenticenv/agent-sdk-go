@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/vvsynapse/agent-sdk-go/pkg/logger"
+	"github.com/agenticenv/agent-sdk-go/pkg/logger"
 )
 
 func TestAgentChannel_PublishSubscribe(t *testing.T) {

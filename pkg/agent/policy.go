@@ -1,7 +1,7 @@
 package agent
 
 import (
-	"github.com/vvsynapse/agent-sdk-go/pkg/interfaces"
+	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 )
 
 // RequireAllToolApprovalPolicy requires approval for every tool. Default when no policy is set.

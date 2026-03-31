@@ -3,7 +3,7 @@ package llm
 import (
 	"errors"
 
-	"github.com/vvsynapse/agent-sdk-go/pkg/logger"
+	"github.com/agenticenv/agent-sdk-go/pkg/logger"
 	"go.temporal.io/sdk/log"
 )
 

@@ -6,13 +6,13 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
+	"github.com/agenticenv/agent-sdk-go/pkg/llm"
+	"github.com/agenticenv/agent-sdk-go/pkg/llm/anthropic"
+	"github.com/agenticenv/agent-sdk-go/pkg/llm/gemini"
+	"github.com/agenticenv/agent-sdk-go/pkg/llm/openai"
+	"github.com/agenticenv/agent-sdk-go/pkg/logger"
 	"github.com/spf13/viper"
-	"github.com/vvsynapse/agent-sdk-go/pkg/interfaces"
-	"github.com/vvsynapse/agent-sdk-go/pkg/llm"
-	"github.com/vvsynapse/agent-sdk-go/pkg/llm/anthropic"
-	"github.com/vvsynapse/agent-sdk-go/pkg/llm/gemini"
-	"github.com/vvsynapse/agent-sdk-go/pkg/llm/openai"
-	"github.com/vvsynapse/agent-sdk-go/pkg/logger"
 	"go.temporal.io/sdk/log"
 )
 

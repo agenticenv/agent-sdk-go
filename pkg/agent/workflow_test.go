@@ -3,7 +3,7 @@ package agent
 import (
 	"testing"
 
-	"github.com/vvsynapse/agent-sdk-go/pkg/interfaces"
+	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 )
 
 func TestToolApprovalMetadata_regularTool(t *testing.T) {

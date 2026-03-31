@@ -9,10 +9,10 @@ import (
 	"os"
 	"strings"
 
-	config "github.com/vvsynapse/agent-sdk-go/examples"
-	"github.com/vvsynapse/agent-sdk-go/pkg/agent"
-	"github.com/vvsynapse/agent-sdk-go/pkg/tools"
-	"github.com/vvsynapse/agent-sdk-go/pkg/tools/calculator"
+	config "github.com/agenticenv/agent-sdk-go/examples"
+	"github.com/agenticenv/agent-sdk-go/pkg/agent"
+	"github.com/agenticenv/agent-sdk-go/pkg/tools"
+	"github.com/agenticenv/agent-sdk-go/pkg/tools/calculator"
 )
 
 // This example demonstrates that tool approval events from a sub-agent (MathSpecialist)

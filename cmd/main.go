@@ -10,16 +10,16 @@ import (
 	"os"
 	"strings"
 
-	"github.com/vvsynapse/agent-sdk-go/pkg/agent"
-	"github.com/vvsynapse/agent-sdk-go/pkg/conversation/inmem"
-	"github.com/vvsynapse/agent-sdk-go/pkg/tools"
-	"github.com/vvsynapse/agent-sdk-go/pkg/tools/calculator"
-	"github.com/vvsynapse/agent-sdk-go/pkg/tools/currenttime"
-	"github.com/vvsynapse/agent-sdk-go/pkg/tools/echo"
-	"github.com/vvsynapse/agent-sdk-go/pkg/tools/random"
-	"github.com/vvsynapse/agent-sdk-go/pkg/tools/search"
-	"github.com/vvsynapse/agent-sdk-go/pkg/tools/weather"
-	"github.com/vvsynapse/agent-sdk-go/pkg/tools/wikipedia"
+	"github.com/agenticenv/agent-sdk-go/pkg/agent"
+	"github.com/agenticenv/agent-sdk-go/pkg/conversation/inmem"
+	"github.com/agenticenv/agent-sdk-go/pkg/tools"
+	"github.com/agenticenv/agent-sdk-go/pkg/tools/calculator"
+	"github.com/agenticenv/agent-sdk-go/pkg/tools/currenttime"
+	"github.com/agenticenv/agent-sdk-go/pkg/tools/echo"
+	"github.com/agenticenv/agent-sdk-go/pkg/tools/random"
+	"github.com/agenticenv/agent-sdk-go/pkg/tools/search"
+	"github.com/agenticenv/agent-sdk-go/pkg/tools/weather"
+	"github.com/agenticenv/agent-sdk-go/pkg/tools/wikipedia"
 )
 
 const (
