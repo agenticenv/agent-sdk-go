@@ -464,7 +464,7 @@ Choose implementation by deployment:
 | Deployment                                                        | Use                                                       |
 | ----------------------------------------------------------------- | --------------------------------------------------------- |
 | **Single process** (agent and worker in same process)             | `inmem.NewInMemoryConversation`                           |
-| **Remote workers** (`DisableLocalWorker` or `EnableRemoteWorkers`) | `redis.NewRedisConversation` or another distributed store |
+| **Remote workers** (`DisableLocalWorker` or `EnableRemoteWorkers()`) | `redis.NewRedisConversation` or another distributed store |
 
 To add a new conversation store (e.g., Postgres, MongoDB), implement the `interfaces.Conversation` interface in `[pkg/interfaces/conversation.go](pkg/interfaces/conversation.go)`. The interface requires `AddMessage`, `ListMessages`, `Clear`, and `IsDistributed`. See `pkg/conversation/inmem` and `pkg/conversation/redis` for reference.
 
@@ -541,7 +541,7 @@ a.Run(ctx, "What's my name?", convID) // agent uses history: "Alice"
 - **WithResponseFormat**: LLM response format. Omit for text-only. Use `&interfaces.ResponseFormat{Type, Name, Schema}` for JSON with schema. See [Response format](#response-format).
 - **WithConversation**: Message history store. Use `inmem` for single process; `redis` for remote workers. Pass same `conversationID` to `Run` and `RunStream` for a session. See [Conversation](#conversation-message-history).
 - **WithConversationSize**: Max messages to fetch for LLM context (default 20). Only applies when `WithConversation` is set.
-- **EnableRemoteWorkers**: Set `true` when using `DisableLocalWorker` with approval or streaming.
+- **EnableRemoteWorkers**: Pass `EnableRemoteWorkers()` when using `DisableLocalWorker` with approval or streaming (starts the event worker/workflow path).
 - **WithSubAgents**: Attach specialist agents the main agent can delegate to. Each needs its own task queue and worker. See [Sub-agents](#sub-agents).
 - **WithMaxSubAgentDepth**: Maximum delegation hops from this agent (default 2). See [Sub-agents](#sub-agents).
 - **WithMaxIterations**: Max LLM rounds (default 5).
@@ -598,7 +598,7 @@ Before using this SDK in production, align with what it actually exposes and how
 - **Run and approval limits** — Use `WithTimeout` and/or a context deadline on `Run` / `RunStream`; use `WithApprovalTimeout` when tools require approval (activity retry counts inside workflows are fixed in the SDK, not user-tunable).
 - **Bound agent loops** — Set `WithMaxIterations` and, if you use sub-agents, `WithMaxSubAgentDepth`.
 - **Tool and delegation risk** — Choose `WithToolApprovalPolicy` per agent (main and specialists); use human review for dangerous tools and delegation where policy requires it.
-- **Split processes** — If you use `DisableLocalWorker` or `EnableRemoteWorkers`, use a distributed conversation store (e.g. Redis) and exercise approval/streaming paths in integration tests.
+- **Split processes** — If you use `DisableLocalWorker` or `EnableRemoteWorkers()`, use a distributed conversation store (e.g. Redis) and exercise approval/streaming paths in integration tests.
 - **Secrets and data** — Keep LLM and Temporal credentials out of source control; treat tool arguments and model output as untrusted in your app.
 - **LLM safety** — Validate and sanitize prompts, tool args, and model output at your integration boundary.
 - **Operations** — Use your logger (`WithLogger` / `WithLogLevel`) and the Temporal UI/history for a given run; after upgrading this module, confirm workflows still replay in your environment.

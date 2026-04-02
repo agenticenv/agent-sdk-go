@@ -300,7 +300,7 @@ func buildAgentConfig(opts []Option) (*agentConfig, error) {
 		return nil, errors.New("LLM client is required")
 	}
 	if c.conversation != nil && (c.enableRemoteWorkers || c.disableLocalWorker) && !c.conversation.IsDistributed() {
-		return nil, errors.New("in-memory conversation cannot be used with remote workers (DisableLocalWorker or EnableRemoteWorkers): use distributed storage such as redis.NewRedisConversation")
+		return nil, errors.New("in-memory conversation cannot be used with remote workers (DisableLocalWorker or EnableRemoteWorkers()): use distributed storage such as redis.NewRedisConversation")
 	}
 	if c.conversationSize <= 0 {
 		c.conversationSize = 20

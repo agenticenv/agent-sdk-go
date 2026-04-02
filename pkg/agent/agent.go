@@ -67,7 +67,7 @@ func buildAgent(opts []Option) (*Agent, error) {
 		eventbus:    eventbus.NewInmem(cfg.logger),
 	}
 	if a.disableLocalWorker && a.streamEnabled && !a.enableRemoteWorkers {
-		return nil, fmt.Errorf("DisableLocalWorker with streaming requires EnableRemoteWorkers")
+		return nil, fmt.Errorf("DisableLocalWorker with streaming requires EnableRemoteWorkers()")
 	}
 
 	if !a.disableLocalWorker {
