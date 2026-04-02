@@ -47,7 +47,7 @@ func NewAgentWorkerDefault() *AgentWorker {
 }
 
 // NewAgentWorker creates an AgentWorker that polls and executes agent workflows.
-// Same options as NewAgent. Use when the agent is created with DisableWorker().
+// Same options as NewAgent. Use when the agent is created with DisableLocalWorker().
 func NewAgentWorker(opts ...Option) (*AgentWorker, error) {
 	cfg, err := buildAgentConfigForWorker(opts)
 	if err != nil {

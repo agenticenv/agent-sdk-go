@@ -66,11 +66,11 @@ func buildAgent(opts []Option) (*Agent, error) {
 		agentConfig: *cfg,
 		eventbus:    eventbus.NewInmem(cfg.logger),
 	}
-	if a.disableWorker && a.streamEnabled && !a.enableRemoteWorkers {
-		return nil, fmt.Errorf("DisableWorker with streaming requires WithEnableRemoteWorkers(true)")
+	if a.disableLocalWorker && a.streamEnabled && !a.enableRemoteWorkers {
+		return nil, fmt.Errorf("DisableLocalWorker with streaming requires EnableRemoteWorkers")
 	}
 
-	if !a.disableWorker {
+	if !a.disableLocalWorker {
 		a.localAgentWorker = newAgentWorkerFromConfig(cfg, a.eventbus)
 	}
 	// Sub-agents must share the parent's in-memory pub/sub so Run/RunStream subscribers on the main run receive

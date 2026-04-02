@@ -34,7 +34,7 @@ The examples use `TEMPORAL_HOST`, `TEMPORAL_PORT`, `TEMPORAL_NAMESPACE` from `.e
 | `agent_with_custom_tools` | Custom tools via `WithTools` — implementing `interfaces.Tool` |
 | `multiple_agents` | Multiple agents with `WithInstanceId` — sequential or concurrent |
 | `agent_with_subagents` | Main agent + math specialist — `WithSubAgents`, separate task queues |
-| `agent_with_worker` | Agent and worker in separate processes — `DisableWorker` + `NewAgentWorker` |
+| `agent_with_worker` | Agent and worker in separate processes — `DisableLocalWorker` + `NewAgentWorker` |
 
 ## Setup
 

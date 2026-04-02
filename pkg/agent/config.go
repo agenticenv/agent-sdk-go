@@ -8,12 +8,13 @@ import (
 	"strings"
 	"time"
 
+	"log/slog"
+
 	"github.com/agenticenv/agent-sdk-go/internal/runtime/temporal"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
 	"github.com/google/uuid"
 	"go.temporal.io/sdk/client"
-	"log/slog"
 )
 
 // TemporalConfig holds Temporal connection settings (Host, Port, Namespace) and the task queue name.
@@ -23,7 +24,7 @@ import (
 // For multiple instances of the same agent (e.g. scaled pods), use WithInstanceId() so each
 // instance gets a unique queue derived as {TaskQueue}-{InstanceId}.
 //
-// When using DisableWorker, the agent and NewAgentWorker must use the same TaskQueue (and
+// When using DisableLocalWorker, the agent and NewAgentWorker must use the same TaskQueue (and
 // same InstanceId if set) so they pair correctly.
 type TemporalConfig struct {
 	Host      string
@@ -44,7 +45,7 @@ type LLMSampling struct {
 // agentConfig holds shared configuration for Agent and AgentWorker.
 //
 // Option applicability:
-//   - Agent only: EnableRemoteWorkers, DisableWorker, WithApprovalHandler, WithTimeout
+//   - Agent only: EnableRemoteWorkers, DisableLocalWorker, WithApprovalHandler, WithTimeout
 //   - AgentWorker only: (none—worker inherits from options passed to NewAgentWorker)
 //   - Both: WithName, WithDescription, WithSystemPrompt, WithTemporalConfig, WithTemporalClient,
 //     WithTaskQueue, WithInstanceId, WithLLMClient, WithToolApprovalPolicy, WithTools,
@@ -82,7 +83,7 @@ type agentConfig struct {
 	llmSampling *LLMSampling
 
 	// build-time flags
-	disableWorker       bool // true when user calls DisableWorker; no local worker. Agent only.
+	disableLocalWorker  bool // true when user calls DisableLocalWorker; no local worker. Agent only.
 	enableRemoteWorkers bool // true: run event worker & workflow. false (default): use agentChannel only. Agent only.
 	remoteWorker        bool // true when AgentWorker; activities use UpdateWorkflow
 	agentWorker         bool
@@ -211,16 +212,16 @@ func WithApprovalTimeout(d time.Duration) Option {
 	return func(c *agentConfig) { c.approvalTimeout = d }
 }
 
-// WithEnableRemoteWorkers enables the event worker and event workflow. Agent only. Default false.
-// When false (default): no event worker/workflow; approvals and events use agentChannel directly.
-// When true: run event worker and event workflow; required when using NewAgentWorker (DisableWorker).
-func WithEnableRemoteWorkers(enable bool) Option {
-	return func(c *agentConfig) { c.enableRemoteWorkers = enable }
+// EnableRemoteWorkers enables the event worker and event workflow. Agent only.
+// If this option is not passed, approvals and events use agentChannel directly (no event worker/workflow).
+// Call EnableRemoteWorkers() to run the event worker and event workflow (required when using NewAgentWorker with DisableLocalWorker, and for some approval/streaming setups).
+func EnableRemoteWorkers() Option {
+	return func(c *agentConfig) { c.enableRemoteWorkers = true }
 }
 
-// DisableWorker marks to skip local worker creation. Agent only. Use with NewAgentWorker.
-func DisableWorker() Option {
-	return func(c *agentConfig) { c.disableWorker = true }
+// DisableLocalWorker marks to skip local worker creation. Agent only. Use with NewAgentWorker.
+func DisableLocalWorker() Option {
+	return func(c *agentConfig) { c.disableLocalWorker = true }
 }
 
 // WithConversation sets the conversation for message history. Applies to Agent and AgentWorker.
@@ -298,8 +299,8 @@ func buildAgentConfig(opts []Option) (*agentConfig, error) {
 	if c.LLMClient == nil {
 		return nil, errors.New("LLM client is required")
 	}
-	if c.conversation != nil && (c.enableRemoteWorkers || c.disableWorker) && !c.conversation.IsDistributed() {
-		return nil, errors.New("in-memory conversation cannot be used with remote workers (DisableWorker or WithEnableRemoteWorkers): use distributed storage such as redis.NewRedisConversation")
+	if c.conversation != nil && (c.enableRemoteWorkers || c.disableLocalWorker) && !c.conversation.IsDistributed() {
+		return nil, errors.New("in-memory conversation cannot be used with remote workers (DisableLocalWorker or EnableRemoteWorkers): use distributed storage such as redis.NewRedisConversation")
 	}
 	if c.conversationSize <= 0 {
 		c.conversationSize = 20
@@ -362,7 +363,7 @@ func buildAgentConfig(opts []Option) (*agentConfig, error) {
 		slog.Bool("ownsTemporalClient", c.ownsTemporalClient),
 		slog.Int("maxIterations", c.maxIterations),
 		slog.Bool("streamEnabled", c.streamEnabled),
-		slog.Bool("disableWorker", c.disableWorker),
+		slog.Bool("disableLocalWorker", c.disableLocalWorker),
 		slog.Bool("enableRemoteWorkers", c.enableRemoteWorkers),
 		slog.Bool("remoteWorker", c.remoteWorker),
 		slog.Bool("hasApprovalHandler", c.approvalHandler != nil),

@@ -25,8 +25,8 @@ func main() {
 	baseOpts := opts.Common(cfg.Host, cfg.Port, cfg.Namespace, cfg.TaskQueue, llmClient, config.NewLoggerFromLogConfig(cfg))
 	// Agent-specific: no embedded worker, use remote workers, timeout for interactive use
 	agentOpts := append(baseOpts,
-		agent.DisableWorker(),
-		agent.WithEnableRemoteWorkers(true),
+		agent.DisableLocalWorker(),
+		agent.EnableRemoteWorkers(),
 		agent.WithTimeout(3*time.Minute),
 	)
 
