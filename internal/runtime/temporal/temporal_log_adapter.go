@@ -30,9 +30,7 @@ type logAdapter struct {
 
 func keyvalsToAny(keyvals []interface{}) []any {
 	out := make([]any, 0, len(keyvals))
-	for _, kv := range keyvals {
-		out = append(out, kv)
-	}
+	out = append(out, keyvals...)
 	return out
 }
 
