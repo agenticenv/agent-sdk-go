@@ -1,23 +1,27 @@
 package agent
 
 import (
+	"context"
+
+	"log/slog"
+
+	"github.com/agenticenv/agent-sdk-go/internal/eventbus"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
-	"go.uber.org/zap"
 )
 
 // AgentWorker runs the Temporal worker for an agent. It owns run worker creation and
 // registration of workflows and activities from agent_workflow.go.
 type AgentWorker struct {
-	config       *agentConfig
-	agentChannel *agentChannel // set when local (same process); nil when remote
-	worker       worker.Worker
+	config   *agentConfig
+	eventbus eventbus.EventBus // set when local (same process); nil when remote
+	worker   worker.Worker
 }
 
 // createAgentWorker creates and registers a Temporal worker for the agent's run workflow and activities.
 func createAgentWorker(aw *AgentWorker) worker.Worker {
-	aw.config.logger.Debug("creating agent worker", zap.String("taskQueue", aw.config.taskQueue))
+	aw.config.logger.Debug(context.Background(), "creating agent worker", slog.String("taskQueue", aw.config.taskQueue))
 	w := worker.New(aw.config.temporalClient, aw.config.taskQueue, worker.Options{})
 	w.RegisterWorkflowWithOptions(aw.AgentWorkflow, workflow.RegisterOptions{Name: "AgentWorkflow"})
 	w.RegisterActivityWithOptions(aw.AgentLLMActivity, activity.RegisterOptions{Name: "AgentLLMActivity"})
@@ -31,8 +35,8 @@ func createAgentWorker(aw *AgentWorker) worker.Worker {
 
 // newAgentWorkerFromConfig creates an AgentWorker from agentConfig.
 // agentChannel is passed when workers run locally (same process); nil for remote workers.
-func newAgentWorkerFromConfig(cfg *agentConfig, ch *agentChannel) *AgentWorker {
-	aw := &AgentWorker{config: cfg, agentChannel: ch}
+func newAgentWorkerFromConfig(cfg *agentConfig, eb eventbus.EventBus) *AgentWorker {
+	aw := &AgentWorker{config: cfg, eventbus: eb}
 	aw.worker = createAgentWorker(aw)
 	return aw
 }
@@ -56,7 +60,7 @@ func NewAgentWorker(opts ...Option) (*AgentWorker, error) {
 // Start starts the worker (blocks until Stop is called).
 func (aw *AgentWorker) Start() error {
 	if aw.config != nil && aw.config.logger != nil {
-		aw.config.logger.Info("agent worker starting", zap.String("taskQueue", aw.config.taskQueue))
+		aw.config.logger.Info(context.Background(), "agent worker starting", slog.String("taskQueue", aw.config.taskQueue))
 	}
 	return aw.worker.Start()
 }
@@ -64,7 +68,7 @@ func (aw *AgentWorker) Start() error {
 // stop stops the worker. Unexported; Agent calls it when closing embedded worker.
 func (aw *AgentWorker) stop() {
 	if aw.config != nil && aw.config.logger != nil {
-		aw.config.logger.Debug("agent worker stopping", zap.String("taskQueue", aw.config.taskQueue))
+		aw.config.logger.Debug(context.Background(), "agent worker stopping", slog.String("taskQueue", aw.config.taskQueue))
 	}
 	aw.worker.Stop()
 }
@@ -73,7 +77,7 @@ func (aw *AgentWorker) stop() {
 // Does not close the client when it was provided via WithTemporalClient (caller owns the lifecycle).
 func (aw *AgentWorker) Close() {
 	if aw.config != nil && aw.config.logger != nil {
-		aw.config.logger.Info("agent worker closing", zap.String("taskQueue", aw.config.taskQueue))
+		aw.config.logger.Info(context.Background(), "agent worker closing", slog.String("taskQueue", aw.config.taskQueue))
 	}
 	aw.stop()
 	if aw.config != nil && aw.config.temporalClient != nil && aw.config.ownsTemporalClient {

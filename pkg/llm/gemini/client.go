@@ -8,7 +8,7 @@ import (
 
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/llm"
-	"go.uber.org/zap"
+	"log/slog"
 	"google.golang.org/genai"
 )
 
@@ -107,11 +107,11 @@ func (c *Client) Generate(ctx context.Context, req *interfaces.LLMRequest) (*int
 	contents := messagesToGemini(req)
 	config := c.buildConfig(req)
 
-	c.Logger.Debug("generating gemini response",
-		zap.String("model", c.Model),
-		zap.Int("messageCount", len(req.Messages)),
-		zap.Int("toolCount", len(req.Tools)),
-		zap.Bool("hasSystemMessage", req.SystemMessage != ""))
+	c.Logger.Debug(ctx, "generating gemini response",
+		slog.String("model", c.Model),
+		slog.Int("messageCount", len(req.Messages)),
+		slog.Int("toolCount", len(req.Tools)),
+		slog.Bool("hasSystemMessage", req.SystemMessage != ""))
 
 	resp, err := c.client.Models.GenerateContent(ctx, c.Model, contents, config)
 	if err != nil {
@@ -127,10 +127,10 @@ func (c *Client) Generate(ctx context.Context, req *interfaces.LLMRequest) (*int
 			toolNames = append(toolNames, tc.ToolName)
 		}
 	}
-	c.Logger.Debug("gemini response generated",
-		zap.Int("contentLen", len(content)),
-		zap.Int("toolCallCount", len(toolNames)),
-		zap.Strings("toolNames", toolNames))
+	c.Logger.Debug(ctx, "gemini response generated",
+		slog.Int("contentLen", len(content)),
+		slog.Int("toolCallCount", len(toolNames)),
+		slog.Any("toolNames", toolNames))
 
 	metadata := map[string]any{}
 	if len(resp.Candidates) > 0 && resp.Candidates[0].FinishReason != "" {
@@ -148,10 +148,10 @@ func (c *Client) Generate(ctx context.Context, req *interfaces.LLMRequest) (*int
 }
 
 func (c *Client) GenerateStream(ctx context.Context, req *interfaces.LLMRequest) (interfaces.LLMStream, error) {
-	c.Logger.Debug("starting gemini stream",
-		zap.String("model", c.Model),
-		zap.Int("messageCount", len(req.Messages)),
-		zap.Int("toolCount", len(req.Tools)))
+	c.Logger.Debug(ctx, "starting gemini stream",
+		slog.String("model", c.Model),
+		slog.Int("messageCount", len(req.Messages)),
+		slog.Int("toolCount", len(req.Tools)))
 	contents := messagesToGemini(req)
 	config := c.buildConfig(req)
 	seq := c.client.Models.GenerateContentStream(ctx, c.Model, contents, config)

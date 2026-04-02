@@ -8,12 +8,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agenticenv/agent-sdk-go/internal/runtime/temporal"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
 	"github.com/google/uuid"
 	"go.temporal.io/sdk/client"
-	"go.temporal.io/sdk/log"
-	"go.uber.org/zap"
+	"log/slog"
 )
 
 // TemporalConfig holds Temporal connection settings (Host, Port, Namespace) and the task queue name.
@@ -66,7 +66,7 @@ type agentConfig struct {
 	toolApprovalPolicy interfaces.AgentToolApprovalPolicy
 	maxIterations      int
 	streamEnabled      bool
-	logger             log.Logger
+	logger             logger.Logger
 	logLevel           string
 	approvalHandler    ApprovalHandler
 	timeout            time.Duration
@@ -176,9 +176,16 @@ func WithStream(enable bool) Option {
 	return func(c *agentConfig) { c.streamEnabled = enable }
 }
 
-// WithLogger sets the logger. Applies to Agent and AgentWorker.
-func WithLogger(l log.Logger) Option {
+// WithLogger sets the SDK logger (structured logging with log/slog-style attributes).
+// If unset, DefaultLogger is used at WithLogLevel (default "error"), writing to stderr.
+// Use NoopLogger() to disable SDK logging entirely.
+func WithLogger(l logger.Logger) Option {
 	return func(c *agentConfig) { c.logger = l }
+}
+
+// NoopLogger returns a logger that discards all SDK log output. Use with WithLogger(NoopLogger()).
+func NoopLogger() logger.Logger {
+	return logger.NoopLogger()
 }
 
 // WithLogLevel sets the log level. Applies to Agent and AgentWorker.
@@ -327,7 +334,7 @@ func buildAgentConfig(opts []Option) (*agentConfig, error) {
 		c.logLevel = "error"
 	}
 	if c.logger == nil {
-		c.logger = logger.NewZapAdapter(logger.NewZapLoggerWithConfig(logger.ZapLoggerConfig{Level: c.logLevel}))
+		c.logger = logger.DefaultLogger(c.logLevel)
 	}
 
 	if c.temporalConfig != nil {
@@ -345,24 +352,25 @@ func buildAgentConfig(opts []Option) (*agentConfig, error) {
 		c.taskQueue = c.taskQueue + "-" + c.instanceId
 	}
 
-	c.logger.Info("agent config built", zap.String("name", c.Name), zap.String("taskQueue", c.taskQueue))
+	ctx := context.Background()
+	c.logger.Info(ctx, "agent config built", slog.String("name", c.Name), slog.String("taskQueue", c.taskQueue))
 	// Debug: full config summary for troubleshooting (no sensitive: systemPrompt, API keys)
-	c.logger.Debug("agent config",
-		zap.String("name", c.Name),
-		zap.String("taskQueue", c.taskQueue),
-		zap.String("instanceId", c.instanceId),
-		zap.Bool("ownsTemporalClient", c.ownsTemporalClient),
-		zap.Int("maxIterations", c.maxIterations),
-		zap.Bool("streamEnabled", c.streamEnabled),
-		zap.Bool("disableWorker", c.disableWorker),
-		zap.Bool("enableRemoteWorkers", c.enableRemoteWorkers),
-		zap.Bool("remoteWorker", c.remoteWorker),
-		zap.Bool("hasApprovalHandler", c.approvalHandler != nil),
-		zap.Duration("timeout", c.timeout),
-		zap.Duration("approvalTimeout", c.approvalTimeout),
-		zap.String("logLevel", c.logLevel),
-		zap.Int("toolCount", len(c.toolsList())),
-		zap.Bool("hasConversation", c.conversation != nil))
+	c.logger.Debug(ctx, "agent config",
+		slog.String("name", c.Name),
+		slog.String("taskQueue", c.taskQueue),
+		slog.String("instanceId", c.instanceId),
+		slog.Bool("ownsTemporalClient", c.ownsTemporalClient),
+		slog.Int("maxIterations", c.maxIterations),
+		slog.Bool("streamEnabled", c.streamEnabled),
+		slog.Bool("disableWorker", c.disableWorker),
+		slog.Bool("enableRemoteWorkers", c.enableRemoteWorkers),
+		slog.Bool("remoteWorker", c.remoteWorker),
+		slog.Bool("hasApprovalHandler", c.approvalHandler != nil),
+		slog.Duration("timeout", c.timeout),
+		slog.Duration("approvalTimeout", c.approvalTimeout),
+		slog.String("logLevel", c.logLevel),
+		slog.Int("toolCount", len(c.toolsList())),
+		slog.Bool("hasConversation", c.conversation != nil))
 	return c, nil
 }
 
@@ -534,13 +542,14 @@ func (c *agentConfig) hasApprovalTools() bool {
 	return false
 }
 
-func newTemporalClient(config *TemporalConfig, logger log.Logger) (client.Client, error) {
-	logger.Info("connecting to temporal server", zap.String("host", config.Host), zap.Int("port", config.Port))
+func newTemporalClient(config *TemporalConfig, sdkLog logger.Logger) (client.Client, error) {
+	ctx := context.Background()
+	sdkLog.Info(ctx, "connecting to temporal server", slog.String("host", config.Host), slog.Int("port", config.Port))
 
 	clientOptions := client.Options{
 		HostPort:                config.Host + ":" + strconv.Itoa(config.Port),
 		Namespace:               config.Namespace,
-		Logger:                  logger,
+		Logger:                  temporal.NewLogAdapter(sdkLog),
 		WorkerHeartbeatInterval: -1, // Disable; requires Temporal server 1.29.1+ with frontend.WorkerHeartbeatsEnabled=true
 	}
 
@@ -571,10 +580,10 @@ func newTemporalClient(config *TemporalConfig, logger log.Logger) (client.Client
 			if !clientReady {
 				c, err = client.Dial(clientOptions)
 				if err == nil {
-					logger.Info("successfully created temporal client, checking namespace availability")
+					sdkLog.Info(ctx, "successfully created temporal client, checking namespace availability")
 					clientReady = true
 				} else {
-					logger.Info("failed to create temporal client, dialing again...", zap.Error(err))
+					sdkLog.Info(ctx, "failed to create temporal client, dialing again...", slog.Any("error", err))
 				}
 			} else {
 				nsClient, err := client.NewNamespaceClient(clientOptions)
@@ -582,11 +591,11 @@ func newTemporalClient(config *TemporalConfig, logger log.Logger) (client.Client
 					_, err = nsClient.Describe(ctx, config.Namespace)
 					nsClient.Close()
 					if err == nil {
-						logger.Info("successfully find temporal namespace", zap.String("namespace", config.Namespace))
+						sdkLog.Info(ctx, "successfully find temporal namespace", slog.String("namespace", config.Namespace))
 						return c, nil
 					}
 				}
-				logger.Info("failed to find temporal namespace, trying again..", zap.String("namespace", config.Namespace), zap.Error(err))
+				sdkLog.Info(ctx, "failed to find temporal namespace, trying again..", slog.String("namespace", config.Namespace), slog.Any("error", err))
 			}
 		}
 	}

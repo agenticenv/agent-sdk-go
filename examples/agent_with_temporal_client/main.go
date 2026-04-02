@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	config "github.com/agenticenv/agent-sdk-go/examples"
+	"github.com/agenticenv/agent-sdk-go/internal/runtime/temporal"
 	"github.com/agenticenv/agent-sdk-go/pkg/agent"
 	"go.temporal.io/sdk/client"
 )
@@ -27,11 +28,13 @@ func main() {
 
 	// Create Temporal client ourselves. For local dev we use simple Dial; for production
 	// you can add TLS, client.NewAPIKeyStaticCredentials(), ConnectionOptions, etc.
+	// Wire sdk/log.Logger as you prefer; this example uses internal/runtime/temporal
+	// (external apps should pass their own Logger implementation).
 	hostPort := cfg.Host + ":" + strconv.Itoa(cfg.Port)
 	tc, err := client.Dial(client.Options{
 		HostPort:  hostPort,
 		Namespace: cfg.Namespace,
-		Logger:    config.NewLoggerFromLogConfig(cfg),
+		Logger:    temporal.NewLogAdapter(config.NewLoggerFromLogConfig(cfg)),
 	})
 	if err != nil {
 		log.Fatalf("failed to create Temporal client: %v", err)

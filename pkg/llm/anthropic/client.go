@@ -11,7 +11,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/packages/param"
 	"github.com/anthropics/anthropic-sdk-go/packages/ssestream"
 	"github.com/anthropics/anthropic-sdk-go/shared/constant"
-	"go.uber.org/zap"
+	"log/slog"
 )
 
 var _ interfaces.LLMClient = (*Client)(nil)
@@ -107,11 +107,11 @@ func (c *Client) Generate(ctx context.Context, req *interfaces.LLMRequest) (*int
 	params := c.buildMessageParams(messages, req)
 
 	// Log safe debug info only (no messages/content to avoid leaking sensitive data)
-	c.Logger.Debug("generating anthropic response",
-		zap.String("model", c.Model),
-		zap.Int("messageCount", len(req.Messages)),
-		zap.Int("toolCount", len(req.Tools)),
-		zap.Bool("hasSystemMessage", req.SystemMessage != ""))
+	c.Logger.Debug(ctx, "generating anthropic response",
+		slog.String("model", c.Model),
+		slog.Int("messageCount", len(req.Messages)),
+		slog.Int("toolCount", len(req.Tools)),
+		slog.Bool("hasSystemMessage", req.SystemMessage != ""))
 	msg, err := c.client.Messages.New(ctx, params)
 	if err != nil {
 		return nil, err
@@ -123,12 +123,12 @@ func (c *Client) Generate(ctx context.Context, req *interfaces.LLMRequest) (*int
 			toolNames = append(toolNames, tc.ToolName)
 		}
 	}
-	c.Logger.Debug("anthropic response generated",
-		zap.String("model", string(msg.Model)),
-		zap.String("stopReason", string(msg.StopReason)),
-		zap.Int("contentLen", len(content)),
-		zap.Int("toolCallCount", len(toolNames)),
-		zap.Strings("toolNames", toolNames))
+	c.Logger.Debug(ctx, "anthropic response generated",
+		slog.String("model", string(msg.Model)),
+		slog.String("stopReason", string(msg.StopReason)),
+		slog.Int("contentLen", len(content)),
+		slog.Int("toolCallCount", len(toolNames)),
+		slog.Any("toolNames", toolNames))
 	return &interfaces.LLMResponse{
 		Content:   content,
 		ToolCalls: toolCalls,
@@ -140,10 +140,10 @@ func (c *Client) Generate(ctx context.Context, req *interfaces.LLMRequest) (*int
 }
 
 func (c *Client) GenerateStream(ctx context.Context, req *interfaces.LLMRequest) (interfaces.LLMStream, error) {
-	c.Logger.Debug("starting anthropic stream",
-		zap.String("model", c.Model),
-		zap.Int("messageCount", len(req.Messages)),
-		zap.Int("toolCount", len(req.Tools)))
+	c.Logger.Debug(ctx, "starting anthropic stream",
+		slog.String("model", c.Model),
+		slog.Int("messageCount", len(req.Messages)),
+		slog.Int("toolCount", len(req.Tools)))
 	messages := messagesToAnthropic(req)
 	params := c.buildMessageParams(messages, req)
 	stream := c.client.Messages.NewStreaming(ctx, params)

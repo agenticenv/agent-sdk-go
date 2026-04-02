@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,7 +14,6 @@ import (
 	"github.com/agenticenv/agent-sdk-go/pkg/llm/openai"
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
 	"github.com/spf13/viper"
-	"go.temporal.io/sdk/log"
 )
 
 type Config struct {
@@ -37,8 +37,11 @@ type LLMConfig struct {
 }
 
 type LoggerConfig struct {
-	Level  string `mapstructure:"level"`
-	Output string `mapstructure:"output"` // file path for logs (e.g. cmd/logs/agent.log); empty = stderr
+	Level     string `mapstructure:"level"`
+	Output    string `mapstructure:"output"`      // stdout | stderr | file path; default resolves to cmd/logs/agent.log
+	Format    string `mapstructure:"format"`      // text | json (file/stdout/stderr)
+	AddSource bool   `mapstructure:"add_source"`  // include file:line in each log line (slog source)
+	TeeStderr bool   `mapstructure:"tee_stderr"`  // when output is a file, also copy to stderr (usually off so the REPL stays clean)
 }
 
 // LoadConfig loads config from file (YAML). Env vars with AGENT_ prefix override file values.
@@ -65,6 +68,9 @@ func LoadConfig(path string) (*Config, error) {
 	_ = v.BindEnv("llm.baseURL", "AGENT_LLM_BASEURL")
 	_ = v.BindEnv("logger.level", "AGENT_LOGGER_LEVEL")
 	_ = v.BindEnv("logger.output", "AGENT_LOGGER_OUTPUT")
+	_ = v.BindEnv("logger.format", "AGENT_LOGGER_FORMAT")
+	_ = v.BindEnv("logger.add_source", "AGENT_LOGGER_ADD_SOURCE")
+	_ = v.BindEnv("logger.tee_stderr", "AGENT_LOGGER_TEE_STDERR")
 
 	// Set defaults so env can override even when file is missing or key absent
 	v.SetDefault("temporal.host", "localhost")
@@ -76,11 +82,23 @@ func LoadConfig(path string) (*Config, error) {
 	v.SetDefault("llm.baseURL", "")
 	v.SetDefault("logger.level", "error")
 	v.SetDefault("logger.output", "logs/agent.log")
+	v.SetDefault("logger.format", "json")
+	v.SetDefault("logger.add_source", true)
+	v.SetDefault("logger.tee_stderr", false)
 
 	_ = v.ReadInConfig() // ignore: file not found uses defaults + env
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, err
+	}
+	if cfg.Logger != nil {
+		// Viper defaults for bool can unmarshal as false when the key is absent; match SetDefault intent.
+		if !v.IsSet("logger.add_source") {
+			cfg.Logger.AddSource = true
+		}
+		if !v.IsSet("logger.format") {
+			cfg.Logger.Format = "json"
+		}
 	}
 	// Ensure nested structs are allocated
 	if cfg.Temporal == nil {
@@ -97,7 +115,7 @@ func LoadConfig(path string) (*Config, error) {
 
 // NewLLMClient creates an LLM client from config using pkg/llm options.
 // If lgr is nil, a new logger is created from cfg.Logger.
-func NewLLMClient(cfg *Config, lgr log.Logger) (interfaces.LLMClient, error) {
+func NewLLMClient(cfg *Config, lgr logger.Logger) (interfaces.LLMClient, error) {
 	if cfg == nil || cfg.LLM == nil {
 		return nil, fmt.Errorf("LLM config is required")
 	}
@@ -123,17 +141,46 @@ func NewLLMClient(cfg *Config, lgr log.Logger) (interfaces.LLMClient, error) {
 	}
 }
 
-func newLogger(cfg *LoggerConfig) log.Logger {
-	output := getLogOutput(cfg)
-	if output != "" && output != "stdout" && output != "stderr" {
-		if dir := filepath.Dir(output); dir != "" {
-			_ = os.MkdirAll(dir, 0o755)
+func newLogger(cfg *LoggerConfig) logger.Logger {
+	level := getLogLevel(cfg)
+	format := getLogFormat(cfg)
+	addSource := getLogAddSource(cfg)
+
+	if cfg != nil {
+		switch strings.ToLower(strings.TrimSpace(cfg.Output)) {
+		case "stdout":
+			return logger.NewWriterLogger(os.Stdout, level, format, addSource)
+		case "stderr":
+			return logger.NewWriterLogger(os.Stderr, level, format, addSource)
 		}
 	}
-	return logger.NewZapAdapter(logger.NewZapLoggerWithConfig(logger.ZapLoggerConfig{
-		Level:  getLogLevel(cfg),
-		Output: output,
-	}))
+	path := getLogOutput(cfg)
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		_ = os.MkdirAll(dir, 0o755)
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return logger.DefaultLogger(level)
+	}
+	var w io.Writer = f
+	if cfg != nil && cfg.TeeStderr {
+		w = io.MultiWriter(f, os.Stderr)
+	}
+	return logger.NewWriterLogger(w, level, format, addSource)
+}
+
+func getLogFormat(cfg *LoggerConfig) string {
+	if cfg != nil && strings.TrimSpace(cfg.Format) != "" {
+		return strings.TrimSpace(cfg.Format)
+	}
+	return "json"
+}
+
+func getLogAddSource(cfg *LoggerConfig) bool {
+	if cfg == nil {
+		return true
+	}
+	return cfg.AddSource
 }
 
 func getLogLevel(cfg *LoggerConfig) string {

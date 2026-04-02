@@ -74,7 +74,7 @@ func TestStreamCompleteEndsRun(t *testing.T) {
 }
 
 func TestAgent_ValidateConversationID(t *testing.T) {
-	l := logger.NewZapAdapter(logger.NewZapLoggerWithConfig(logger.ZapLoggerConfig{Level: "error"}))
+	l := logger.DefaultLogger("error")
 	a := &Agent{agentConfig: agentConfig{logger: l}}
 
 	if err := a.validateConversationID(""); err != nil {
@@ -94,7 +94,7 @@ func TestAgent_ValidateConversationID(t *testing.T) {
 }
 
 func TestAgent_BeginRunEndRun(t *testing.T) {
-	l := logger.NewZapAdapter(logger.NewZapLoggerWithConfig(logger.ZapLoggerConfig{Level: "error"}))
+	l := logger.DefaultLogger("error")
 	a := &Agent{agentConfig: agentConfig{logger: l}}
 
 	cleanup, err := a.beginRun("wf1")

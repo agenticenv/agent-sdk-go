@@ -9,13 +9,15 @@ import (
 	"sync"
 	"time"
 
+	"log/slog"
+
+	"github.com/agenticenv/agent-sdk-go/internal/eventbus"
 	"github.com/google/uuid"
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
-	"go.uber.org/zap"
 )
 
 const (
@@ -29,7 +31,7 @@ type Agent struct {
 	agentConfig
 	localAgentWorker      *AgentWorker // run worker; set when workers are embedded
 	eventWorker           worker.Worker
-	agentChannel          *agentChannel
+	eventbus              eventbus.EventBus
 	eventWorkerMu         sync.Mutex
 	runMu                 sync.Mutex
 	activeRunWorkflowID   string
@@ -61,15 +63,15 @@ func buildAgent(opts []Option) (*Agent, error) {
 		return nil, err
 	}
 	a := &Agent{
-		agentConfig:  *cfg,
-		agentChannel: newAgentChannel(cfg.logger),
+		agentConfig: *cfg,
+		eventbus:    eventbus.NewInmem(cfg.logger),
 	}
 	if a.disableWorker && a.streamEnabled && !a.enableRemoteWorkers {
 		return nil, fmt.Errorf("DisableWorker with streaming requires WithEnableRemoteWorkers(true)")
 	}
 
 	if !a.disableWorker {
-		a.localAgentWorker = newAgentWorkerFromConfig(cfg, a.agentChannel)
+		a.localAgentWorker = newAgentWorkerFromConfig(cfg, a.eventbus)
 	}
 	// Sub-agents must share the parent's in-memory pub/sub so Run/RunStream subscribers on the main run receive
 	// delegation events and approvals from specialist workflows in the same process.
@@ -83,12 +85,12 @@ func buildAgent(opts []Option) (*Agent, error) {
 }
 
 func wireInMemoryEventChannelToSubAgents(root, agent *Agent) {
-	if agent == nil || root == nil || root.agentChannel == nil {
+	if agent == nil || root == nil || root.eventbus == nil {
 		return
 	}
-	agent.agentChannel = root.agentChannel
+	agent.eventbus = root.eventbus
 	if agent.localAgentWorker != nil {
-		agent.localAgentWorker.agentChannel = root.agentChannel
+		agent.localAgentWorker.eventbus = root.eventbus
 	}
 	for _, child := range agent.subAgents {
 		wireInMemoryEventChannelToSubAgents(root, child)
@@ -117,11 +119,11 @@ func (a *Agent) hasWorkers(ctx context.Context, taskQueue string) bool {
 	for {
 		res, err := a.temporalClient.DescribeTaskQueue(ctx, q, enumspb.TASK_QUEUE_TYPE_WORKFLOW)
 		if err == nil && len(res.GetPollers()) != 0 {
-			a.logger.Debug("workers found on task queue", zap.String("taskQueue", q), zap.Int("pollers", len(res.GetPollers())))
+			a.logger.Debug(ctx, "workers found on task queue", slog.String("taskQueue", q), slog.Int("pollers", len(res.GetPollers())))
 			return true
 		}
 		if time.Now().After(deadlineTime) {
-			a.logger.Debug("workers check timed out", zap.String("taskQueue", q))
+			a.logger.Debug(ctx, "workers check timed out", slog.String("taskQueue", q))
 			return false
 		}
 		select {
@@ -140,11 +142,11 @@ func (a *Agent) createEventWorker() {
 	a.eventWorkerMu.Lock()
 	defer a.eventWorkerMu.Unlock()
 	if a.eventWorker != nil {
-		a.logger.Debug("event worker already running", zap.String("taskQueue", a.taskQueue))
+		a.logger.Debug(context.Background(), "event worker already running", slog.String("taskQueue", a.taskQueue))
 		return
 	}
 	eventQueue := getEventTaskQueue(a.taskQueue)
-	a.logger.Info("starting event worker", zap.String("taskQueue", eventQueue))
+	a.logger.Info(context.Background(), "starting event worker", slog.String("taskQueue", eventQueue))
 	w := worker.New(a.temporalClient, eventQueue, worker.Options{})
 	w.RegisterWorkflowWithOptions(a.AgentEventWorkflow, workflow.RegisterOptions{Name: "AgentEventWorkflow"})
 	w.RegisterActivityWithOptions(a.EventPublishActivity, activity.RegisterOptions{Name: "EventPublishActivity"})
@@ -159,7 +161,7 @@ func NewAgent(opts ...Option) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	a.logger.Info("agent created", zap.String("name", a.Name), zap.String("taskQueue", a.taskQueue), zap.Bool("embedWorker", a.localAgentWorker != nil))
+	a.logger.Info(context.Background(), "agent created", slog.String("name", a.Name), slog.String("taskQueue", a.taskQueue), slog.Bool("embedWorker", a.localAgentWorker != nil))
 	if a.localAgentWorker != nil {
 		go func() { _ = a.localAgentWorker.Start() }()
 	}
@@ -172,7 +174,7 @@ func (a *Agent) ensureEventWorkflowStarted(ctx context.Context) (string, error) 
 	id := a.activeEventWorkflowID
 	a.runMu.Unlock()
 	if id != "" {
-		a.logger.Debug("reusing existing event workflow", zap.String("eventWorkflowID", id))
+		a.logger.Debug(ctx, "reusing existing event workflow", slog.String("eventWorkflowID", id))
 		return id, nil
 	}
 	a.runMu.Lock()
@@ -182,7 +184,7 @@ func (a *Agent) ensureEventWorkflowStarted(ctx context.Context) (string, error) 
 	}
 
 	eventWorkflowID := a.getEventWorkflowID()
-	a.logger.Debug("executing event workflow", zap.String("eventWorkflowID", eventWorkflowID))
+	a.logger.Debug(ctx, "executing event workflow", slog.String("eventWorkflowID", eventWorkflowID))
 
 	_, err := a.temporalClient.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
 		ID:                       eventWorkflowID,
@@ -190,11 +192,11 @@ func (a *Agent) ensureEventWorkflowStarted(ctx context.Context) (string, error) 
 		WorkflowIDConflictPolicy: enumspb.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING,
 	}, a.AgentEventWorkflow)
 	if err != nil {
-		a.logger.Error("failed to start event workflow", zap.String("eventWorkflowID", eventWorkflowID), zap.Error(err))
+		a.logger.Error(ctx, "failed to start event workflow", slog.String("eventWorkflowID", eventWorkflowID), slog.Any("error", err))
 		return "", err
 	}
 	a.activeEventWorkflowID = eventWorkflowID
-	a.logger.Info("event workflow started", zap.String("eventWorkflowID", eventWorkflowID))
+	a.logger.Info(ctx, "event workflow started", slog.String("eventWorkflowID", eventWorkflowID))
 	return eventWorkflowID, nil
 }
 
@@ -208,11 +210,11 @@ func (a *Agent) beginRun(workflowID string) (func(), error) {
 	a.runMu.Lock()
 	defer a.runMu.Unlock()
 	if a.activeRunWorkflowID != "" {
-		a.logger.Debug("beginRun rejected: already running", zap.String("active", a.activeRunWorkflowID), zap.String("requested", workflowID))
+		a.logger.Debug(context.Background(), "beginRun rejected: already running", slog.String("active", a.activeRunWorkflowID), slog.String("requested", workflowID))
 		return nil, ErrAgentAlreadyRunning
 	}
 	a.activeRunWorkflowID = workflowID
-	a.logger.Debug("beginRun", zap.String("workflowID", workflowID))
+	a.logger.Debug(context.Background(), "beginRun", slog.String("workflowID", workflowID))
 	return func() { a.endRun() }, nil
 }
 
@@ -221,7 +223,7 @@ func (a *Agent) endRun() {
 	a.runMu.Lock()
 	defer a.runMu.Unlock()
 	if a.activeRunWorkflowID != "" {
-		a.logger.Debug("endRun", zap.String("workflowID", a.activeRunWorkflowID))
+		a.logger.Debug(context.Background(), "endRun", slog.String("workflowID", a.activeRunWorkflowID))
 	}
 	a.activeRunWorkflowID = ""
 }
@@ -229,7 +231,7 @@ func (a *Agent) endRun() {
 // Close stops workers, terminates the active run if any, signals the event workflow to complete,
 // waits for it to finish, then closes the Temporal client. Only one run can be active per agent.
 func (a *Agent) Close() {
-	a.logger.Info("closing agent", zap.String("name", a.Name))
+	a.logger.Info(context.Background(), "closing agent", slog.String("name", a.Name))
 	a.runMu.Lock()
 	workflowID := a.activeRunWorkflowID
 	eventWorkflowID := a.activeEventWorkflowID
@@ -239,11 +241,11 @@ func (a *Agent) Close() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if workflowID != "" {
-			a.logger.Debug("terminating active run workflow", zap.String("workflowID", workflowID))
+			a.logger.Debug(ctx, "terminating active run workflow", slog.String("workflowID", workflowID))
 			_ = a.temporalClient.TerminateWorkflow(ctx, workflowID, "", "agent closed")
 		}
 		if eventWorkflowID != "" {
-			a.logger.Debug("signaling event workflow to complete", zap.String("eventWorkflowID", eventWorkflowID))
+			a.logger.Debug(ctx, "signaling event workflow to complete", slog.String("eventWorkflowID", eventWorkflowID))
 			_ = a.temporalClient.SignalWorkflow(ctx, eventWorkflowID, "", eventWorkflowCompleteSignal, nil)
 			// Wait for event workflow to complete gracefully (worker must stay running to process the signal)
 			run := a.temporalClient.GetWorkflow(ctx, eventWorkflowID, "")
@@ -252,24 +254,24 @@ func (a *Agent) Close() {
 	}
 
 	if a.localAgentWorker != nil {
-		a.logger.Debug("stopping local agent worker")
+		a.logger.Debug(context.Background(), "stopping local agent worker")
 		a.localAgentWorker.stop()
 	}
 	if a.eventWorker != nil {
-		a.logger.Debug("stopping event worker")
+		a.logger.Debug(context.Background(), "stopping event worker")
 		a.eventWorker.Stop()
 	}
 	if a.temporalClient != nil && a.ownsTemporalClient {
 		a.temporalClient.Close()
 	}
-	a.logger.Info("agent closed", zap.String("name", a.Name))
+	a.logger.Info(context.Background(), "agent closed", slog.String("name", a.Name))
 }
 
 // Run starts the agent workflow and returns the result. Use WithApprovalHandler when tools require approval (Run only; handler uses req.Respond). RunStream uses AgentEventApproval + OnApproval.
 // Use WithTimeout or a context with deadline to avoid blocking.
 // When using WithConversation, pass the conversation ID (runtime id from user/session); agent and worker use the same ID.
 func (a *Agent) Run(ctx context.Context, input string, conversationID string) (*AgentResponse, error) {
-	a.logger.Debug("run started", zap.String("agent", a.Name), zap.Int("inputLen", len(input)))
+	a.logger.Debug(ctx, "run started", slog.String("agent", a.Name), slog.Int("inputLen", len(input)))
 
 	if err := a.validateConversationID(conversationID); err != nil {
 		return nil, err
@@ -319,7 +321,7 @@ func (a *Agent) Run(ctx context.Context, input string, conversationID string) (*
 		wfInput.EventTypes = []AgentEventType{AgentEventApproval}
 		eventCh, closeEvent, err = a.subscribeToAgentEvents(runCtx, wfInput.LocalChannelName)
 		if err != nil {
-			a.logger.Error("failed to subscribe to agent events", zap.String("workflowID", workflowID), zap.Error(err))
+			a.logger.Error(runCtx, "failed to subscribe to agent events", slog.String("workflowID", workflowID), slog.Any("error", err))
 			return nil, err
 		}
 		defer func() { _ = closeEvent() }()
@@ -327,15 +329,15 @@ func (a *Agent) Run(ctx context.Context, input string, conversationID string) (*
 
 	hasWorkers := a.hasWorkers(ctx, a.taskQueue)
 	if !hasWorkers {
-		a.logger.Warn("no workers available on task queue", zap.String("taskQueue", a.taskQueue))
+		a.logger.Warn(runCtx, "no workers available on task queue", slog.String("taskQueue", a.taskQueue))
 		return nil, fmt.Errorf("no workers available on task queue %s", a.taskQueue)
 	}
-	a.logger.Debug("workers available on task queue", zap.String("taskQueue", a.taskQueue))
+	a.logger.Debug(runCtx, "workers available on task queue", slog.String("taskQueue", a.taskQueue))
 
-	a.logger.Debug("executing agent workflow",
-		zap.String("workflowID", workflowID),
-		zap.Bool("streamingEnabled", wfInput.StreamingEnabled),
-		zap.Bool("hasEventWorkflow", wfInput.EventWorkflowID != ""))
+	a.logger.Debug(runCtx, "executing agent workflow",
+		slog.String("workflowID", workflowID),
+		slog.Bool("streamingEnabled", wfInput.StreamingEnabled),
+		slog.Bool("hasEventWorkflow", wfInput.EventWorkflowID != ""))
 
 	wf := NewAgentWorkerDefault()
 	workfowRun, err := a.temporalClient.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
@@ -343,7 +345,7 @@ func (a *Agent) Run(ctx context.Context, input string, conversationID string) (*
 		TaskQueue: a.taskQueue,
 	}, wf.AgentWorkflow, wfInput)
 	if err != nil {
-		a.logger.Error("failed to execute agent workflow", zap.String("workflowID", workflowID), zap.Error(err))
+		a.logger.Error(runCtx, "failed to execute agent workflow", slog.String("workflowID", workflowID), slog.Any("error", err))
 		return nil, err
 	}
 
@@ -365,21 +367,21 @@ func (a *Agent) Run(ctx context.Context, input string, conversationID string) (*
 	}
 	approvalResponseCh := make(chan approvalResponse, 16)
 
-	a.logger.Debug("waiting for agent workflow response", zap.String("workflowID", workflowID))
+	a.logger.Debug(runCtx, "waiting for agent workflow response", slog.String("workflowID", workflowID))
 
 	for {
 		select {
 		case r := <-responseCh:
-			a.logger.Debug("received agent workflow response",
-				zap.String("agentName", r.AgentName),
-				zap.String("model", r.Model),
-				zap.Int("contentLen", len(r.Content)))
+			a.logger.Debug(runCtx, "received agent workflow response",
+				slog.String("agentName", r.AgentName),
+				slog.String("model", r.Model),
+				slog.Int("contentLen", len(r.Content)))
 			return r, nil
 		case err := <-errCh:
-			a.logger.Error("agent workflow failed", zap.String("workflowID", workflowID), zap.Error(err))
+			a.logger.Error(runCtx, "agent workflow failed", slog.String("workflowID", workflowID), slog.Any("error", err))
 			return nil, err
 		case <-runCtx.Done():
-			a.logger.Debug("run context cancelled, terminating agent workflow", zap.String("workflowID", workflowID), zap.Error(runCtx.Err()))
+			a.logger.Debug(runCtx, "run context cancelled, terminating agent workflow", slog.String("workflowID", workflowID), slog.Any("error", runCtx.Err()))
 			termCtx, termCancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer termCancel()
 			if a.temporalClient != nil {
@@ -410,7 +412,7 @@ func (a *Agent) Run(ctx context.Context, input string, conversationID string) (*
 			cancel()
 		case resp := <-approvalResponseCh:
 			if err := a.OnApproval(runCtx, resp.approvalToken, resp.status); err != nil {
-				a.logger.Error("failed to complete approval", zap.Error(err))
+				a.logger.Error(runCtx, "failed to complete approval", slog.Any("error", err))
 				return nil, err
 			}
 		}
@@ -426,7 +428,7 @@ func (a *Agent) Run(ctx context.Context, input string, conversationID string) (*
 // WithApprovalHandler is temporarily replaced for the duration of the run; restore happens when the run finishes.
 // If tools do not require approval, approvalCh is still closed immediately with no values.
 func (a *Agent) RunAsync(ctx context.Context, input string, conversationID string) (resultCh <-chan RunAsyncResult, approvalCh <-chan *ApprovalRequest, err error) {
-	a.logger.Debug("run async started", zap.String("agent", a.Name), zap.Int("inputLen", len(input)))
+	a.logger.Debug(ctx, "run async started", slog.String("agent", a.Name), slog.Int("inputLen", len(input)))
 
 	if err := a.validateConversationID(conversationID); err != nil {
 		return nil, nil, err
@@ -491,7 +493,7 @@ func copyApprovalArgs(src map[string]any) map[string]any {
 // For approvals (tool or delegation), receive AgentEventApproval and call OnApproval as in the streaming examples.
 // When using WithConversation, pass the conversation ID.
 func (a *Agent) RunStream(ctx context.Context, input string, conversationID string) (chan *AgentEvent, error) {
-	a.logger.Debug("run stream started", zap.String("agent", a.Name), zap.Int("inputLen", len(input)))
+	a.logger.Debug(ctx, "run stream started", slog.String("agent", a.Name), slog.Int("inputLen", len(input)))
 
 	if err := a.validateConversationID(conversationID); err != nil {
 		return nil, err
@@ -544,10 +546,10 @@ func (a *Agent) RunStream(ctx context.Context, input string, conversationID stri
 
 	eventCh, closeEvent, err := a.subscribeToAgentEvents(runCtx, wfInput.LocalChannelName)
 	if err != nil {
-		a.logger.Error("failed to subscribe to agent events", zap.String("channel", wfInput.LocalChannelName), zap.Error(err))
+		a.logger.Error(runCtx, "failed to subscribe to agent events", slog.String("channel", wfInput.LocalChannelName), slog.Any("error", err))
 		return nil, err
 	}
-	a.logger.Debug("subscribed to agent events", zap.String("channel", wfInput.LocalChannelName))
+	a.logger.Debug(runCtx, "subscribed to agent events", slog.String("channel", wfInput.LocalChannelName))
 	defer func() {
 		if !streamStarted && closeEvent != nil {
 			_ = closeEvent()
@@ -556,18 +558,18 @@ func (a *Agent) RunStream(ctx context.Context, input string, conversationID stri
 
 	hasWorkers := a.hasWorkers(ctx, a.taskQueue)
 	if !hasWorkers {
-		a.logger.Warn("no workers available on task queue", zap.String("taskQueue", a.taskQueue))
+		a.logger.Warn(runCtx, "no workers available on task queue", slog.String("taskQueue", a.taskQueue))
 		return nil, fmt.Errorf("no workers available on task queue %s", a.taskQueue)
 	}
 
-	a.logger.Debug("executing agent workflow (stream)", zap.String("workflowID", workflowID))
+	a.logger.Debug(runCtx, "executing agent workflow (stream)", slog.String("workflowID", workflowID))
 	wf := NewAgentWorkerDefault()
 	workflowRun, err := a.temporalClient.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
 		ID:        workflowID,
 		TaskQueue: a.taskQueue,
 	}, wf.AgentWorkflow, wfInput)
 	if err != nil {
-		a.logger.Error("failed to execute agent workflow", zap.String("workflowID", workflowID), zap.Error(err))
+		a.logger.Error(runCtx, "failed to execute agent workflow", slog.String("workflowID", workflowID), slog.Any("error", err))
 		return nil, err
 	}
 
@@ -610,7 +612,7 @@ func (a *Agent) RunStream(ctx context.Context, input string, conversationID stri
 				}
 				return
 			case wfErr := <-wfErrCh:
-				a.logger.Error("agent workflow failed (stream)", zap.String("workflowID", workflowID), zap.Error(wfErr))
+				a.logger.Error(runCtx, "agent workflow failed (stream)", slog.String("workflowID", workflowID), slog.Any("error", wfErr))
 				outCh <- &AgentEvent{
 					Type:      AgentEventError,
 					Content:   wfErr.Error(),
@@ -722,9 +724,9 @@ func (a *Agent) buildSubAgentRoutes() map[string]SubAgentRoute {
 			names = append(names, k)
 		}
 		sort.Strings(names)
-		a.logger.Debug("built sub-agent routes for workflow input",
-			zap.Strings("subAgentToolNames", names),
-			zap.Int("routeCount", len(out)))
+		a.logger.Debug(context.Background(), "built sub-agent routes for workflow input",
+			slog.Any("subAgentToolNames", names),
+			slog.Int("routeCount", len(out)))
 	}
 	return out
 }

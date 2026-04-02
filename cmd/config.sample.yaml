@@ -23,7 +23,10 @@ llm:
   model: gpt-4o         # Model name, e.g. gpt-4o, gpt-4o-mini, claude-haiku-4-5, gemini-2.5-flash
   baseURL: https://api.openai.com/v1   # Optional; used for OpenAI-compatible proxies
 
-# Logger (console shows only prompts/responses; internal logs go to file)
+# Logger: file by default (JSON + caller). Prompts/responses use fmt in main, not this logger.
 logger:
-  level: info           # error | warn | info | debug
-  output: logs/agent.log   # Path; default resolves to cmd/logs/agent.log from project root
+  level: info              # error | warn | info | debug
+  output: logs/agent.log   # file path | stdout | stderr
+  format: json             # json | text
+  add_source: false
+  tee_stderr: false

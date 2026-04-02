@@ -4,21 +4,20 @@ import (
 	"errors"
 
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
-	"go.temporal.io/sdk/log"
 )
 
 type LLMConfig struct {
 	APIKey   string
 	Model    string
 	BaseURL  string
-	Logger   log.Logger
+	Logger   logger.Logger
 	LogLevel string
 }
 
 type Option func(*LLMConfig)
 
-func WithLogger(logger log.Logger) Option {
-	return func(c *LLMConfig) { c.Logger = logger }
+func WithLogger(l logger.Logger) Option {
+	return func(c *LLMConfig) { c.Logger = l }
 }
 
 func WithLogLevel(level string) Option {
@@ -42,7 +41,7 @@ const DefaultMaxTokens = 1024
 
 // BuildConfig builds LLMConfig from options. Defaults when not set:
 //   - LogLevel: "error"
-//   - Logger: zap adapter
+//   - Logger: stderr slog logger at LogLevel
 //
 // Sampling (Temperature, MaxTokens, TopP, TopK) is per-agent—use agent.WithTemperature etc.
 func BuildConfig(opts ...Option) (*LLMConfig, error) {
@@ -54,7 +53,7 @@ func BuildConfig(opts ...Option) (*LLMConfig, error) {
 		c.LogLevel = "error"
 	}
 	if c.Logger == nil {
-		c.Logger = logger.NewZapAdapter(logger.NewZapLoggerWithConfig(logger.ZapLoggerConfig{Level: c.LogLevel}))
+		c.Logger = logger.DefaultLogger(c.LogLevel)
 	}
 	if c.APIKey == "" {
 		return nil, errors.New("APIKey is required")

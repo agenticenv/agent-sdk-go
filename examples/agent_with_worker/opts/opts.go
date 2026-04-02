@@ -1,10 +1,9 @@
 package opts
 
 import (
-	"go.temporal.io/sdk/log"
-
 	"github.com/agenticenv/agent-sdk-go/pkg/agent"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
+	"github.com/agenticenv/agent-sdk-go/pkg/logger"
 )
 
 // Common returns agent options shared by both the agent client and worker.
@@ -16,7 +15,7 @@ func Common(
 	namespace string,
 	taskQueue string,
 	llmClient interfaces.LLMClient,
-	logger log.Logger,
+	l logger.Logger,
 ) []agent.Option {
 	return []agent.Option{
 		agent.WithName("agent-worker"),
@@ -29,6 +28,6 @@ func Common(
 			TaskQueue: taskQueue,
 		}),
 		agent.WithLLMClient(llmClient),
-		agent.WithLogger(logger),
+		agent.WithLogger(l),
 	}
 }

@@ -1,4 +1,4 @@
-package agent
+package eventbus
 
 import (
 	"context"
@@ -7,9 +7,8 @@ import (
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
 )
 
-func TestAgentChannel_PublishSubscribe(t *testing.T) {
-	l := logger.NewZapAdapter(logger.NewZapLoggerWithConfig(logger.ZapLoggerConfig{Level: "error"}))
-	c := newAgentChannel(l)
+func TestInmem_PublishSubscribe(t *testing.T) {
+	c := NewInmem(logger.NoopLogger())
 	ctx := context.Background()
 
 	data := []byte("hello")
@@ -35,9 +34,8 @@ func TestAgentChannel_PublishSubscribe(t *testing.T) {
 	}
 }
 
-func TestAgentChannel_MultipleSubscribers(t *testing.T) {
-	l := logger.NewZapAdapter(logger.NewZapLoggerWithConfig(logger.ZapLoggerConfig{Level: "error"}))
-	c := newAgentChannel(l)
+func TestInmem_MultipleSubscribers(t *testing.T) {
+	c := NewInmem(logger.NoopLogger())
 	ctx := context.Background()
 
 	ch1, close1, _ := c.Subscribe(ctx, "ch")
@@ -55,9 +53,8 @@ func TestAgentChannel_MultipleSubscribers(t *testing.T) {
 	}
 }
 
-func TestAgentChannel_CloseUnsubscribes(t *testing.T) {
-	l := logger.NewZapAdapter(logger.NewZapLoggerWithConfig(logger.ZapLoggerConfig{Level: "error"}))
-	c := newAgentChannel(l)
+func TestInmem_CloseUnsubscribes(t *testing.T) {
+	c := NewInmem(logger.NoopLogger())
 	ctx := context.Background()
 
 	ch, closeFn, _ := c.Subscribe(ctx, "ch")

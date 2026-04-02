@@ -21,6 +21,7 @@ install: build
 test:
 	@echo "==> Running tests..."
 	go test ./pkg/... -count=1
+	go test ./internal/... -count=1
 	@echo "==> Tests complete"
 
 # Run tests with coverage

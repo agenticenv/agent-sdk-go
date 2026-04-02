@@ -6,9 +6,10 @@ import (
 	"fmt"
 	"time"
 
+	"log/slog"
+
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/workflow"
-	"go.uber.org/zap"
 )
 
 var (
@@ -55,7 +56,7 @@ const (
 	AgentEventToolResult    AgentEventType = "tool_result"
 	AgentEventApproval      AgentEventType = "approval"
 	AgentEventError         AgentEventType = "error"
-	AgentEventComplete AgentEventType = "complete"
+	AgentEventComplete      AgentEventType = "complete"
 )
 
 // agentEventAll is the workflow EventTypes sentinel meaning "emit every event type" (JSON "*").
@@ -139,14 +140,11 @@ func (a *Agent) AgentEventWorkflow(ctx workflow.Context) error {
 
 	err := workflow.SetUpdateHandlerWithOptions(ctx, agentEventName, func(ctx workflow.Context, upd *AgentEventUpdate) error {
 		noOfEvents++
-		logger.Debug("received agent event",
-			zap.String("agent", upd.AgentName),
-			zap.String("eventType", func() string {
-				if upd.Event != nil {
-					return string(upd.Event.Type)
-				}
-				return ""
-			}()))
+		evTypeStr := ""
+		if upd.Event != nil {
+			evTypeStr = string(upd.Event.Type)
+		}
+		logger.Debug("received agent event", "agent", upd.AgentName, "eventType", evTypeStr)
 		eventCh.Send(ctx, upd)
 		return nil
 	}, options)
@@ -171,7 +169,7 @@ func (a *Agent) AgentEventWorkflow(ctx workflow.Context) error {
 				if upd.Event != nil {
 					evType = string(upd.Event.Type)
 				}
-				logger.Warn("agent event activity failed", zap.Error(err), zap.String("eventType", evType), zap.String("agent", upd.AgentName))
+				logger.Warn("agent event activity failed", "error", err, "eventType", evType, "agent", upd.AgentName)
 			}
 			processedCount++
 		}
@@ -215,7 +213,7 @@ func (a *Agent) EventPublishActivity(ctx context.Context, channel string, event 
 	if event != nil {
 		evType = string(event.Type)
 	}
-	logger.Debug("agent event activity", zap.String("channel", channel), zap.String("eventType", evType))
+	logger.Debug("agent event activity", "channel", channel, "eventType", evType)
 	if event == nil {
 		return fmt.Errorf("event is nil")
 	}
@@ -223,8 +221,8 @@ func (a *Agent) EventPublishActivity(ctx context.Context, channel string, event 
 	if err != nil {
 		return err
 	}
-	if err := a.agentChannel.Publish(ctx, channel, data); err != nil {
-		logger.Error("failed to publish agent event", zap.String("channel", channel), zap.Error(err))
+	if err := a.eventbus.Publish(ctx, channel, data); err != nil {
+		logger.Error("failed to publish agent event", "channel", channel, "error", err)
 		return fmt.Errorf("failed to publish agent event: %w", err)
 	}
 	return nil
@@ -232,10 +230,10 @@ func (a *Agent) EventPublishActivity(ctx context.Context, channel string, event 
 
 // subscribeToAgentEvents returns a channel that receives AgentEvent from the given event channel.
 func (a *Agent) subscribeToAgentEvents(ctx context.Context, channel string) (<-chan *AgentEvent, func() error, error) {
-	a.logger.Debug("subscribing to agent events", zap.String("channel", channel))
-	ch, closeFn, err := a.agentChannel.Subscribe(ctx, channel)
+	a.logger.Debug(ctx, "subscribing to agent events", slog.String("channel", channel))
+	ch, closeFn, err := a.eventbus.Subscribe(ctx, channel)
 	if err != nil {
-		a.logger.Error("failed to subscribe to agent events", zap.String("channel", channel), zap.Error(err))
+		a.logger.Error(ctx, "failed to subscribe to agent events", slog.String("channel", channel), slog.Any("error", err))
 		return nil, nil, err
 	}
 
@@ -245,13 +243,13 @@ func (a *Agent) subscribeToAgentEvents(ctx context.Context, channel string) (<-c
 		for data := range ch {
 			var ev AgentEvent
 			if err := json.Unmarshal(data, &ev); err != nil {
-				a.logger.Debug("failed to unmarshal agent event", zap.Error(err))
+				a.logger.Debug(ctx, "failed to unmarshal agent event", slog.Any("error", err))
 				continue
 			}
 			eventCh <- &ev
 		}
 	}()
 
-	a.logger.Debug("subscribed to agent events", zap.String("channel", channel))
+	a.logger.Debug(ctx, "subscribed to agent events", slog.String("channel", channel))
 	return eventCh, closeFn, nil
 }

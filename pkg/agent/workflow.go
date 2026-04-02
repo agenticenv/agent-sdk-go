@@ -15,7 +15,6 @@ import (
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
-	"go.uber.org/zap"
 )
 
 var (
@@ -119,8 +118,8 @@ func (aw *AgentWorker) AgentWorkflow(ctx workflow.Context, input AgentWorkflowIn
 	logger.Info("agent workflow started")
 	if n := len(input.SubAgentRoutes); n > 0 {
 		logger.Debug("agent workflow sub-agent routes snapshot",
-			zap.Int("routeCount", n),
-			zap.Int("subAgentDepth", input.SubAgentDepth))
+			"routeCount", n,
+			"subAgentDepth", input.SubAgentDepth)
 	}
 	eventWorkflowID := input.EventWorkflowID
 	agentName := strings.TrimSpace(aw.config.Name)
@@ -268,7 +267,7 @@ func (aw *AgentWorker) AgentWorkflow(ctx workflow.Context, input AgentWorkflowIn
 		}
 
 		if iter == maxIter-1 {
-			logger.Info("max iterations reached, calling LLM once more without tools for final response", zap.Int("iteration", iter))
+			logger.Info("max iterations reached, calling LLM once more without tools for final response", "iteration", iter)
 			if useStreaming {
 				streamInput.SkipTools = true
 				err = workflow.ExecuteActivity(streamActCtx, aw.AgentLLMStreamActivity, streamInput).Get(streamActCtx, &llmResult)
@@ -307,7 +306,7 @@ func (aw *AgentWorker) AgentWorkflow(ctx workflow.Context, input AgentWorkflowIn
 		for _, tc := range llmResult.ToolCalls {
 			approvalStatus := ApprovalStatusApproved
 			if tc.NeedsApproval {
-				logger.Info("approval required for tool", zap.String("toolName", tc.ToolName), zap.Int("argCount", len(tc.Args)))
+				logger.Info("approval required for tool", "toolName", tc.ToolName, "argCount", len(tc.Args))
 				var status ApprovalStatus
 				approvalInput := AgentToolApprovalInput{
 					ToolCallID:       tc.ToolCallID,
@@ -326,17 +325,17 @@ func (aw *AgentWorker) AgentWorkflow(ctx workflow.Context, input AgentWorkflowIn
 			if approvalStatus == ApprovalStatusApproved {
 				if route, ok := input.SubAgentRoutes[tc.ToolName]; ok {
 					logger.Info("executing tool call",
-						zap.String("executionKind", "sub_agent"),
-						zap.String("tool", tc.ToolName),
-						zap.String("toolCallID", tc.ToolCallID),
-						zap.String("childTaskQueue", strings.TrimSpace(route.TaskQueue)),
-						zap.Int("subAgentDepth", input.SubAgentDepth))
+						"executionKind", "sub_agent",
+						"tool", tc.ToolName,
+						"toolCallID", tc.ToolCallID,
+						"childTaskQueue", strings.TrimSpace(route.TaskQueue),
+						"subAgentDepth", input.SubAgentDepth)
 					content = aw.delegateToSubAgent(ctx, input, tc, route)
 				} else {
 					logger.Info("executing tool call",
-						zap.String("executionKind", "tool"),
-						zap.String("tool", tc.ToolName),
-						zap.String("toolCallID", tc.ToolCallID))
+						"executionKind", "tool",
+						"tool", tc.ToolName,
+						"toolCallID", tc.ToolCallID)
 					var result string
 					execInput := AgentToolExecuteInput{
 						ToolName:       tc.ToolName,
@@ -378,17 +377,17 @@ func (aw *AgentWorker) AgentWorkflow(ctx workflow.Context, input AgentWorkflowIn
 	// Add all accumulated messages to conversation after execution completes (only when conversationID set)
 	if input.ConversationID != "" {
 		if len(messages) == 0 {
-			logger.Info("no messages to add to conversation", zap.String("conversationID", input.ConversationID))
+			logger.Info("no messages to add to conversation", "conversationID", input.ConversationID)
 		} else {
 			if err := workflow.ExecuteActivity(convCtx, aw.AddConversationMessagesActivity, input.ConversationID, messages).Get(convCtx, nil); err != nil {
-				logger.Warn("failed to add conversation messages", zap.String("conversationID", input.ConversationID), zap.Any("messagesCount", len(messages)), zap.Error(err))
+				logger.Warn("failed to add conversation messages", "conversationID", input.ConversationID, "messagesCount", len(messages), "error", err)
 				return nil, err
 			}
 		}
 	}
 
 	// Log summary only; avoid full content to prevent leaking sensitive data
-	logger.Info("agent workflow completed", zap.Int("contentLen", len(lastContent)))
+	logger.Info("agent workflow completed", "contentLen", len(lastContent))
 	return &AgentResponse{
 		Content:   lastContent,
 		AgentName: aw.config.Name,
@@ -414,7 +413,7 @@ func (aw *AgentWorker) AgentLLMStreamActivity(ctx context.Context, input AgentLL
 		messages = append(convMessages, messages...)
 	}
 
-	logger.Debug("agent LLM stream activity started", zap.String("agentWorkflowID", agentWorkflowID), zap.Int("messageCount", len(messages)))
+	logger.Debug("agent LLM stream activity started", "agentWorkflowID", agentWorkflowID, "messageCount", len(messages))
 
 	req, tools := aw.buildLLMRequest(messages, input.SkipTools)
 
@@ -454,9 +453,9 @@ func (aw *AgentWorker) AgentLLMStreamActivity(ctx context.Context, input AgentLL
 				Args:         []interface{}{upd},
 				WaitForStage: client.WorkflowUpdateStageAccepted,
 			})
-		} else if aw.agentChannel != nil {
+		} else if aw.eventbus != nil {
 			data, _ := json.Marshal(ev)
-			_ = aw.agentChannel.Publish(ctx, input.LocalChannelName, data)
+			_ = aw.eventbus.Publish(ctx, input.LocalChannelName, data)
 		}
 	}
 
@@ -480,7 +479,7 @@ func (aw *AgentWorker) AgentLLMStreamActivity(ctx context.Context, input AgentLL
 	if resp == nil {
 		return nil, fmt.Errorf("stream completed without result")
 	}
-	logger.Debug("agent LLM stream activity completed", zap.String("agentWorkflowID", agentWorkflowID))
+	logger.Debug("agent LLM stream activity completed", "agentWorkflowID", agentWorkflowID)
 	result, err := aw.llmResponseToResult(resp, tools)
 	if err != nil {
 		return nil, err
@@ -508,7 +507,7 @@ func (aw *AgentWorker) buildLLMRequest(messages []interfaces.Message, skipTools 
 // fetchConversationMessages fetches messages for the LLM: fetches from conversation when ConversationID is set,
 func (aw *AgentWorker) fetchConversationMessages(ctx context.Context, conversationID string) ([]interfaces.Message, error) {
 	logger := activity.GetLogger(ctx)
-	logger.Debug("fetching conversation messages", zap.String("conversationID", conversationID))
+	logger.Debug("fetching conversation messages", "conversationID", conversationID)
 
 	if aw.config == nil || aw.config.conversation == nil {
 		return nil, fmt.Errorf("conversation is not configured")
@@ -524,7 +523,7 @@ func (aw *AgentWorker) fetchConversationMessages(ctx context.Context, conversati
 		return nil, fmt.Errorf("failed to list conversation messages: %w", err)
 	}
 
-	logger.Debug("conversation messages fetched", zap.Int("messageCount", len(messages)))
+	logger.Debug("conversation messages fetched", "messageCount", len(messages))
 	return messages, nil
 }
 
@@ -569,13 +568,13 @@ func (aw *AgentWorker) AgentLLMActivity(ctx context.Context, input AgentLLMInput
 		messages = append(convMessages, messages...)
 	}
 
-	logger.Debug("agent LLM activity started", zap.Int("messageCount", len(messages)))
+	logger.Debug("agent LLM activity started", "messageCount", len(messages))
 	req, tools := aw.buildLLMRequest(messages, input.SkipTools)
 	resp, err := aw.config.LLMClient.Generate(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-	logger.Debug("agent LLM activity completed", zap.Int("messageCount", len(messages)))
+	logger.Debug("agent LLM activity completed", "messageCount", len(messages))
 	return aw.llmResponseToResult(resp, tools)
 }
 
@@ -602,7 +601,7 @@ func toolApprovalMetadata(aw *AgentWorker, toolName string) (kind ToolApprovalKi
 // Sends approval request as AgentEventApproval on event channel (same channel for Run and RunStream).
 func (aw *AgentWorker) AgentToolApprovalActivity(ctx context.Context, input AgentToolApprovalInput) (ApprovalStatus, error) {
 	logger := activity.GetLogger(ctx)
-	logger.Debug("agent tool approval activity started", zap.String("tool", input.ToolName), zap.Bool("viaEventWorkflow", input.EventWorkflowID != ""))
+	logger.Debug("agent tool approval activity started", "tool", input.ToolName, "viaEventWorkflow", input.EventWorkflowID != "")
 
 	info := activity.GetInfo(ctx)
 	taskTokenB64 := base64.StdEncoding.EncodeToString(info.TaskToken)
@@ -610,9 +609,9 @@ func (aw *AgentWorker) AgentToolApprovalActivity(ctx context.Context, input Agen
 	kind, agentName, delegateToName := toolApprovalMetadata(aw, input.ToolName)
 	if kind == ToolApprovalKindDelegation {
 		logger.Debug("tool approval targets sub-agent delegation",
-			zap.String("tool", input.ToolName),
-			zap.String("delegateTo", delegateToName),
-			zap.String("mainAgent", agentName))
+			"tool", input.ToolName,
+			"delegateTo", delegateToName,
+			"mainAgent", agentName)
 	}
 	ev := &AgentEvent{
 		Type:      AgentEventApproval,
@@ -644,35 +643,35 @@ func (aw *AgentWorker) AgentToolApprovalActivity(ctx context.Context, input Agen
 		if err != nil {
 			return ApprovalStatusNone, err
 		}
-		logger.Debug("approval request sent to event workflow", zap.String("eventWorkflowID", input.EventWorkflowID), zap.String("tool", input.ToolName))
+		logger.Debug("approval request sent to event workflow", "eventWorkflowID", input.EventWorkflowID, "tool", input.ToolName)
 	} else {
-		if aw.agentChannel == nil {
+		if aw.eventbus == nil {
 			return ApprovalStatusNone, fmt.Errorf("agentChannel required when eventWorkflowID is empty")
 		}
 		data, err := json.Marshal(ev)
 		if err != nil {
 			return ApprovalStatusNone, err
 		}
-		if err := aw.agentChannel.Publish(ctx, input.LocalChannelName, data); err != nil {
+		if err := aw.eventbus.Publish(ctx, input.LocalChannelName, data); err != nil {
 			return ApprovalStatusNone, err
 		}
-		logger.Debug("approval event published to event channel", zap.String("channel", input.LocalChannelName), zap.String("tool", input.ToolName))
+		logger.Debug("approval event published to event channel", "channel", input.LocalChannelName, "tool", input.ToolName)
 	}
-	logger.Debug("approval request sent, waiting for completion", zap.String("tool", input.ToolName))
+	logger.Debug("approval request sent, waiting for completion", "tool", input.ToolName)
 	return ApprovalStatusPending, activity.ErrResultPending
 }
 
 // SendAgentEventUpdateActivity sends event: via event workflow when eventWorkflowID is set; else in-memory agentChannel.
 func (aw *AgentWorker) SendAgentEventUpdateActivity(ctx context.Context, eventWorkflowID string, upd *AgentEventUpdate) error {
 	logger := activity.GetLogger(ctx)
-	logger.Debug("send agent event update activity started", zap.String("eventWorkflowID", eventWorkflowID), zap.Any("upd", upd))
+	logger.Debug("send agent event update activity started", "eventWorkflowID", eventWorkflowID, "upd", upd)
 
 	if upd == nil || upd.Event == nil {
 		return nil
 	}
 
 	if upd.Event != nil {
-		logger.Debug("send agent event update activity", zap.String("eventType", string(upd.Event.Type)), zap.String("agent", upd.AgentName))
+		logger.Debug("send agent event update activity", "eventType", string(upd.Event.Type), "agent", upd.AgentName)
 	}
 
 	// Route via event workflow when eventWorkflowID is set (Agent sets this when enableRemoteWorkers is true)
@@ -686,21 +685,21 @@ func (aw *AgentWorker) SendAgentEventUpdateActivity(ctx context.Context, eventWo
 		if err != nil {
 			return err
 		}
-		logger.Debug("agent event sent to event workflow", zap.String("eventWorkflowID", eventWorkflowID), zap.String("agent", upd.AgentName))
+		logger.Debug("agent event sent to event workflow", "eventWorkflowID", eventWorkflowID, "agent", upd.AgentName)
 	} else {
-		if aw.agentChannel == nil {
+		if aw.eventbus == nil {
 			return fmt.Errorf("agentChannel required when eventWorkflowID is empty")
 		}
 		data, err := json.Marshal(upd.Event)
 		if err != nil {
 			return err
 		}
-		if err := aw.agentChannel.Publish(ctx, upd.LocalChannelName, data); err != nil {
+		if err := aw.eventbus.Publish(ctx, upd.LocalChannelName, data); err != nil {
 			return err
 		}
-		logger.Debug("agent event sent to channel", zap.String("channel", upd.LocalChannelName), zap.String("agent", upd.AgentName))
+		logger.Debug("agent event sent to channel", "channel", upd.LocalChannelName, "agent", upd.AgentName)
 	}
-	logger.Debug("agent event update activity completed", zap.String("agent", upd.AgentName))
+	logger.Debug("agent event update activity completed", "agent", upd.AgentName)
 	return nil
 }
 
@@ -710,7 +709,7 @@ func (aw *AgentWorker) AddConversationMessagesActivity(ctx context.Context, conv
 
 	msgCount := len(messages)
 
-	logger.Debug("add conversation messages activity started", zap.String("conversationID", conversationID), zap.Any("messagesCount", msgCount))
+	logger.Debug("add conversation messages activity started", "conversationID", conversationID, "messagesCount", msgCount)
 
 	if aw.config == nil || aw.config.conversation == nil {
 		return fmt.Errorf("conversation is not configured")
@@ -719,11 +718,11 @@ func (aw *AgentWorker) AddConversationMessagesActivity(ctx context.Context, conv
 	for _, msg := range messages {
 		if err := aw.config.conversation.AddMessage(ctx, conversationID, msg); err != nil {
 			msgCount--
-			logger.Warn("failed to add conversation message", zap.String("conversationID", conversationID), zap.Any("msg", msg), zap.Error(err))
+			logger.Warn("failed to add conversation message", "conversationID", conversationID, "msg", msg, "error", err)
 		}
 	}
 
-	logger.Debug("add conversation messages activity completed", zap.String("conversationID", conversationID), zap.Int("messagesCount", msgCount))
+	logger.Debug("add conversation messages activity completed", "conversationID", conversationID, "messagesCount", msgCount)
 	return nil
 }
 
@@ -732,7 +731,7 @@ func (aw *AgentWorker) AgentToolExecuteActivity(ctx context.Context, input Agent
 	toolName := input.ToolName
 	args := input.Args
 	logger := activity.GetLogger(ctx)
-	logger.Debug("agent tool execute activity started", zap.String("tool", toolName), zap.Int("argCount", len(args)))
+	logger.Debug("agent tool execute activity started", "tool", toolName, "argCount", len(args))
 	tools := aw.config.toolsList()
 	var content string
 	for _, t := range tools {
@@ -742,11 +741,11 @@ func (aw *AgentWorker) AgentToolExecuteActivity(ctx context.Context, input Agent
 				return "", err
 			}
 			content = fmt.Sprintf("%v", result)
-			logger.Debug("agent tool execute activity completed", zap.String("tool", toolName))
+			logger.Debug("agent tool execute activity completed", "tool", toolName)
 			return content, nil
 		}
 	}
-	logger.Warn("unknown tool", zap.String("tool", toolName))
+	logger.Warn("unknown tool", "tool", toolName)
 	return "", fmt.Errorf("unknown tool: %s", toolName)
 }
 
@@ -754,8 +753,8 @@ func (aw *AgentWorker) delegateToSubAgent(ctx workflow.Context, input AgentWorkf
 	logger := workflow.GetLogger(ctx)
 	if strings.TrimSpace(route.TaskQueue) == "" {
 		logger.Warn("sub-agent delegation skipped: empty child task queue",
-			zap.String("tool", tc.ToolName),
-			zap.String("toolCallID", tc.ToolCallID))
+			"tool", tc.ToolName,
+			"toolCallID", tc.ToolCallID)
 		return "Sub-agent delegation failed: sub-agent task queue is not configured."
 	}
 	maxDepth := aw.config.maxSubAgentDepth
@@ -764,10 +763,10 @@ func (aw *AgentWorker) delegateToSubAgent(ctx workflow.Context, input AgentWorkf
 	}
 	if input.SubAgentDepth >= maxDepth {
 		logger.Warn("sub-agent delegation refused: max nesting depth",
-			zap.Int("subAgentDepth", input.SubAgentDepth),
-			zap.Int("maxDepth", maxDepth),
-			zap.String("tool", tc.ToolName),
-			zap.String("toolCallID", tc.ToolCallID))
+			"subAgentDepth", input.SubAgentDepth,
+			"maxDepth", maxDepth,
+			"tool", tc.ToolName,
+			"toolCallID", tc.ToolCallID)
 		return fmt.Sprintf("Sub-agent delegation refused: maximum nesting depth (%d) reached for this agent.", maxDepth)
 	}
 
@@ -787,7 +786,7 @@ func (aw *AgentWorker) delegateToSubAgent(ctx workflow.Context, input AgentWorkf
 	if err := workflow.SideEffect(ctx, func(workflow.Context) interface{} {
 		return uuid.New().String()
 	}).Get(&childSuffix); err != nil {
-		logger.Warn("sub-agent child workflow id generation failed", zap.Error(err))
+		logger.Warn("sub-agent child workflow id generation failed", "error", err)
 		return "Sub-agent workflow failed: " + err.Error()
 	}
 
@@ -796,15 +795,15 @@ func (aw *AgentWorker) delegateToSubAgent(ctx workflow.Context, input AgentWorkf
 	childTO := subAgentChildWorkflowTimeout(aw)
 
 	logger.Debug("starting sub-agent child workflow",
-		zap.String("childWorkflowID", childWfID),
-		zap.String("childTaskQueue", strings.TrimSpace(route.TaskQueue)),
-		zap.String("tool", tc.ToolName),
-		zap.String("toolCallID", tc.ToolCallID),
-		zap.Int("parentSubAgentDepth", input.SubAgentDepth),
-		zap.Int("childSubAgentDepth", childInput.SubAgentDepth),
-		zap.Int("nestedChildRouteCount", len(route.ChildRoutes)),
-		zap.Duration("workflowExecutionTimeout", childTO),
-		zap.Int("delegatedQueryLen", len(query)))
+		"childWorkflowID", childWfID,
+		"childTaskQueue", strings.TrimSpace(route.TaskQueue),
+		"tool", tc.ToolName,
+		"toolCallID", tc.ToolCallID,
+		"parentSubAgentDepth", input.SubAgentDepth,
+		"childSubAgentDepth", childInput.SubAgentDepth,
+		"nestedChildRouteCount", len(route.ChildRoutes),
+		"workflowExecutionTimeout", childTO,
+		"delegatedQueryLen", len(query))
 
 	childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
 		WorkflowID:               childWfID,
@@ -817,16 +816,16 @@ func (aw *AgentWorker) delegateToSubAgent(ctx workflow.Context, input AgentWorkf
 	var childResp AgentResponse
 	if err := workflow.ExecuteChildWorkflow(childCtx, aw.AgentWorkflow, childInput).Get(childCtx, &childResp); err != nil {
 		logger.Warn("sub-agent child workflow failed",
-			zap.String("childWorkflowID", childWfID),
-			zap.String("tool", tc.ToolName),
-			zap.Error(err))
+			"childWorkflowID", childWfID,
+			"tool", tc.ToolName,
+			"error", err)
 		return "Sub-agent workflow failed: " + err.Error()
 	}
 
 	logger.Debug("sub-agent child workflow completed",
-		zap.String("childWorkflowID", childWfID),
-		zap.String("tool", tc.ToolName),
-		zap.Int("responseContentLen", len(childResp.Content)))
+		"childWorkflowID", childWfID,
+		"tool", tc.ToolName,
+		"responseContentLen", len(childResp.Content))
 
 	return childResp.Content
 }

@@ -12,7 +12,6 @@ import (
 	"github.com/agenticenv/agent-sdk-go/pkg/llm/openai"
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
 	"github.com/joho/godotenv"
-	"go.temporal.io/sdk/log"
 )
 
 type Config struct {
@@ -63,17 +62,14 @@ func LoadFromEnv() *Config {
 	return cfg
 }
 
-// NewLoggerFromLogConfig returns a log.Logger for use with the agent. Logs to stderr so
+// NewLoggerFromLogConfig returns logger.Logger for use with the agent. Logs to stderr so
 // conversation (stdout) stays separate; set LOG_LEVEL=info or debug to see logs.
-func NewLoggerFromLogConfig(cfg *Config) log.Logger {
+func NewLoggerFromLogConfig(cfg *Config) logger.Logger {
 	level := "error"
 	if cfg != nil && cfg.LogLevel != "" {
 		level = strings.TrimSpace(cfg.LogLevel)
 	}
-	return logger.NewZapAdapter(logger.NewZapLoggerWithConfig(logger.ZapLoggerConfig{
-		Level:  level,
-		Output: "stderr",
-	}))
+	return logger.DefaultLogger(level)
 }
 
 // NewLLMClientFromConfig creates an LLM client from config using the new llm.Option-based API.

@@ -12,7 +12,7 @@ import (
 	"github.com/openai/openai-go/v3/packages/ssestream"
 	"github.com/openai/openai-go/v3/shared"
 	"github.com/openai/openai-go/v3/shared/constant"
-	"go.uber.org/zap"
+	"log/slog"
 )
 
 var _ interfaces.LLMClient = (*Client)(nil)
@@ -114,11 +114,11 @@ func (c *Client) Generate(ctx context.Context, req *interfaces.LLMRequest) (*int
 	params := c.buildCompletionParams(messages, req)
 
 	// Log safe debug info only (no messages/content to avoid leaking sensitive data)
-	c.Logger.Debug("generating openai response",
-		zap.String("model", c.Model),
-		zap.Int("messageCount", len(req.Messages)),
-		zap.Int("toolCount", len(req.Tools)),
-		zap.Bool("hasSystemMessage", req.SystemMessage != ""))
+	c.Logger.Debug(ctx, "generating openai response",
+		slog.String("model", c.Model),
+		slog.Int("messageCount", len(req.Messages)),
+		slog.Int("toolCount", len(req.Tools)),
+		slog.Bool("hasSystemMessage", req.SystemMessage != ""))
 	resp, err := c.client.Chat.Completions.New(ctx, params)
 	if err != nil {
 		return nil, err
@@ -135,19 +135,19 @@ func (c *Client) Generate(ctx context.Context, req *interfaces.LLMRequest) (*int
 			}
 		}
 	}
-	c.Logger.Debug("openai response generated",
-		zap.String("model", resp.Model),
-		zap.Int("contentLen", contentLen),
-		zap.Int("toolCallCount", len(toolNames)),
-		zap.Strings("toolNames", toolNames))
+	c.Logger.Debug(ctx, "openai response generated",
+		slog.String("model", resp.Model),
+		slog.Int("contentLen", contentLen),
+		slog.Int("toolCallCount", len(toolNames)),
+		slog.Any("toolNames", toolNames))
 	return openAIResponseToLLM(resp), nil
 }
 
 func (c *Client) GenerateStream(ctx context.Context, req *interfaces.LLMRequest) (interfaces.LLMStream, error) {
-	c.Logger.Debug("starting openai stream",
-		zap.String("model", c.Model),
-		zap.Int("messageCount", len(req.Messages)),
-		zap.Int("toolCount", len(req.Tools)))
+	c.Logger.Debug(ctx, "starting openai stream",
+		slog.String("model", c.Model),
+		slog.Int("messageCount", len(req.Messages)),
+		slog.Int("toolCount", len(req.Tools)))
 	messages := messagesToOpenAI(req)
 	params := c.buildCompletionParams(messages, req)
 	stream := c.client.Chat.Completions.NewStreaming(ctx, params)
