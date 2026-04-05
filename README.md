@@ -1,6 +1,6 @@
-# AI Agent SDK for Go
+# Agent SDK for Go - Temporal-first
 
-**Build production-grade AI agents with pluggable runtimes — Temporal-first.**
+**Build durable, production-grade AI agents in Go** — tool calling, human approvals, and sub-agent delegation.
 
 [![CI](https://github.com/agenticenv/agent-sdk-go/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/agenticenv/agent-sdk-go/actions)
 [![Release](https://img.shields.io/github/v/release/agenticenv/agent-sdk-go?label=Release)](https://github.com/agenticenv/agent-sdk-go/releases)
@@ -8,54 +8,64 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/agenticenv/agent-sdk-go)](https://goreportcard.com/report/github.com/agenticenv/agent-sdk-go)
 [![License](https://img.shields.io/github/license/agenticenv/agent-sdk-go?label=License)](LICENSE)
 
-Build durable, long-running AI agents in Go — tool calling, human approvals, and sub-agent delegation. Runs execute as replay-safe workflows and activities; powered by Temporal, with full visibility via the **Temporal UI** for history and debugging.
-
 > **Note:** Independent community library — **not** affiliated with Temporal Technologies.
->
-> **Today:** `NewAgent` requires **[Temporal](https://temporal.io)** (`WithTemporalConfig` or `WithTemporalClient`) and a cluster — [self-hosted](https://docs.temporal.io/self-hosted-guide) or [Temporal Cloud](https://temporal.io/cloud). In-process and custom runtimes are not on the public API yet; `internal/runtime` defines `Execute` / `ExecuteStream` for future backends.
 >
 > **Version:** `v0.0.10` — Active development. Follows [semantic versioning](https://semver.org/); API may evolve before v1.0.0.
 
-## Runtimes
-
-- **Temporal (supported)** — Durable, distributed execution (workflows, activities, workers). Requires a Temporal cluster.
-- **In-process (coming soon)** — Lightweight, no infrastructure required.
-- **Custom (coming soon)** — Bring your own runtime via the `Runtime` interface.
-
-## Architecture
-
-The SDK is structured in two layers. The public API (`pkg/agent`) exposes `Run`, `Stream`, and `RunAsync` — this is what your application code imports. Beneath it, the runtime layer (`internal/runtime`) defines the `Runtime` interface (`Execute` / `ExecuteStream`) and `ExecuteRequest`, which implementations use to run work. **Temporal** is the supported backend today; the split keeps app code on `pkg/agent` so additional runtimes can follow the same contract when exposed by the SDK.
-
-| Layer              | Role                                                                                                |
-| ------------------ | --------------------------------------------------------------------------------------------------- |
-| `pkg/agent`        | Public API — `Run`, `Stream`, `RunAsync`, `NewAgent` / `NewAgentWorker`, and configuration options. |
-| `internal/runtime` | Runtime contract — `Runtime`, `Execute`, `ExecuteStream`, `ExecuteRequest` (not imported by apps).  |
-| Temporal           | Default runtime — replay-safe workflows, activities, and workers.                                   |
-
 ## Overview
 
-Use this SDK when you want **LLM-driven agents** (tools, optional specialists) whose runs **survive worker restarts** and can last a long time: orchestration, retries, timeouts, child workflows for delegation, and approval pauses come from **Temporal**, with history and debugging in the **Temporal UI**. Ordinary non-durable “call the LLM in a loop” designs are replaced by **replay-safe workflow code** plus activities for side effects.
+**A Go SDK for production AI agents**—tools, human-in-the-loop approvals, and delegation to specialists—without anchoring a long run in a fragile “LLM in a loop” process. Agent work is **orchestrated as durable execution**: runs outlast crashes and deploys, respect timeouts and retries, and stay observable as first-class operations. Durable orchestration here is **[Temporal](https://temporal.io)** workflows and activities only—there is no separate agent execution path that bypasses Temporal.
 
-**Why use Temporal as the execution engine today?**
-
-- Reliable tool execution (retries, failure recovery around activities)
-- Human-in-the-loop gates before tools or sub-agent delegation
-- Multi-step and multi-agent flows (task queues, child workflows)
-- Long-running runs without losing progress (durable workflow state)
-- Traceability (replay, visibility in Temporal)
+**How it fits together:** **`pkg/agent`** (`Run`, `Stream`, `RunAsync`) maps to Temporal: each agent run uses durable **workflows** and **activities**. Connect **`NewAgent`** with **`WithTemporalConfig`** or **`WithTemporalClient`** to your cluster ([self-hosted](https://docs.temporal.io/self-hosted-guide) or [Cloud](https://temporal.io/cloud)). **[Getting Started](#getting-started)** and **[Temporal connection](#temporal-connection)** walk through setup; **[Temporal Runtime](#temporal-runtime)** goes deeper on workers, task queues, and delegation.
 
 ## Capabilities
 
-- **LLM integration** — OpenAI, Anthropic, and Gemini with tool/function calling
-- **Streaming** — Partial content and thinking deltas via **Stream**
-- **Tools** — Built-in tools and custom tools via **interfaces.Tool**
-- **Approval gates** — Optional human-in-the-loop approval before executing tools or delegating to sub-agents
-- **Sub-agents** — Delegate work to specialist agents you register
-- **Durable execution** — With Temporal, agents survive restarts and run for minutes to days without losing state
-- **Distributed execution** — Agents run across **agent workers** and activities, horizontally scalable across multiple instances
-- **Pluggable execution** — `runtime.Runtime` + `ExecuteRequest`; Temporal is supported; other backends planned
+- **LLM** — OpenAI, Anthropic, Gemini (`interfaces.LLMClient`; add your own provider).
+- **Stream** — Partial tokens / events (`Stream` + `WithStream`).
+- **Tools** — Registry + custom `interfaces.Tool`.
+- **Approvals** — Tool and delegation gates (`Run` / `RunAsync` / `Stream` paths).
+- **Sub-agents** — Delegate to specialist agents (`WithSubAgents`).
+- **Scale** — Workers and activities; scale out by adding Temporal workers.
 
-## Getting started
+## Temporal Runtime
+
+How **Temporal** powers agents: **`pkg/agent`** drives a **Temporal** client that starts **agent workflows**; **workers** (often `NewAgentWorker`) poll **task queues** and execute workflow and activity code. At a high level:
+
+- **Workflows** — Durable, **replay-safe** orchestration: the agent “loop” (model rounds, tool routing, when to delegate). Workflow code must stay deterministic; long work happens in activities.
+- **Activities** — **LLM calls**, **tool** execution, **conversation** updates, approval steps—side effects and I/O. Retries, timeouts, and failure handling apply here.
+- **Child workflows** — **Sub-agent delegation** is modeled as **child workflows** so specialists can run on their own task queues with their own workers.
+- **Workers & task queues** — Processes **poll** a queue and run scheduled workflow and activity tasks; **scale horizontally** by adding workers. Each agent / sub-agent typically has its own **task queue** name.
+
+Details: [Temporal connection](#temporal-connection), [Sub-agents](#sub-agents), [Agent and worker in separate processes](#agent-and-worker-in-separate-processes).
+
+One agent run is a single **agent workflow** (replay-safe, deterministic). The diagram below **maps** the agent loop to the primitives above—not a control-flow chart. **Solid lines** = client/workflow orchestration; **dashed lines** = the **agent worker** polls the task queue and executes scheduled workflow and activity tasks. Labels are **Temporal-first** (kind, then behavior) so they line up with how work appears in the Temporal UI.
+
+```mermaid
+graph TD
+    A[Agent] --> WF[Workflow: agent loop]
+    WF --> LLM[Activity: LLM call]
+    WF --> Appr[Activity: approval]
+    WF --> Tool[Activity: tool execution]
+    WF --> Mem[Activity: conversation memory]
+    WF --> Child[Child Workflow: agent loop]
+    Child --> LLM2[Activity: LLM call]
+    Child --> Tool2[Activity: tool execution]
+    Child --> Mem2[Activity: conversation memory]
+    Worker[Agent Worker]
+    Worker -.->|workflow task| WF
+    Worker -.->|activity task| LLM
+    Worker -.->|activity task| Appr
+    Worker -.->|activity task| Tool
+    Worker -.->|activity task| Mem
+    Worker -.->|workflow task| Child
+    Worker -.->|activity task| LLM2
+    Worker -.->|activity task| Tool2
+    Worker -.->|activity task| Mem2
+```
+
+## Getting Started
+
+How to **use** the SDK—agents, LLMs, Temporal connection, examples.
 
 Prerequisites: a running [Temporal](https://docs.temporal.io/self-hosted-guide) environment (required — agents do not run without it), **Go 1.24+** (see `go.mod`), and credentials for whatever LLM you plug in.
 
@@ -166,13 +176,7 @@ llmClient, err := gemini.NewClient(
 | **Gemini**    | `pkg/llm/gemini`    | gemini-2.5-flash, etc.    |
 
 
-You can add support for other LLM providers by implementing the `interfaces.LLMClient` interface in `[pkg/interfaces/llm.go](pkg/interfaces/llm.go)`. The interface requires:
-
-- `Generate(ctx, *LLMRequest) (*LLMResponse, error)` — non-streaming completion
-- `GenerateStream(ctx, *LLMRequest) (LLMStream, error)` — streaming completion
-- `GetModel()`, `GetProvider()`, `IsStreamSupported()` — metadata
-
-Implement `LLMStream` for streaming: `Next()`, `Current()`, `Err()`, `GetResult()`. See the existing providers in `pkg/llm/` for reference.
+Other providers: implement [`interfaces.LLMClient`](pkg/interfaces/llm.go) (`Generate`, `GenerateStream`, metadata). Copy patterns from `pkg/llm/`.
 
 ### Stream events (Stream)
 
@@ -203,21 +207,7 @@ for ev := range eventCh {
 
 #### Displaying stream events
 
-When streaming is enabled, the agent emits `ContentDelta` (partial tokens) and then `Complete` (full content). Both carry the same text—printing both would show it twice.
-
-**Recommended pattern:** Track whether you already displayed content via `ContentDelta` or `Content`, and skip printing `Complete`'s content when so. Use `ev.Content` from `AgentEventComplete` as the canonical final result for programmatic use (e.g. logging, storage).
-
-**Sub-agents:** You may see several `complete` events on one stream; it ends after the **main** assistant’s final `complete`. Use `**ev.AgentName`** to tell specialist from main when you print or log output.
-
-```text
-ContentDelta → "The result is 40."   (streamed, shown to user)
-ContentDelta → ...
-Complete     → "The result is 40."   (don't re-print; use ev.Content in code)
-```
-
-**Event types:** `ContentDelta` (streamed tokens), `Content` (full block when not streaming), `ToolCall`, `ToolResult`, `Approval` (human gate for a tool call or delegation; use `ev.Approval.Kind`), `Complete` (final response), `Error`.
-
-See [examples/agent_with_stream_conversation](examples/agent_with_stream_conversation) for a full example: Stream with conversation and the event-handling pattern.
+`ContentDelta` then `Complete` often duplicate the same text—don’t print both. Use `ev.AgentName` to distinguish agents; several `complete` events can appear before the main one finishes. See [examples/agent_with_stream_conversation](examples/agent_with_stream_conversation).
 
 ### Tools
 
@@ -616,8 +606,6 @@ Or run with a custom config path: `go run ./cmd -config /path/to/config.yaml`.
 See **[cmd/README.md](cmd/README.md)** for CLI details and env vars.
 
 ## Production Readiness Checklist
-
-Before using this SDK in production, align with what it exposes and how the **Temporal-backed** runtime runs agents:
 
 - **Run and approval limits** — Use `WithTimeout` and/or a context deadline on `Run` / `Stream`; use `WithApprovalTimeout` when tools require approval (activity retry counts inside workflows are fixed in the SDK, not user-tunable).
 - **Bound agent loops** — Set `WithMaxIterations` and, if you use sub-agents, `WithMaxSubAgentDepth`.
