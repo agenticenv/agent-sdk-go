@@ -385,6 +385,7 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 			toolResults = append(toolResults, interfaces.Message{
 				Role:       interfaces.MessageRoleTool,
 				Content:    content,
+				ToolName:   tc.ToolName,
 				ToolCallID: tc.ToolCallID,
 			})
 		}

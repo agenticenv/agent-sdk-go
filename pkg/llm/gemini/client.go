@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"iter"
+	"strings"
 	"sync"
 
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
@@ -118,7 +119,7 @@ func (c *Client) Generate(ctx context.Context, req *interfaces.LLMRequest) (*int
 		return nil, err
 	}
 
-	content := resp.Text()
+	content := geminiResponseText(resp)
 	toolCalls := geminiToolCallsToInterface(resp.FunctionCalls())
 
 	toolNames := make([]string, 0, len(toolCalls))
@@ -192,7 +193,7 @@ func (a *geminiStreamAdapter) Next() bool {
 	a.mu.Lock()
 	a.err = chunk.err
 	if chunk.resp != nil {
-		content := chunk.resp.Text()
+		content := geminiResponseText(chunk.resp)
 		// Compute delta from previous content (Gemini streams cumulative text)
 		prevLen := 0
 		if a.result != nil {
@@ -239,6 +240,25 @@ func (a *geminiStreamAdapter) GetResult() *interfaces.LLMResponse {
 	return a.result
 }
 
+// geminiResponseText concatenates assistant text from the first candidate without calling
+// [genai.GenerateContentResponse.Text], which logs a warning when the model returns tool
+// calls (FunctionCall parts) in the same turn—normal for function-calling agents.
+func geminiResponseText(resp *genai.GenerateContentResponse) string {
+	if resp == nil || len(resp.Candidates) == 0 || resp.Candidates[0].Content == nil {
+		return ""
+	}
+	var texts []string
+	for _, part := range resp.Candidates[0].Content.Parts {
+		if part == nil {
+			continue
+		}
+		if part.Text != "" && !part.Thought {
+			texts = append(texts, part.Text)
+		}
+	}
+	return strings.Join(texts, "")
+}
+
 func messagesToGemini(req *interfaces.LLMRequest) []*genai.Content {
 	if len(req.Messages) == 0 {
 		return []*genai.Content{genai.NewContentFromText("", genai.RoleUser)}
@@ -269,7 +289,12 @@ func messagesToGemini(req *interfaces.LLMRequest) []*genai.Content {
 			for i < len(req.Messages) && req.Messages[i].Role == "tool" {
 				t := req.Messages[i]
 				resp := parseToolResponse(t.Content)
-				fr := &genai.FunctionResponse{Name: t.ToolName, Response: resp}
+				// Gemini requires a non-empty function name on tool results (API 400 otherwise).
+				name := strings.TrimSpace(t.ToolName)
+				if name == "" {
+					name = "tool"
+				}
+				fr := &genai.FunctionResponse{Name: name, Response: resp}
 				if t.ToolCallID != "" {
 					fr.ID = t.ToolCallID
 				}

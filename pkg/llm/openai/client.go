@@ -3,6 +3,7 @@ package openai
 import (
 	"context"
 	"encoding/json"
+	"strings"
 
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/llm"
@@ -225,12 +226,16 @@ func messagesToOpenAI(req *interfaces.LLMRequest) []openai.ChatCompletionMessage
 					if len(argsBytes) > 0 {
 						argsStr = string(argsBytes)
 					}
+					name := strings.TrimSpace(tc.ToolName)
+					if name == "" {
+						name = "tool"
+					}
 					toolCalls[i] = openai.ChatCompletionMessageToolCallUnionParam{
 						OfFunction: &openai.ChatCompletionMessageFunctionToolCallParam{
 							ID: tc.ToolCallID,
 							Function: openai.ChatCompletionMessageFunctionToolCallFunctionParam{
 								Arguments: argsStr,
-								Name:      tc.ToolName,
+								Name:      name,
 							},
 						},
 					}

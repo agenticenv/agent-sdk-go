@@ -1,6 +1,8 @@
 package opts
 
 import (
+	"time"
+
 	"github.com/agenticenv/agent-sdk-go/pkg/agent"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
@@ -27,6 +29,8 @@ func Common(
 			Namespace: namespace,
 			TaskQueue: taskQueue,
 		}),
+		// Must match agent/main.go extras (DisableLocalWorker/EnableRemoteWorkers): fingerprint includes Limits.Timeout.
+		agent.WithTimeout(3 * time.Minute),
 		agent.WithLLMClient(llmClient),
 		agent.WithLogger(l),
 	}

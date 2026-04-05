@@ -34,6 +34,9 @@ func (cfg *agentConfig) buildTemporalRuntime(remoteWorker bool) (runtime.Runtime
 	} else {
 		options = append(options, temporal.WithTemporalClient(cfg.temporalClient, cfg.taskQueue))
 	}
+	if cfg.instanceId != "" {
+		options = append(options, temporal.WithInstanceId(cfg.instanceId))
+	}
 	// Event pipeline runs only on the client runtime; always set so worker runtimes get false explicitly.
 	enableRemote := !remoteWorker && cfg.enableRemoteWorkers
 	options = append(options, temporal.WithEnableRemoteWorkers(enableRemote))

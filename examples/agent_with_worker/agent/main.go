@@ -8,7 +8,6 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
-	"time"
 
 	config "github.com/agenticenv/agent-sdk-go/examples"
 	"github.com/agenticenv/agent-sdk-go/examples/agent_with_worker/opts"
@@ -26,13 +25,12 @@ func main() {
 		log.Fatalf("failed to create LLM client: %v", err)
 	}
 
-	// Common opts (name, description, system prompt, Temporal, LLM, logger)
+	// Common opts (name, description, system prompt, Temporal, LLM, logger, timeout)
 	baseOpts := opts.Common(cfg.Host, cfg.Port, cfg.Namespace, cfg.TaskQueue, llmClient, config.NewLoggerFromLogConfig(cfg))
-	// Agent-specific: no embedded worker, use remote workers, timeout for interactive use
+	// Agent-specific: no embedded worker, use remote workers
 	agentOpts := append(baseOpts,
 		agent.DisableLocalWorker(),
 		agent.EnableRemoteWorkers(),
-		agent.WithTimeout(3*time.Minute),
 	)
 
 	a, err := agent.NewAgent(agentOpts...)

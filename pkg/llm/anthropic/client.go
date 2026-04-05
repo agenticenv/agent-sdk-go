@@ -3,6 +3,7 @@ package anthropic
 import (
 	"context"
 	"encoding/json"
+	"strings"
 
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/llm"
@@ -213,7 +214,11 @@ func messagesToAnthropic(req *interfaces.LLMRequest) []anthropic.MessageParam {
 				if tc == nil {
 					continue
 				}
-				blocks = append(blocks, anthropic.NewToolUseBlock(tc.ToolCallID, tc.Args, tc.ToolName))
+				name := strings.TrimSpace(tc.ToolName)
+				if name == "" {
+					name = "tool"
+				}
+				blocks = append(blocks, anthropic.NewToolUseBlock(tc.ToolCallID, tc.Args, name))
 			}
 			if len(blocks) > 0 {
 				out = append(out, anthropic.NewAssistantMessage(blocks...))

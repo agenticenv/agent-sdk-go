@@ -127,8 +127,13 @@ func main() {
 				continue
 			}
 			if ev.Type == agent.AgentEventApproval && ev.Approval != nil {
-				argsJSON, _ := json.MarshalIndent(ev.Approval.Args, "", "  ")
-				fmt.Printf("\n--- Tool approval required ---\nTool: %s\nArgs:\n%s\nApprove? (y/n): ", ev.Approval.ToolName, string(argsJSON))
+				ap := ev.Approval
+				if len(ap.Args) == 0 {
+					fmt.Printf("\n--- Tool approval required ---\nTool: %s\nApprove? (y/n): ", ap.ToolName)
+				} else {
+					argsJSON := toolArgsJSONIndented(ap.Args)
+					fmt.Printf("\n--- Tool approval required ---\nTool: %s\nArgs:\n%s\nApprove? (y/n): ", ap.ToolName, argsJSON)
+				}
 				line, ok := <-lineCh
 				status := agent.ApprovalStatusRejected
 				if ok && strings.TrimSpace(strings.ToLower(line)) == "y" {
@@ -173,8 +178,13 @@ func printEvent(ev *agent.AgentEvent, streamedContent bool) {
 		}
 	case agent.AgentEventToolCall:
 		if ev.ToolCall != nil {
-			args, _ := json.Marshal(ev.ToolCall.Args)
-			fmt.Printf("\n[tool_call] %s args=%s\n", ev.ToolCall.ToolName, string(args))
+			tc := ev.ToolCall
+			if len(tc.Args) == 0 {
+				fmt.Printf("\n[tool_call] %s\n", tc.ToolName)
+			} else {
+				args, _ := json.Marshal(tc.Args)
+				fmt.Printf("\n[tool_call] %s args=%s\n", tc.ToolName, string(args))
+			}
 		}
 	case agent.AgentEventApproval:
 		// Handled in main loop; Approval events are not printed here
@@ -196,6 +206,15 @@ func printEvent(ev *agent.AgentEvent, streamedContent bool) {
 	default:
 		fmt.Printf("[%s] %+v\n", ev.Type, ev)
 	}
+}
+
+// toolArgsJSONIndented formats non-empty tool args for the approval prompt (indented JSON).
+func toolArgsJSONIndented(args map[string]any) string {
+	b, err := json.MarshalIndent(args, "", "  ")
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
 }
 
 func isExitCommand(s string) bool {
