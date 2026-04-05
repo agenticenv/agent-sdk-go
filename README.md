@@ -1,6 +1,6 @@
 # AI Agent SDK for Go
 
-Build reliable, production-grade AI agents with pluggable execution runtimes — **Temporal-first**
+**Build production-grade AI agents with pluggable runtimes — Temporal-first.**
 
 [![CI](https://github.com/agenticenv/agent-sdk-go/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/agenticenv/agent-sdk-go/actions)
 [![Release](https://img.shields.io/github/v/release/agenticenv/agent-sdk-go?label=Release)](https://github.com/agenticenv/agent-sdk-go/releases)
@@ -8,7 +8,7 @@ Build reliable, production-grade AI agents with pluggable execution runtimes —
 [![Go Report Card](https://goreportcard.com/badge/github.com/agenticenv/agent-sdk-go)](https://goreportcard.com/report/github.com/agenticenv/agent-sdk-go)
 [![License](https://img.shields.io/github/license/agenticenv/agent-sdk-go?label=License)](LICENSE)
 
-Build durable, long-running AI agents in Go — tool calling, human approvals, and sub-agent delegation. Runs execute as replay-safe workflows and activities; use the **Temporal UI** for history and debugging.
+Build durable, long-running AI agents in Go — tool calling, human approvals, and sub-agent delegation. Runs execute as replay-safe workflows and activities; powered by Temporal, with full visibility via the **Temporal UI** for history and debugging.
 
 > **Note:** Independent community library — **not** affiliated with Temporal Technologies.
 >
@@ -24,11 +24,13 @@ Build durable, long-running AI agents in Go — tool calling, human approvals, a
 
 ## Architecture
 
-| Layer | Role |
-| ----- | ---- |
-| `pkg/agent` | Public API — `Run`, `Stream`, `RunAsync`, `NewAgent` / `NewAgentWorker`, and configuration options. |
-| `internal/runtime` | Runtime contract — `Runtime`, `Execute`, `ExecuteStream`, `ExecuteRequest` (not imported by apps). |
-| Temporal | Default runtime — replay-safe workflows, activities, and workers. |
+
+| Layer              | Role                                                                                                |
+| ------------------ | --------------------------------------------------------------------------------------------------- |
+| `pkg/agent`        | Public API — `Run`, `Stream`, `RunAsync`, `NewAgent` / `NewAgentWorker`, and configuration options. |
+| `internal/runtime` | Runtime contract — `Runtime`, `Execute`, `ExecuteStream`, `ExecuteRequest` (not imported by apps).  |
+| Temporal           | Default runtime — replay-safe workflows, activities, and workers.                                   |
+
 
 ## Overview
 
@@ -156,11 +158,13 @@ llmClient, err := gemini.NewClient(
 
 ### Supported LLMs
 
+
 | Provider      | Package             | Notes                     |
 | ------------- | ------------------- | ------------------------- |
 | **OpenAI**    | `pkg/llm/openai`    | GPT-4o, GPT-4o-mini, etc. |
 | **Anthropic** | `pkg/llm/anthropic` | Claude models             |
 | **Gemini**    | `pkg/llm/gemini`    | gemini-2.5-flash, etc.    |
+
 
 You can add support for other LLM providers by implementing the `interfaces.LLMClient` interface in `[pkg/interfaces/llm.go](pkg/interfaces/llm.go)`. The interface requires:
 
@@ -203,7 +207,7 @@ When streaming is enabled, the agent emits `ContentDelta` (partial tokens) and t
 
 **Recommended pattern:** Track whether you already displayed content via `ContentDelta` or `Content`, and skip printing `Complete`'s content when so. Use `ev.Content` from `AgentEventComplete` as the canonical final result for programmatic use (e.g. logging, storage).
 
-**Sub-agents:** You may see several `complete` events on one stream; it ends after the **main** assistant’s final `complete`. Use **`ev.AgentName`** to tell specialist from main when you print or log output.
+**Sub-agents:** You may see several `complete` events on one stream; it ends after the **main** assistant’s final `complete`. Use `**ev.AgentName`** to tell specialist from main when you print or log output.
 
 ```text
 ContentDelta → "The result is 40."   (streamed, shown to user)
@@ -276,20 +280,20 @@ result, _ := mainAgent.Run(ctx, "What is 144 divided by 12?", "")
 
 [examples/agent_with_subagents](examples/agent_with_subagents)
 
-**Stream event fan-in:** Subscribe once on the main agent and you receive events from the whole delegation tree, including sub-agent tool calls and approvals. Use **`ev.AgentName`** on each `AgentEvent` to see which agent produced the event (content, tools, approvals, complete). The approval payload is `ev.Approval` (`ApprovalEvent`); the requesting agent is **not** duplicated there—use `ev.AgentName`.
+**Stream event fan-in:** Subscribe once on the main agent and you receive events from the whole delegation tree, including sub-agent tool calls and approvals. Use `**ev.AgentName`** on each `AgentEvent` to see which agent produced the event (content, tools, approvals, complete). The approval payload is `ev.Approval` (`ApprovalEvent`); the requesting agent is **not** duplicated there—use `ev.AgentName`.
 
 ### Tool approval
 
-By default tools require approval, including delegation to sub-agents registered with `**WithSubAgents`**—they follow the same `**WithToolApprovalPolicy**` as your other tools. Use `WithApprovalHandler` on the agent (required for Run when any tool needs approval). See [examples/agent_with_subagents](examples/agent_with_subagents).
+By default tools require approval, including delegation to sub-agents registered with `**WithSubAgents`**—they follow the same `**WithToolApprovalPolicy`** as your other tools. Use `WithApprovalHandler` on the agent (required for Run when any tool needs approval). See [examples/agent_with_subagents](examples/agent_with_subagents).
 
 #### Tools vs agent policy
 
 - `**WithToolApprovalPolicy**` applies to **every** tool the agent exposes: registry / `WithTools` **and** sub-agent delegation. Default is require-all; `AutoToolApprovalPolicy()` skips all; `AllowlistToolApprovalPolicy("echo", "subagent_MathSpecialist", ...)` skips only those names.
-- Custom tools may implement `**interfaces.ToolApproval`**; with a normal `**NewAgent**` build, a default policy is always set, so `**WithToolApprovalPolicy` wins** for that agent (see `requiresApproval` in `config.go`).
+- Custom tools may implement `**interfaces.ToolApproval`**; with a normal `**NewAgent`** build, a default policy is always set, so `**WithToolApprovalPolicy` wins** for that agent (see `requiresApproval` in `config.go`).
 
 #### Sub-agents and approval
 
-- `**ApprovalRequest`** (Run / RunAsync) and stream `**ev.Approval**` (`**ApprovalEvent**`) include `**Kind**` (`tool` or `delegation`) and `**DelegateToName**` (target specialist when `Kind` is `delegation`). The agent that asked for approval is on **`ev.AgentName`** for Stream (and `req.AgentName` on `ApprovalRequest`).
+- `**ApprovalRequest`** (Run / RunAsync) and stream `**ev.Approval`** (`**ApprovalEvent`**) include `**Kind**` (`tool` or `delegation`) and `**DelegateToName**` (target specialist when `Kind` is `delegation`). The agent that asked for approval is on `**ev.AgentName**` for Stream (and `req.AgentName` on `ApprovalRequest`).
 - **Parent (main agent):** one policy for its whole list—e.g. `RequireAll` → approving `subagent_MathSpecialist` is the same flow as approving `calculator` on that agent. `AutoToolApprovalPolicy()` → no approval for delegation or other tools on that agent.
 - **Specialist:** separate agent, **its own** `WithToolApprovalPolicy`. Calculator calls inside the specialist use **that** policy, not the parent’s.
 
@@ -477,10 +481,12 @@ Pass `agent.WithConversation(conv)` to persist message history for multi-turn co
 
 Choose implementation by deployment:
 
-| Deployment                                                        | Use                                                       |
-| ----------------------------------------------------------------- | --------------------------------------------------------- |
-| **Single process** (agent and worker in same process)             | `inmem.NewInMemoryConversation`                           |
+
+| Deployment                                                           | Use                                                       |
+| -------------------------------------------------------------------- | --------------------------------------------------------- |
+| **Single process** (agent and worker in same process)                | `inmem.NewInMemoryConversation`                           |
 | **Remote workers** (`DisableLocalWorker` or `EnableRemoteWorkers()`) | `redis.NewRedisConversation` or another distributed store |
+
 
 To add a new conversation store (e.g., Postgres, MongoDB), implement the `interfaces.Conversation` interface in `[pkg/interfaces/conversation.go](pkg/interfaces/conversation.go)`. The interface requires `AddMessage`, `ListMessages`, `Clear`, and `IsDistributed`. See `pkg/conversation/inmem` and `pkg/conversation/redis` for reference.
 
