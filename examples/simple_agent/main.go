@@ -50,4 +50,14 @@ func main() {
 		return
 	}
 	fmt.Printf("assistant: %s\n", response.Content)
+	if u := response.Usage; u != nil {
+		fmt.Printf("\nusage: prompt=%d completion=%d total=%d", u.PromptTokens, u.CompletionTokens, u.TotalTokens)
+		if u.CachedPromptTokens > 0 {
+			fmt.Printf(" cached_prompt=%d", u.CachedPromptTokens)
+		}
+		if u.ReasoningTokens > 0 {
+			fmt.Printf(" reasoning=%d", u.ReasoningTokens)
+		}
+		fmt.Println()
+	}
 }

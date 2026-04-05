@@ -168,6 +168,9 @@ func (c *Client) GenerateStream(ctx context.Context, req *interfaces.LLMRequest)
 		slog.Int("toolCount", len(req.Tools)))
 	messages := messagesToOpenAI(req)
 	params := c.buildCompletionParams(messages, req)
+	params.StreamOptions = openai.ChatCompletionStreamOptionsParam{
+		IncludeUsage: openai.Bool(true),
+	}
 	stream := c.client.Chat.Completions.NewStreaming(ctx, params)
 	acc := &openai.ChatCompletionAccumulator{}
 	return &openAIStreamAdapter{stream: stream, acc: acc}, nil
@@ -203,6 +206,7 @@ func openAIResponseToLLM(resp *openai.ChatCompletion) *interfaces.LLMResponse {
 		Metadata: map[string]any{
 			"model": resp.Model,
 		},
+		Usage: openAICompletionUsageToLLM(resp.Usage),
 	}
 	msg := resp.Choices[0].Message
 	for _, tc := range msg.ToolCalls {
@@ -218,6 +222,25 @@ func openAIResponseToLLM(resp *openai.ChatCompletion) *interfaces.LLMResponse {
 			ToolName:   tc.Function.Name,
 			Args:       args,
 		})
+	}
+	return out
+}
+
+// openAICompletionUsageToLLM maps OpenAI CompletionUsage to interfaces.LLMUsage.
+func openAICompletionUsageToLLM(u openai.CompletionUsage) *interfaces.LLMUsage {
+	if u.PromptTokens == 0 && u.CompletionTokens == 0 && u.TotalTokens == 0 {
+		return nil
+	}
+	out := &interfaces.LLMUsage{
+		PromptTokens:     u.PromptTokens,
+		CompletionTokens: u.CompletionTokens,
+		TotalTokens:      u.TotalTokens,
+	}
+	if u.PromptTokensDetails.CachedTokens != 0 {
+		out.CachedPromptTokens = u.PromptTokensDetails.CachedTokens
+	}
+	if u.CompletionTokensDetails.ReasoningTokens != 0 {
+		out.ReasoningTokens = u.CompletionTokensDetails.ReasoningTokens
 	}
 	return out
 }

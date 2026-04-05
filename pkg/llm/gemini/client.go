@@ -9,8 +9,8 @@ import (
 
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/llm"
-	"log/slog"
 	"google.golang.org/genai"
+	"log/slog"
 )
 
 var _ interfaces.LLMClient = (*Client)(nil)
@@ -184,6 +184,7 @@ func (c *Client) Generate(ctx context.Context, req *interfaces.LLMRequest) (*int
 	return &interfaces.LLMResponse{
 		Content:   content,
 		ToolCalls: toolCalls,
+		Usage:     geminiUsageMetadataToLLM(resp.UsageMetadata),
 		Metadata:  metadata,
 	}, nil
 }
@@ -247,6 +248,7 @@ func (a *geminiStreamAdapter) Next() bool {
 		a.result = &interfaces.LLMResponse{
 			Content:   content,
 			ToolCalls: geminiToolCallsToInterface(chunk.resp.FunctionCalls()),
+			Usage:     geminiUsageMetadataToLLM(chunk.resp.UsageMetadata),
 			Metadata:  map[string]any{},
 		}
 		if len(chunk.resp.Candidates) > 0 && chunk.resp.Candidates[0].FinishReason != "" {
@@ -283,6 +285,23 @@ func (a *geminiStreamAdapter) GetResult() *interfaces.LLMResponse {
 // geminiResponseText concatenates assistant text from the first candidate without calling
 // [genai.GenerateContentResponse.Text], which logs a warning when the model returns tool
 // calls (FunctionCall parts) in the same turn—normal for function-calling agents.
+// geminiUsageMetadataToLLM maps Gemini usage metadata to interfaces.LLMUsage.
+func geminiUsageMetadataToLLM(um *genai.GenerateContentResponseUsageMetadata) *interfaces.LLMUsage {
+	if um == nil {
+		return nil
+	}
+	if um.PromptTokenCount == 0 && um.CandidatesTokenCount == 0 && um.TotalTokenCount == 0 {
+		return nil
+	}
+	return &interfaces.LLMUsage{
+		PromptTokens:       int64(um.PromptTokenCount),
+		CompletionTokens:   int64(um.CandidatesTokenCount),
+		TotalTokens:        int64(um.TotalTokenCount),
+		CachedPromptTokens: int64(um.CachedContentTokenCount),
+		ReasoningTokens:    int64(um.ThoughtsTokenCount),
+	}
+}
+
 func geminiResponseText(resp *genai.GenerateContentResponse) string {
 	if resp == nil || len(resp.Candidates) == 0 || resp.Candidates[0].Content == nil {
 		return ""

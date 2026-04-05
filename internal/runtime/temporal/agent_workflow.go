@@ -80,8 +80,9 @@ type AgentLLMStreamInput struct {
 
 // AgentLLMResult is the return value of AgentLLMActivity. Workflow uses it to decide: return content or execute tools.
 type AgentLLMResult struct {
-	Content   string            `json:"content"`
-	ToolCalls []ToolCallRequest `json:"tool_calls"`
+	Content   string               `json:"content"`
+	ToolCalls []ToolCallRequest    `json:"tool_calls"`
+	Usage     *interfaces.LLMUsage `json:"usage,omitempty"`
 }
 
 // ToolCallRequest is a tool invocation with approval flag. NeedsApproval is set by AgentLLMActivity.
@@ -224,6 +225,7 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 	messages := []interfaces.Message{{Role: interfaces.MessageRoleUser, Content: input.UserPrompt}}
 
 	lastContent := ""
+	var runUsage *interfaces.LLMUsage
 	var llmResult AgentLLMResult
 	for iter := 0; iter < maxIter; iter++ {
 
@@ -255,10 +257,12 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 			return nil, err
 		}
 
+		runUsage = mergeLLMUsage(runUsage, llmResult.Usage)
+
 		if len(llmResult.ToolCalls) == 0 {
 			// Final response: accumulate assistant message for conversation
 			messages = append(messages, interfaces.Message{Role: interfaces.MessageRoleAssistant, Content: llmResult.Content})
-			emitEvent(&types.AgentEvent{Type: types.AgentEventComplete, Content: llmResult.Content, Timestamp: workflow.Now(ctx)})
+			emitEvent(&types.AgentEvent{Type: types.AgentEventComplete, Content: llmResult.Content, Usage: runUsage, Timestamp: workflow.Now(ctx)})
 			lastContent = llmResult.Content
 			break
 		} else {
@@ -415,6 +419,7 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 		AgentName: rt.AgentSpec.Name,
 		Model:     rt.AgentExecution.LLM.Client.GetModel(),
 		Metadata:  map[string]any{},
+		Usage:     runUsage,
 	}, nil
 }
 
@@ -553,7 +558,7 @@ func (rt *TemporalRuntime) fetchConversationMessages(ctx context.Context, conver
 }
 
 func (rt *TemporalRuntime) llmResponseToResult(resp *interfaces.LLMResponse, tools []interfaces.Tool) (*AgentLLMResult, error) {
-	result := &AgentLLMResult{Content: resp.Content}
+	result := &AgentLLMResult{Content: resp.Content, Usage: cloneLLMUsagePtr(resp.Usage)}
 	for _, tc := range resp.ToolCalls {
 		if tc == nil {
 			continue
@@ -901,6 +906,30 @@ func llmSamplingToTypes(s *sdkruntime.LLMSampling) *types.LLMSampling {
 		out.Reasoning = &r
 	}
 	return out
+}
+
+func mergeLLMUsage(acc *interfaces.LLMUsage, add *interfaces.LLMUsage) *interfaces.LLMUsage {
+	if add == nil {
+		return acc
+	}
+	if acc == nil {
+		return cloneLLMUsagePtr(add)
+	}
+	return &interfaces.LLMUsage{
+		PromptTokens:       acc.PromptTokens + add.PromptTokens,
+		CompletionTokens:   acc.CompletionTokens + add.CompletionTokens,
+		TotalTokens:        acc.TotalTokens + add.TotalTokens,
+		CachedPromptTokens: acc.CachedPromptTokens + add.CachedPromptTokens,
+		ReasoningTokens:    acc.ReasoningTokens + add.ReasoningTokens,
+	}
+}
+
+func cloneLLMUsagePtr(u *interfaces.LLMUsage) *interfaces.LLMUsage {
+	if u == nil {
+		return nil
+	}
+	c := *u
+	return &c
 }
 
 func retryPolicy(maxAttempts int32) *temporal.RetryPolicy {

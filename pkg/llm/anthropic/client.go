@@ -154,6 +154,7 @@ func (c *Client) Generate(ctx context.Context, req *interfaces.LLMRequest) (*int
 	return &interfaces.LLMResponse{
 		Content:   content,
 		ToolCalls: toolCalls,
+		Usage:     anthropicUsageToLLM(msg.Usage),
 		Metadata: map[string]any{
 			"model":       string(msg.Model),
 			"stop_reason": string(msg.StopReason),
@@ -206,10 +207,24 @@ func (a *anthropicStreamAdapter) GetResult() *interfaces.LLMResponse {
 	return &interfaces.LLMResponse{
 		Content:   content,
 		ToolCalls: toolCalls,
+		Usage:     anthropicUsageToLLM(a.acc.Usage),
 		Metadata: map[string]any{
 			"model":       string(a.acc.Model),
 			"stop_reason": string(a.acc.StopReason),
 		},
+	}
+}
+
+// anthropicUsageToLLM maps Anthropic Usage to interfaces.LLMUsage.
+func anthropicUsageToLLM(u anthropic.Usage) *interfaces.LLMUsage {
+	if u.InputTokens == 0 && u.OutputTokens == 0 {
+		return nil
+	}
+	return &interfaces.LLMUsage{
+		PromptTokens:       u.InputTokens,
+		CompletionTokens:   u.OutputTokens,
+		TotalTokens:        u.InputTokens + u.OutputTokens,
+		CachedPromptTokens: u.CacheReadInputTokens,
 	}
 }
 

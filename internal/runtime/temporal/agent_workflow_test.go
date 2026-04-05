@@ -340,3 +340,23 @@ func TestAgentLLMStreamActivity_MockLLM_FallbackToGenerate(t *testing.T) {
 	require.NoError(t, val.Get(&got))
 	require.Equal(t, "gen", got.Content)
 }
+
+func TestMergeLLMUsage(t *testing.T) {
+	a := &interfaces.LLMUsage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15}
+	b := &interfaces.LLMUsage{PromptTokens: 3, CompletionTokens: 7, TotalTokens: 10, CachedPromptTokens: 2, ReasoningTokens: 1}
+
+	got := mergeLLMUsage(a, b)
+	if got.PromptTokens != 13 || got.CompletionTokens != 12 || got.TotalTokens != 25 {
+		t.Fatalf("mergeLLMUsage: got %+v", got)
+	}
+	if got.CachedPromptTokens != 2 || got.ReasoningTokens != 1 {
+		t.Fatalf("mergeLLMUsage optional fields: got %+v", got)
+	}
+
+	if mergeLLMUsage(nil, nil) != nil {
+		t.Fatal("nil + nil should be nil")
+	}
+	if x := mergeLLMUsage(nil, b); x.PromptTokens != b.PromptTokens {
+		t.Fatal("nil + b should copy b")
+	}
+}

@@ -138,6 +138,7 @@ func (a *Agent) Run(ctx context.Context, input string, conversationID string) (*
 		AgentName: result.AgentName,
 		Model:     result.Model,
 		Metadata:  result.Metadata,
+		Usage:     result.Usage,
 	}, nil
 }
 

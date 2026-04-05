@@ -23,11 +23,11 @@ The examples use `TEMPORAL_HOST`, `TEMPORAL_PORT`, `TEMPORAL_NAMESPACE` from `.e
 
 | Example | What it demonstrates |
 |---------|---------------------|
-| `simple_agent` | Minimal agent, no tools — Temporal config, system prompt, LLM client, single `Run()` |
+| `simple_agent` | Minimal agent, no tools — Temporal config, system prompt, LLM client, single `Run()`; prints `AgentResponse.Usage` (token counts) when the provider reports them |
 | `agent_with_temporal_client` | Caller-owned Temporal client — `WithTemporalClient` + `WithTaskQueue`; create and close client yourself (TLS, API key, Cloud) |
 | `agent_with_conversation` | In-memory conversation with `WithConversation` — multi-turn context, same `conversationID` for `Run` |
 | `agent_with_tools` | Built-in tools (echo, calculator, weather, wikipedia, search) with auto-approval |
-| `agent_with_stream` | Streaming with `Stream` + partial content (`content_delta`, `tool_call`, `complete`) |
+| `agent_with_stream` | Streaming with `Stream` + partial content (`content_delta`, `tool_call`, `complete`); prints aggregated token usage on `complete` |
 | `agent_with_stream_conversation` | Stream + conversation; event handling to avoid duplicate output (ContentDelta vs Complete) |
 | `agent_with_tools_approval` | Tools + `WithApprovalHandler` — user approves or rejects each tool run (Run only) |
 | `agent_with_run_async` | `RunAsync` — `resultCh` + `approvalCh`; use `req.Respond` (no `WithApprovalHandler`) |

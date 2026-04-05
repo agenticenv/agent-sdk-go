@@ -1,6 +1,10 @@
 package types
 
-import "time"
+import (
+	"time"
+
+	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
+)
 
 // AgentEventType identifies a streamed agent event kind.
 type AgentEventType string
@@ -25,15 +29,17 @@ const AgentEventAll AgentEventType = "*"
 // Stream uses it so AgentEventComplete from a sub-agent does not close the root stream.
 // For AgentEventApproval, the requesting agent is also on AgentName (not duplicated on Approval).
 type AgentEvent struct {
-	Type       AgentEventType         `json:"type"`
-	AgentName  string                 `json:"agent_name,omitempty"`
-	Content    string                 `json:"content,omitempty"`
-	ToolCall   *ToolCallEvent         `json:"tool_call,omitempty"`
-	Approval   *ApprovalEvent         `json:"approval,omitempty"` // for AgentEventApproval
-	Error      error                  `json:"error,omitempty"`
-	Metadata   map[string]interface{} `json:"metadata,omitempty"`
-	Timestamp  time.Time              `json:"timestamp"`
-	WorkflowID string                 `json:"workflow_id,omitempty"` // optional run identifier for correlation (implementation-defined)
+	Type      AgentEventType         `json:"type"`
+	AgentName string                 `json:"agent_name,omitempty"`
+	Content   string                 `json:"content,omitempty"`
+	ToolCall  *ToolCallEvent         `json:"tool_call,omitempty"`
+	Approval  *ApprovalEvent         `json:"approval,omitempty"` // for AgentEventApproval
+	Error     error                  `json:"error,omitempty"`
+	Metadata  map[string]interface{} `json:"metadata,omitempty"`
+	// Usage is set on AgentEventComplete for the root agent: aggregated token usage for the run.
+	Usage      *interfaces.LLMUsage `json:"usage,omitempty"`
+	Timestamp  time.Time            `json:"timestamp"`
+	WorkflowID string               `json:"workflow_id,omitempty"` // optional run identifier for correlation (implementation-defined)
 }
 
 // ToolApprovalKind classifies what the user is approving (same event type for Stream).

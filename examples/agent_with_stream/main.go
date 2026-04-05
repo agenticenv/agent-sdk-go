@@ -124,6 +124,17 @@ func printEvent(ev *agent.AgentEvent, streamedSoFar bool) {
 		} else if ev.Content != "" {
 			fmt.Println("[complete]")
 		}
+		if ev.Usage != nil {
+			u := ev.Usage
+			fmt.Printf("\n[usage] prompt=%d completion=%d total=%d", u.PromptTokens, u.CompletionTokens, u.TotalTokens)
+			if u.CachedPromptTokens > 0 {
+				fmt.Printf(" cached_prompt=%d", u.CachedPromptTokens)
+			}
+			if u.ReasoningTokens > 0 {
+				fmt.Printf(" reasoning=%d", u.ReasoningTokens)
+			}
+			fmt.Println()
+		}
 	default:
 		fmt.Printf("[%s] %+v\n", ev.Type, ev)
 	}

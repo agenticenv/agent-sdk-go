@@ -85,9 +85,21 @@ type LLMReasoning struct {
 	BudgetTokens int
 }
 
+// LLMUsage reports token counts from the provider for one completion. Values are best-effort:
+// some fields may be zero when the API does not return them.
+type LLMUsage struct {
+	PromptTokens       int64 `json:"prompt_tokens,omitempty"`
+	CompletionTokens   int64 `json:"completion_tokens,omitempty"`
+	TotalTokens        int64 `json:"total_tokens,omitempty"`
+	CachedPromptTokens int64 `json:"cached_prompt_tokens,omitempty"`
+	ReasoningTokens    int64 `json:"reasoning_tokens,omitempty"`
+}
+
 type LLMResponse struct {
 	Content  string
 	Metadata map[string]any
+	// Usage is set when the provider returns token usage for this completion (non-stream and stream).
+	Usage *LLMUsage
 	// ToolCalls contains any tool invocations the LLM chose; empty when none.
 	ToolCalls []*ToolCall
 }

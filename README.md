@@ -198,6 +198,15 @@ for ev := range eventCh {
 
 `ContentDelta` then `Complete` often duplicate the same text—don’t print both. Use `ev.AgentName` to distinguish agents; several `complete` events can appear before the main one finishes. See [examples/agent_with_stream_conversation](examples/agent_with_stream_conversation).
 
+### Token usage (`LLMUsage`)
+
+Each LLM completion can report token counts via [`interfaces.LLMUsage`](pkg/interfaces/llm.go) on [`interfaces.LLMResponse.Usage`](pkg/interfaces/llm.go). OpenAI, Anthropic, and Gemini clients populate **`PromptTokens`**, **`CompletionTokens`**, **`TotalTokens`**, and optional **`CachedPromptTokens`** / **`ReasoningTokens`** when the provider returns them.
+
+- **`Agent.Run` / `RunAsync`:** [`AgentResponse.Usage`](pkg/agent/agent.go) is the **sum** of usage across all LLM calls in that run (including tool rounds). Use it for cost estimates, quotas, and logging.
+- **`Stream`:** the root agent’s final [`AgentEventComplete`](pkg/agent/event.go) includes **`Usage`** with the same aggregate. OpenAI streaming requests **`include_usage`** automatically so totals appear on the final stream result.
+
+Examples: [examples/simple_agent](examples/simple_agent) (prints usage after `Run`), [examples/agent_with_stream](examples/agent_with_stream) (prints usage on `complete`).
+
 ### Tools
 
 Register tools and pass to the agent. Use `agent.WithToolApprovalPolicy(agent.AutoToolApprovalPolicy())` to skip approval (or omit for default approval flow).
@@ -563,6 +572,7 @@ A Temporal connection is **required** — one of `WithTemporalConfig` or `WithTe
 - **WithMaxSubAgentDepth**: Maximum delegation hops from this agent (default 2). See [Sub-agents](#sub-agents).
 - **WithMaxIterations**: Max LLM rounds (default 5).
 - **WithStream**: Enable `Stream` partial content streaming.
+- **Token usage:** Not a separate option. On **`Run`**, read **`result.Usage`** (`*interfaces.LLMUsage`) when set. On **`Stream`**, read **`ev.Usage`** on the root agent’s **`complete`** event (aggregated across tool rounds). See [Token usage](#token-usage-llmusage).
 - **WithLLMSampling**: Pass `&agent.LLMSampling{...}`; nil or zero fields leave that knob to the provider default. Which fields apply where:
   - **`Temperature`** — OpenAI, Anthropic, Gemini.
   - **`MaxTokens`** — OpenAI, Anthropic, Gemini (max output / completion tokens).
