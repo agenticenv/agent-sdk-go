@@ -1,5 +1,5 @@
 // agent_with_run_async demonstrates RunAsync: result and approval channels without
-// WithApprovalHandler or RunStream. Complete each approval with req.Respond.
+// WithApprovalHandler or Stream. Complete each approval with req.Respond.
 package main
 
 import (

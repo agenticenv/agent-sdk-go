@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	sdkruntime "github.com/agenticenv/agent-sdk-go/internal/runtime"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 )
 
@@ -22,7 +23,9 @@ func (stubLLM) GetProvider() interfaces.LLMProvider { return interfaces.LLMProvi
 func (stubLLM) IsStreamSupported() bool             { return false }
 
 func TestBuildTemporalRuntimeConfig_RequiresTemporalOrClient(t *testing.T) {
-	_, err := buildTemporalRuntimeConfig(WithLLMClient(stubLLM{}))
+	_, err := buildTemporalRuntimeConfig(WithAgentExecution(sdkruntime.AgentExecution{
+		LLM: sdkruntime.AgentLLM{Client: stubLLM{}},
+	}))
 	if err == nil || !strings.Contains(err.Error(), "temporal config or client is required") {
 		t.Fatalf("got %v", err)
 	}

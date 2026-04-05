@@ -29,7 +29,7 @@ type ApprovalHandler func(ctx context.Context, req *ApprovalRequest)
 
 // ApprovalRequest describes a pending tool approval for Run and RunAsync.
 // Respond is always set; call it once with ApprovalStatusApproved or ApprovalStatusRejected.
-// For RunStream approvals, use OnApproval with the approval event payload instead.
+// For Stream approvals, use OnApproval with the approval event payload instead.
 type ApprovalRequest struct {
 	ToolName string         `json:"tool_name"`
 	Args     map[string]any `json:"args"`

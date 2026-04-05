@@ -24,18 +24,9 @@ func (cfg *agentConfig) buildAgentRuntime(remoteWorker bool) (runtime.Runtime, e
 func (cfg *agentConfig) buildTemporalRuntime(remoteWorker bool) (runtime.Runtime, error) {
 	options := []temporal.Option{
 		temporal.WithLogger(cfg.logger),
-		temporal.WithLLMClient(cfg.LLMClient),
-		temporal.WithLLMSampling(cfg.llmSampling),
-		temporal.WithTools(cfg.toolsList()...),
-		temporal.WithSystemPrompt(cfg.SystemPrompt),
-		temporal.WithResponseFormat(cfg.responseFormatForLLM()),
-		temporal.WithConversation(cfg.conversation),
-		temporal.WithConversationSize(cfg.conversationSize),
-		temporal.WithToolApprovalPolicy(cfg.toolApprovalPolicy),
-		temporal.WithTimeout(cfg.timeout),
-		temporal.WithAgentName(cfg.Name),
-		temporal.WithMaxIterations(cfg.maxIterations),
-		temporal.WithApprovalTimeout(cfg.approvalTimeout),
+		temporal.WithAgentSpec(cfg.runtimeAgentSpec()),
+		temporal.WithAgentExecution(cfg.runtimeAgentExecution()),
+		temporal.WithPolicyFingerprint(toolPolicyFingerprint(cfg.toolApprovalPolicy)),
 		temporal.WithRemoteWorker(remoteWorker),
 	}
 	if cfg.temporalConfig != nil {
@@ -43,5 +34,8 @@ func (cfg *agentConfig) buildTemporalRuntime(remoteWorker bool) (runtime.Runtime
 	} else {
 		options = append(options, temporal.WithTemporalClient(cfg.temporalClient, cfg.taskQueue))
 	}
+	// Event pipeline runs only on the client runtime; always set so worker runtimes get false explicitly.
+	enableRemote := !remoteWorker && cfg.enableRemoteWorkers
+	options = append(options, temporal.WithEnableRemoteWorkers(enableRemote))
 	return temporal.NewTemporalRuntime(options...)
 }

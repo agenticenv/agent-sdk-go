@@ -63,6 +63,36 @@ func (mr *MockRuntimeMockRecorder) Close() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MockRuntime)(nil).Close))
 }
 
+// Execute mocks base method.
+func (m *MockRuntime) Execute(arg0 context.Context, arg1 *runtime.ExecuteRequest) (*types.AgentResponse, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Execute", arg0, arg1)
+	ret0, _ := ret[0].(*types.AgentResponse)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Execute indicates an expected call of Execute.
+func (mr *MockRuntimeMockRecorder) Execute(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Execute", reflect.TypeOf((*MockRuntime)(nil).Execute), arg0, arg1)
+}
+
+// ExecuteStream mocks base method.
+func (m *MockRuntime) ExecuteStream(arg0 context.Context, arg1 *runtime.ExecuteRequest) (chan *types.AgentEvent, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ExecuteStream", arg0, arg1)
+	ret0, _ := ret[0].(chan *types.AgentEvent)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ExecuteStream indicates an expected call of ExecuteStream.
+func (mr *MockRuntimeMockRecorder) ExecuteStream(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExecuteStream", reflect.TypeOf((*MockRuntime)(nil).ExecuteStream), arg0, arg1)
+}
+
 // GetEventBus mocks base method.
 func (m *MockRuntime) GetEventBus() eventbus.EventBus {
 	m.ctrl.T.Helper()
@@ -75,36 +105,6 @@ func (m *MockRuntime) GetEventBus() eventbus.EventBus {
 func (mr *MockRuntimeMockRecorder) GetEventBus() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetEventBus", reflect.TypeOf((*MockRuntime)(nil).GetEventBus))
-}
-
-// Run mocks base method.
-func (m *MockRuntime) Run(arg0 context.Context, arg1 *runtime.RunRequest) (*types.AgentResponse, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Run", arg0, arg1)
-	ret0, _ := ret[0].(*types.AgentResponse)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// Run indicates an expected call of Run.
-func (mr *MockRuntimeMockRecorder) Run(arg0, arg1 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Run", reflect.TypeOf((*MockRuntime)(nil).Run), arg0, arg1)
-}
-
-// RunStream mocks base method.
-func (m *MockRuntime) RunStream(arg0 context.Context, arg1 *runtime.RunRequest) (chan *types.AgentEvent, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "RunStream", arg0, arg1)
-	ret0, _ := ret[0].(chan *types.AgentEvent)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// RunStream indicates an expected call of RunStream.
-func (mr *MockRuntimeMockRecorder) RunStream(arg0, arg1 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RunStream", reflect.TypeOf((*MockRuntime)(nil).RunStream), arg0, arg1)
 }
 
 // SetEventBus mocks base method.

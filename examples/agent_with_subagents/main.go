@@ -16,13 +16,13 @@ import (
 )
 
 // This example demonstrates that tool approval events from a sub-agent (MathSpecialist)
-// flow up to the main agent's RunStream subscriber on the same in-memory channel.
+// flow up to the main agent's Stream subscriber on the same in-memory channel.
 //
 // Approval flow:
 //  1. Main agent asks to delegate to MathSpecialist → approval prompt (kind: delegation)
 //  2. MathSpecialist calls the calculator tool    → approval prompt (kind: tool, from sub-agent)
 //
-// Both approvals arrive on the main agent's RunStream event channel, proving that
+// Both approvals arrive on the main agent's Stream event channel, proving that
 // sub-agent events fan-in to the root agent's LocalChannelName.
 //
 // The main agent system prompt also asks the model to continue after delegation returns,
@@ -108,7 +108,7 @@ func main() {
 	fmt.Println("All approvals (main agent delegation + sub-agent calculator) are handled here.")
 	fmt.Println()
 
-	eventCh, err := mainAgent.RunStream(context.Background(), prompt, "")
+	eventCh, err := mainAgent.Stream(context.Background(), prompt, "")
 	if err != nil {
 		log.Fatalf("run stream failed: %v", err)
 	}
@@ -150,7 +150,7 @@ func main() {
 			fmt.Print(ev.Content)
 
 		case agent.AgentEventComplete:
-			// You may see two completes on one RunStream: specialist first, then main after it
+			// You may see two completes on one Stream: specialist first, then main after it
 			// incorporates the tool result. Only the main agent's complete ends the stream.
 			who := strings.TrimSpace(ev.AgentName)
 			if who == "" {

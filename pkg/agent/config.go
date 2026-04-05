@@ -9,6 +9,7 @@ import (
 
 	"log/slog"
 
+	"github.com/agenticenv/agent-sdk-go/internal/runtime"
 	"github.com/agenticenv/agent-sdk-go/internal/runtime/temporal"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
@@ -179,12 +180,12 @@ func WithLogLevel(level string) Option {
 }
 
 // WithApprovalHandler sets the approval callback for Run. Required when tools need approval.
-// The callback receives req with req.Respond set; call req.Respond(Approved|Rejected). Agent only; RunStream uses OnApproval on events.
+// The callback receives req with req.Respond set; call req.Respond(Approved|Rejected). Agent only; Stream uses OnApproval on events.
 func WithApprovalHandler(fn types.ApprovalHandler) Option {
 	return func(c *agentConfig) { c.approvalHandler = fn }
 }
 
-// WithTimeout sets a maximum wait for Run and RunStream. Agent only. Ignored by AgentWorker.
+// WithTimeout sets a maximum wait for Run and Stream. Agent only. Ignored by AgentWorker.
 func WithTimeout(d time.Duration) Option {
 	return func(c *agentConfig) { c.timeout = d }
 }
@@ -460,6 +461,79 @@ func (c *agentConfig) responseFormatForLLM() *interfaces.ResponseFormat {
 	return &interfaces.ResponseFormat{Type: interfaces.ResponseFormatText}
 }
 
+// runtimeAgentSpec matches [runtime.ExecuteRequest.AgentSpec] / [temporal.TemporalRuntimeConfig.AgentSpec].
+// ResponseFormat uses [agentConfig.responseFormatForLLM] so unset format defaults to text (same as LLM requests).
+func (c *agentConfig) runtimeAgentSpec() runtime.AgentSpec {
+	return runtime.AgentSpec{
+		Name:           c.Name,
+		Description:    c.Description,
+		SystemPrompt:   c.SystemPrompt,
+		ResponseFormat: c.responseFormatForLLM(),
+	}
+}
+
+// runtimeAgentExecution matches [runtime.ExecuteRequest.AgentExecution] / [temporal.TemporalRuntimeConfig.AgentExecution].
+func (c *agentConfig) runtimeAgentExecution() runtime.AgentExecution {
+	d := runtime.AgentExecution{
+		LLM: runtime.AgentLLM{
+			Client: c.LLMClient,
+		},
+		Tools: runtime.AgentTools{
+			Tools:          c.toolsList(),
+			Registry:       c.toolRegistry,
+			ApprovalPolicy: c.toolApprovalPolicy,
+		},
+		Session: runtime.AgentSession{
+			Conversation:     c.conversation,
+			ConversationSize: c.conversationSize,
+		},
+		Limits: runtime.AgentLimits{
+			MaxIterations:   c.maxIterations,
+			Timeout:         c.timeout,
+			ApprovalTimeout: c.approvalTimeout,
+		},
+	}
+	if c.llmSampling != nil {
+		d.LLM.Sampling = &runtime.LLMSampling{
+			Temperature: c.llmSampling.Temperature,
+			MaxTokens:   c.llmSampling.MaxTokens,
+			TopP:        c.llmSampling.TopP,
+			TopK:        c.llmSampling.TopK,
+		}
+	}
+	return d
+}
+
+// agentConfigFingerprint hashes identity, prompts, tools, sampling, limits, and approval policy
+// for SubAgentRoute.AgentFingerprint (delegation); same inputs as temporal.NewTemporalRuntime agent fingerprint.
+func (c *agentConfig) agentConfigFingerprint() string {
+	mat := temporal.BuildAgentFingerprintPayload(
+		c.runtimeAgentSpec(),
+		temporal.ToolNamesFromTools(c.toolsList()),
+		toolPolicyFingerprint(c.toolApprovalPolicy),
+		llmSamplingRuntimeView(c.llmSampling),
+		c.conversationSize,
+		runtime.AgentLimits{
+			MaxIterations:   c.maxIterations,
+			Timeout:         c.timeout,
+			ApprovalTimeout: c.approvalTimeout,
+		},
+	)
+	return temporal.ComputeAgentFingerprint(mat)
+}
+
+func llmSamplingRuntimeView(s *LLMSampling) *runtime.LLMSampling {
+	if s == nil {
+		return nil
+	}
+	return &runtime.LLMSampling{
+		Temperature: s.Temperature,
+		MaxTokens:   s.MaxTokens,
+		TopP:        s.TopP,
+		TopK:        s.TopK,
+	}
+}
+
 // applySamplingToRequest sets Temperature, MaxTokens, TopP, TopK on req from agent LLMSampling.
 // When llmSampling is nil, nothing is set; LLM clients use their provider defaults.
 func (c *agentConfig) applySamplingToRequest(req *interfaces.LLMRequest) {
@@ -501,5 +575,3 @@ func (c *agentConfig) hasApprovalTools() bool {
 	}
 	return false
 }
-
-

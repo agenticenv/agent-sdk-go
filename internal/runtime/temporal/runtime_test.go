@@ -222,14 +222,14 @@ func TestTemporalRuntime_Run_Success(t *testing.T) {
 
 	rt, err := NewTemporalRuntime(
 		WithTemporalClient(tc, "tq"),
-		WithLLMClient(stubLLM{}),
-		WithAgentName("agent-a"),
+		WithAgentSpec(sdkruntime.AgentSpec{Name: "agent-a"}),
+		WithAgentExecution(sdkruntime.AgentExecution{LLM: sdkruntime.AgentLLM{Client: stubLLM{}}}),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	resp, err := rt.Run(context.Background(), &sdkruntime.RunRequest{AgentName: "agent-a", UserPrompt: "hi"})
+	resp, err := rt.Execute(context.Background(), &sdkruntime.ExecuteRequest{UserPrompt: "hi", AgentSpec: &sdkruntime.AgentSpec{Name: "agent-a"}})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -245,8 +245,8 @@ func TestTemporalRuntime_Run_NoWorkers(t *testing.T) {
 
 	rt, err := NewTemporalRuntime(
 		WithTemporalClient(tc, "tq"),
-		WithLLMClient(stubLLM{}),
-		WithAgentName("agent-a"),
+		WithAgentSpec(sdkruntime.AgentSpec{Name: "agent-a"}),
+		WithAgentExecution(sdkruntime.AgentExecution{LLM: sdkruntime.AgentLLM{Client: stubLLM{}}}),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -255,7 +255,7 @@ func TestTemporalRuntime_Run_NoWorkers(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 
-	_, err = rt.Run(ctx, &sdkruntime.RunRequest{AgentName: "agent-a", UserPrompt: "hi"})
+	_, err = rt.Execute(ctx, &sdkruntime.ExecuteRequest{UserPrompt: "hi", AgentSpec: &sdkruntime.AgentSpec{Name: "agent-a"}})
 	if err == nil {
 		t.Fatal("expected error when no workers")
 	}
@@ -273,14 +273,14 @@ func TestTemporalRuntime_Run_ExecuteWorkflowError(t *testing.T) {
 
 	rt, err := NewTemporalRuntime(
 		WithTemporalClient(tc, "tq"),
-		WithLLMClient(stubLLM{}),
-		WithAgentName("agent-a"),
+		WithAgentSpec(sdkruntime.AgentSpec{Name: "agent-a"}),
+		WithAgentExecution(sdkruntime.AgentExecution{LLM: sdkruntime.AgentLLM{Client: stubLLM{}}}),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	_, err = rt.Run(context.Background(), &sdkruntime.RunRequest{AgentName: "agent-a", UserPrompt: "hi"})
+	_, err = rt.Execute(context.Background(), &sdkruntime.ExecuteRequest{UserPrompt: "hi", AgentSpec: &sdkruntime.AgentSpec{Name: "agent-a"}})
 	if err == nil || err.Error() != "start failed" {
 		t.Fatalf("got %v, want start failed", err)
 	}
@@ -297,22 +297,22 @@ func TestTemporalRuntime_Run_WorkflowGetError(t *testing.T) {
 
 	rt, err := NewTemporalRuntime(
 		WithTemporalClient(tc, "tq"),
-		WithLLMClient(stubLLM{}),
-		WithAgentName("agent-a"),
+		WithAgentSpec(sdkruntime.AgentSpec{Name: "agent-a"}),
+		WithAgentExecution(sdkruntime.AgentExecution{LLM: sdkruntime.AgentLLM{Client: stubLLM{}}}),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	_, err = rt.Run(context.Background(), &sdkruntime.RunRequest{AgentName: "agent-a", UserPrompt: "hi"})
+	_, err = rt.Execute(context.Background(), &sdkruntime.ExecuteRequest{UserPrompt: "hi", AgentSpec: &sdkruntime.AgentSpec{Name: "agent-a"}})
 	if err == nil || err.Error() != "workflow failed" {
 		t.Fatalf("got %v, want workflow failed", err)
 	}
 }
 
-func TestTemporalRuntime_RunStream_Success(t *testing.T) {
+func TestTemporalRuntime_ExecuteStream_Success(t *testing.T) {
 	tc := temporalmocks.NewClient(t)
-	// Do not use NewWorkflowRun(t): RunStream forwards AgentEventComplete on outCh before
+	// Do not use NewWorkflowRun(t): ExecuteStream forwards AgentEventComplete on outCh before
 	// blocking on getWG.Wait(), so the test can finish before the Get goroutine runs; auto
 	// AssertExpectations in NewWorkflowRun's cleanup would race and flake.
 	wfRun := &temporalmocks.WorkflowRun{}
@@ -334,17 +334,17 @@ func TestTemporalRuntime_RunStream_Success(t *testing.T) {
 
 	rt, err := NewTemporalRuntime(
 		WithTemporalClient(tc, "tq"),
-		WithLLMClient(stubLLM{}),
-		WithAgentName("root"),
+		WithAgentSpec(sdkruntime.AgentSpec{Name: "root"}),
+		WithAgentExecution(sdkruntime.AgentExecution{LLM: sdkruntime.AgentLLM{Client: stubLLM{}}}),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	ctx := context.Background()
-	outCh, err := rt.RunStream(ctx, &sdkruntime.RunRequest{AgentName: "root", UserPrompt: "hi"})
+	outCh, err := rt.ExecuteStream(ctx, &sdkruntime.ExecuteRequest{UserPrompt: "hi", AgentSpec: &sdkruntime.AgentSpec{Name: "root"}})
 	if err != nil {
-		t.Fatalf("RunStream: %v", err)
+		t.Fatalf("ExecuteStream: %v", err)
 	}
 	if localChannel == "" {
 		t.Fatal("expected workflow input to set local channel")
@@ -373,7 +373,7 @@ func TestTemporalRuntime_RunStream_Success(t *testing.T) {
 	}
 }
 
-func TestTemporalRuntime_RunStream_WorkflowGetError(t *testing.T) {
+func TestTemporalRuntime_ExecuteStream_WorkflowGetError(t *testing.T) {
 	tc := temporalmocks.NewClient(t)
 	wfRun := temporalmocks.NewWorkflowRun(t)
 	tc.On("DescribeTaskQueue", mock.Anything, "tq", enumspb.TASK_QUEUE_TYPE_WORKFLOW).
@@ -384,16 +384,16 @@ func TestTemporalRuntime_RunStream_WorkflowGetError(t *testing.T) {
 
 	rt, err := NewTemporalRuntime(
 		WithTemporalClient(tc, "tq"),
-		WithLLMClient(stubLLM{}),
-		WithAgentName("root"),
+		WithAgentSpec(sdkruntime.AgentSpec{Name: "root"}),
+		WithAgentExecution(sdkruntime.AgentExecution{LLM: sdkruntime.AgentLLM{Client: stubLLM{}}}),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	outCh, err := rt.RunStream(context.Background(), &sdkruntime.RunRequest{AgentName: "root", UserPrompt: "hi"})
+	outCh, err := rt.ExecuteStream(context.Background(), &sdkruntime.ExecuteRequest{UserPrompt: "hi", AgentSpec: &sdkruntime.AgentSpec{Name: "root"}})
 	if err != nil {
-		t.Fatalf("RunStream: %v", err)
+		t.Fatalf("ExecuteStream: %v", err)
 	}
 
 	var sawErr bool

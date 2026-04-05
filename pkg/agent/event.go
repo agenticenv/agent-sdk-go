@@ -19,7 +19,7 @@ const (
 
 // AgentEvent is published to subscribers when the agent produces output or errors during a run.
 // AgentName identifies which agent in a delegation tree emitted the event (main or sub-agent).
-// [Agent.RunStream] uses it so [AgentEventComplete] from a sub-agent does not close the root stream.
+// [Agent.Stream] uses it so [AgentEventComplete] from a sub-agent does not close the root stream.
 // For [AgentEventApproval], the requesting agent is also on AgentName (not duplicated on Approval).
 type AgentEvent = types.AgentEvent
 

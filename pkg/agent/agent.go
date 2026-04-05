@@ -23,7 +23,7 @@ type Agent struct {
 	localAgentWorker *AgentWorker // run worker; set when workers are embedded
 }
 
-// ErrAgentAlreadyRunning is returned when Run, RunAsync, or RunStream is called while a run is already in progress.
+// ErrAgentAlreadyRunning is returned when Run, RunAsync, or Stream is called while a run is already in progress.
 var ErrAgentAlreadyRunning = errors.New("agent already has an active run")
 
 // AgentResponse is the structured result of [Agent.Run] and [Agent.RunAsync] ([RunAsyncResult.Response]).
@@ -58,7 +58,7 @@ func buildAgent(opts []Option) (*Agent, error) {
 	}
 
 	eventbus := a.runtime.GetEventBus()
-	// Sub-agents must share the parent's in-memory pub/sub so Run/RunStream subscribers on the main run receive
+	// Sub-agents must share the parent's in-memory pub/sub so Run/Stream subscribers on the main run receive
 	// delegation events and approvals from child runtimes in the same process.
 	for _, sub := range a.subAgents {
 		if sub != nil {
@@ -83,7 +83,7 @@ func wireInMemoryEventChannelToSubAgents(eventbus eventbus.EventBus, agent *Agen
 }
 
 // NewAgent creates an Agent with the given options.
-// Background runtime workers (when used) start lazily when [Agent.RunStream] runs or when approvals need them.
+// Background runtime workers (when used) start lazily when [Agent.Stream] runs or when approvals need them.
 func NewAgent(opts ...Option) (*Agent, error) {
 	a, err := buildAgent(opts)
 	if err != nil {
@@ -113,7 +113,7 @@ func (a *Agent) Close() {
 	a.logger.Info(ctx, "agent closed", slog.String("scope", "agent"), slog.String("name", a.Name))
 }
 
-// Run starts one execution and returns the result. Use [WithApprovalHandler] when tools require approval for Run (handler uses req.Respond); [RunStream] uses approval events and [Agent.OnApproval].
+// Run starts one execution and returns the result. Use [WithApprovalHandler] when tools require approval for Run (handler uses req.Respond); [Stream] uses approval events and [Agent.OnApproval].
 // Use [WithTimeout] or a context with deadline to avoid blocking.
 // When using [WithConversation], pass the conversation ID; agent and worker must use the same ID.
 func (a *Agent) Run(ctx context.Context, input string, conversationID string) (*AgentResponse, error) {
@@ -127,19 +127,9 @@ func (a *Agent) Run(ctx context.Context, input string, conversationID string) (*
 		return nil, fmt.Errorf("tools require approval but WithApprovalHandler was not set (required for Run)")
 	}
 
-	req := &runtime.RunRequest{
-		AgentName:        a.Name,
-		UserPrompt:       input,
-		ConversationID:   conversationID,
-		StreamingEnabled: false,
-		SubAgentRoutes:   a.buildSubAgentRoutes(),
-		MaxSubAgentDepth: a.maxSubAgentDepth,
+	req := a.executeRequest(input, conversationID, false)
 
-		EnableRemoteWorkers: a.enableRemoteWorkers,
-		ApprovalHandler:     a.approvalHandler,
-	}
-
-	result, err := a.runtime.Run(ctx, req)
+	result, err := a.runtime.Execute(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -217,33 +207,23 @@ func copyApprovalArgs(src map[string]any) map[string]any {
 	return dst
 }
 
-// RunStream starts the run and returns a channel of [AgentEvent]. Events are streamed until
+// Stream starts the run and returns a channel of [AgentEvent]. Events are streamed until
 // [AgentEventComplete] from this agent (the root of the run). Complete events from delegated
 // sub-agents are still delivered but do not close the stream. After that root complete, the
 // channel may stay open until the backend finishes the run (e.g. post-delegation work), then closes;
 // exact timing depends on the runtime implementation.
 // For approvals (tool or delegation), receive [AgentEventApproval] and call [Agent.OnApproval] as in the streaming examples.
 // When using [WithConversation], pass the conversation ID.
-func (a *Agent) RunStream(ctx context.Context, input string, conversationID string) (chan *AgentEvent, error) {
+func (a *Agent) Stream(ctx context.Context, input string, conversationID string) (chan *AgentEvent, error) {
 	a.logger.Debug(ctx, "agent run stream started", slog.String("scope", "agent"), slog.String("name", a.Name), slog.Int("inputLen", len(input)))
 
 	if err := a.validateConversationID(conversationID); err != nil {
 		return nil, err
 	}
 
-	req := &runtime.RunRequest{
-		AgentName:        a.Name,
-		UserPrompt:       input,
-		ConversationID:   conversationID,
-		StreamingEnabled: true,
-		SubAgentRoutes:   a.buildSubAgentRoutes(),
-		MaxSubAgentDepth: a.maxSubAgentDepth,
+	req := a.executeRequest(input, conversationID, true)
 
-		EnableRemoteWorkers: a.enableRemoteWorkers,
-		ApprovalHandler:     a.approvalHandler,
-	}
-
-	streamCh, err := a.runtime.RunStream(ctx, req)
+	streamCh, err := a.runtime.ExecuteStream(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -258,6 +238,30 @@ func (a *Agent) validateConversationID(conversationID string) error {
 		return fmt.Errorf("conversationID is required when using conversation")
 	}
 	return nil
+}
+
+// executeRequest builds [runtime.ExecuteRequest] with per-run fields plus AgentSpec and AgentExecution for custom Runtime implementations.
+func (a *Agent) executeRequest(userPrompt, conversationID string, streaming bool) *runtime.ExecuteRequest {
+	return &runtime.ExecuteRequest{
+		UserPrompt:       userPrompt,
+		ConversationID:   conversationID,
+		StreamingEnabled: streaming,
+		SubAgentRoutes:   a.buildSubAgentRoutes(),
+		MaxSubAgentDepth: a.maxSubAgentDepth,
+		ApprovalHandler:  a.approvalHandler,
+		AgentSpec:        a.agentSpec(),
+		AgentExecution:   a.agentExecution(),
+	}
+}
+
+func (a *Agent) agentSpec() *runtime.AgentSpec {
+	s := a.runtimeAgentSpec()
+	return &s
+}
+
+func (a *Agent) agentExecution() *runtime.AgentExecution {
+	e := a.runtimeAgentExecution()
+	return &e
 }
 
 // buildSubAgentRoutes snapshots sub-agent tool names, task queues, and nested routes for runtime delegation (internal).
@@ -276,9 +280,10 @@ func (a *Agent) buildSubAgentRoutes() map[string]types.SubAgentRoute {
 		}
 		name := SubAgentToolName(sub)
 		out[name] = types.SubAgentRoute{
-			Name:        sub.Name,
-			TaskQueue:   tq,
-			ChildRoutes: sub.buildSubAgentRoutes(),
+			Name:            sub.Name,
+			TaskQueue:       tq,
+			ChildRoutes:     sub.buildSubAgentRoutes(),
+			AgentFingerprint: sub.agentConfigFingerprint(),
 		}
 	}
 	if len(out) == 0 {

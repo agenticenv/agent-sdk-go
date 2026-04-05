@@ -30,14 +30,18 @@ func TestAgent_Run_ForwardsRequestAndReturnsResponse(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	mockRT := rtmocks.NewMockRuntime(ctrl)
-	mockRT.EXPECT().Run(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, req *runtime.RunRequest) (*types.AgentResponse, error) {
+	mockRT.EXPECT().Execute(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, req *runtime.ExecuteRequest) (*types.AgentResponse, error) {
 		if req.StreamingEnabled {
 			t.Error("Run must set StreamingEnabled false")
 		}
 		if req.UserPrompt != "hello" {
 			t.Errorf("UserPrompt = %q", req.UserPrompt)
 		}
-		return &types.AgentResponse{Content: "reply", AgentName: req.AgentName, Model: "m1"}, nil
+		name := ""
+		if req.AgentSpec != nil {
+			name = req.AgentSpec.Name
+		}
+		return &types.AgentResponse{Content: "reply", AgentName: name, Model: "m1"}, nil
 	})
 
 	a := testAgentWithRuntime(mockRT)
@@ -50,21 +54,25 @@ func TestAgent_Run_ForwardsRequestAndReturnsResponse(t *testing.T) {
 	}
 }
 
-func TestAgent_RunStream_SetsStreamingEnabled(t *testing.T) {
+func TestAgent_Stream_SetsStreamingEnabled(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	mockRT := rtmocks.NewMockRuntime(ctrl)
-	var streamReq *runtime.RunRequest
-	mockRT.EXPECT().RunStream(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, req *runtime.RunRequest) (chan *types.AgentEvent, error) {
+	var streamReq *runtime.ExecuteRequest
+	mockRT.EXPECT().ExecuteStream(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, req *runtime.ExecuteRequest) (chan *types.AgentEvent, error) {
 		streamReq = req
 		ch := make(chan *types.AgentEvent, 2)
-		ch <- &types.AgentEvent{Type: types.AgentEventComplete, AgentName: req.AgentName, Content: "done"}
+		evName := ""
+		if req.AgentSpec != nil {
+			evName = req.AgentSpec.Name
+		}
+		ch <- &types.AgentEvent{Type: types.AgentEventComplete, AgentName: evName, Content: "done"}
 		close(ch)
 		return ch, nil
 	})
 
 	a := testAgentWithRuntime(mockRT)
-	ch, err := a.RunStream(context.Background(), "prompt", "")
+	ch, err := a.Stream(context.Background(), "prompt", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +81,7 @@ func TestAgent_RunStream_SetsStreamingEnabled(t *testing.T) {
 		}
 	}()
 	if streamReq == nil || !streamReq.StreamingEnabled {
-		t.Fatalf("RunStream request = %+v", streamReq)
+		t.Fatalf("Stream request = %+v", streamReq)
 	}
 	if streamReq.UserPrompt != "prompt" {
 		t.Errorf("UserPrompt = %q", streamReq.UserPrompt)
@@ -88,7 +96,7 @@ func TestAgent_RunAsync_DeliversResult(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	mockRT := rtmocks.NewMockRuntime(ctrl)
-	mockRT.EXPECT().Run(gomock.Any(), gomock.Any()).Return(&types.AgentResponse{Content: "mock", AgentName: "TestAgent", Model: "stub"}, nil)
+	mockRT.EXPECT().Execute(gomock.Any(), gomock.Any()).Return(&types.AgentResponse{Content: "mock", AgentName: "TestAgent", Model: "stub"}, nil)
 
 	a := testAgentWithRuntime(mockRT)
 	resCh, apprCh, err := a.RunAsync(context.Background(), "async", "")
@@ -111,11 +119,11 @@ func TestAgent_RunAsync_DeliversResult(t *testing.T) {
 	}
 }
 
-func TestAgent_RunStream_CustomStreamFn(t *testing.T) {
+func TestAgent_Stream_CustomStreamFn(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	mockRT := rtmocks.NewMockRuntime(ctrl)
-	mockRT.EXPECT().RunStream(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, req *runtime.RunRequest) (chan *types.AgentEvent, error) {
+	mockRT.EXPECT().ExecuteStream(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, req *runtime.ExecuteRequest) (chan *types.AgentEvent, error) {
 		ch := make(chan *types.AgentEvent, 1)
 		ch <- &types.AgentEvent{Type: types.AgentEventContent, Content: "partial"}
 		close(ch)
@@ -123,7 +131,7 @@ func TestAgent_RunStream_CustomStreamFn(t *testing.T) {
 	})
 
 	a := testAgentWithRuntime(mockRT)
-	ch, err := a.RunStream(context.Background(), "x", "")
+	ch, err := a.Stream(context.Background(), "x", "")
 	if err != nil {
 		t.Fatal(err)
 	}

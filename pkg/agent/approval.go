@@ -30,7 +30,7 @@ type ApprovalHandler = types.ApprovalHandler
 // For streaming approvals, use [Agent.OnApproval] with the approval event payload instead.
 type ApprovalRequest = types.ApprovalRequest
 
-// OnApproval completes a tool approval when using [Agent.RunStream]. Pass the token from the approval
+// OnApproval completes a tool approval when using [Agent.Stream]. Pass the token from the approval
 // event and the chosen status (see streaming examples).
 func (a *Agent) OnApproval(ctx context.Context, approvalToken string, status ApprovalStatus) error {
 	return a.runtime.Approve(ctx, approvalToken, status)

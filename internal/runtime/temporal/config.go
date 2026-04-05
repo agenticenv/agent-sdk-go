@@ -7,8 +7,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/agenticenv/agent-sdk-go/internal/types"
-	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
+	sdkruntime "github.com/agenticenv/agent-sdk-go/internal/runtime"
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
 	"go.temporal.io/sdk/client"
 )
@@ -20,29 +19,24 @@ type TemporalConfig struct {
 	TaskQueue string
 }
 
+// TemporalRuntimeConfig holds connection settings plus the same [sdkruntime.AgentSpec] /
+// [sdkruntime.AgentExecution] shape as [sdkruntime.ExecuteRequest], so workers and pkg/agent share one layout.
 type TemporalRuntimeConfig struct {
-	temporalConfig     *TemporalConfig
-	temporalClient     client.Client
-	taskQueue          string
-	instanceId         string
+	temporalConfig      *TemporalConfig
+	temporalClient      client.Client
+	taskQueue           string
+	instanceId          string
 	ownsTemporalClient bool
-	remoteWorker       bool
+	// enableRemoteWorkers: start event worker + event workflow in Execute/ExecuteStream (client agent runtime).
+	enableRemoteWorkers bool
+	// remoteWorker: true for NewAgentWorker (polls activities); false for client Agent runtime.
+	remoteWorker bool
 
-	logger    logger.Logger
-	llmClient interfaces.LLMClient
+	logger logger.Logger
 
-	conversation       interfaces.Conversation
-	conversationSize   int
-	toolApprovalPolicy interfaces.AgentToolApprovalPolicy
-
-	agentName       string
-	systemPrompt    string
-	responseFormat  *interfaces.ResponseFormat
-	tools           []interfaces.Tool
-	llmSampling     *types.LLMSampling
-	timeout         time.Duration
-	maxIterations   int
-	approvalTimeout time.Duration
+	AgentSpec         sdkruntime.AgentSpec
+	AgentExecution    sdkruntime.AgentExecution
+	PolicyFingerprint string // from pkg/agent toolPolicyFingerprint; must match caller temporal.ComputeAgentFingerprint inputs
 }
 
 // Option configures a TemporalRuntime.
@@ -72,6 +66,12 @@ func WithInstanceId(instanceId string) Option {
 	}
 }
 
+func WithEnableRemoteWorkers(enableRemoteWorkers bool) Option {
+	return func(c *TemporalRuntimeConfig) {
+		c.enableRemoteWorkers = enableRemoteWorkers
+	}
+}
+
 func WithRemoteWorker(remoteWorker bool) Option {
 	return func(c *TemporalRuntimeConfig) {
 		c.remoteWorker = remoteWorker
@@ -84,66 +84,26 @@ func WithLogger(logger logger.Logger) Option {
 	}
 }
 
-func WithLLMClient(llmClient interfaces.LLMClient) Option {
+// WithAgentSpec sets identity and response format (same as [sdkruntime.ExecuteRequest.AgentSpec]).
+func WithAgentSpec(spec sdkruntime.AgentSpec) Option {
 	return func(c *TemporalRuntimeConfig) {
-		c.llmClient = llmClient
+		c.AgentSpec = spec
 	}
 }
 
-func WithLLMSampling(llmSampling *types.LLMSampling) Option {
+// WithAgentExecution sets LLM, tools, session, and limits (same as [sdkruntime.ExecuteRequest.AgentExecution]).
+func WithAgentExecution(exec sdkruntime.AgentExecution) Option {
 	return func(c *TemporalRuntimeConfig) {
-		c.llmSampling = llmSampling
+		c.AgentExecution = exec
 	}
 }
 
-func WithTools(tools ...interfaces.Tool) Option {
+// WithPolicyFingerprint sets the opaque policy digest used with [ComputeAgentFingerprint].
+// Must match pkg/agent's toolPolicyFingerprint for the same agent options.
+func WithPolicyFingerprint(fp string) Option {
 	return func(c *TemporalRuntimeConfig) {
-		c.tools = tools
+		c.PolicyFingerprint = fp
 	}
-}
-
-func WithSystemPrompt(systemPrompt string) Option {
-	return func(c *TemporalRuntimeConfig) {
-		c.systemPrompt = systemPrompt
-	}
-}
-
-func WithResponseFormat(responseFormat *interfaces.ResponseFormat) Option {
-	return func(c *TemporalRuntimeConfig) {
-		c.responseFormat = responseFormat
-	}
-}
-
-func WithConversation(conversation interfaces.Conversation) Option {
-	return func(c *TemporalRuntimeConfig) {
-		c.conversation = conversation
-	}
-}
-
-func WithConversationSize(conversationSize int) Option {
-	return func(c *TemporalRuntimeConfig) {
-		c.conversationSize = conversationSize
-	}
-}
-
-func WithToolApprovalPolicy(policy interfaces.AgentToolApprovalPolicy) Option {
-	return func(c *TemporalRuntimeConfig) { c.toolApprovalPolicy = policy }
-}
-
-func WithTimeout(timeout time.Duration) Option {
-	return func(c *TemporalRuntimeConfig) { c.timeout = timeout }
-}
-
-func WithAgentName(agentName string) Option {
-	return func(c *TemporalRuntimeConfig) { c.agentName = agentName }
-}
-
-func WithMaxIterations(maxIterations int) Option {
-	return func(c *TemporalRuntimeConfig) { c.maxIterations = maxIterations }
-}
-
-func WithApprovalTimeout(approvalTimeout time.Duration) Option {
-	return func(c *TemporalRuntimeConfig) { c.approvalTimeout = approvalTimeout }
 }
 
 func buildTemporalRuntimeConfig(opts ...Option) (*TemporalRuntimeConfig, error) {
@@ -168,20 +128,21 @@ func buildTemporalRuntimeConfig(opts ...Option) (*TemporalRuntimeConfig, error) 
 		c.taskQueue = c.taskQueue + "-" + c.instanceId
 	}
 
-	if c.llmClient == nil {
+	if c.AgentExecution.LLM.Client == nil {
 		return nil, fmt.Errorf("llm client is required")
 	}
 
 	c.logger.Debug(context.Background(), "runtime config resolved",
 		slog.String("scope", "runtime"),
-		slog.String("agentName", c.agentName),
+		slog.String("agentName", c.AgentSpec.Name),
 		slog.String("taskQueue", c.taskQueue),
 		slog.String("instanceId", c.instanceId),
-		slog.Int("maxIterations", c.maxIterations),
+		slog.Int("maxIterations", c.AgentExecution.Limits.MaxIterations),
 		slog.Bool("remoteWorker", c.remoteWorker),
-		slog.Duration("timeout", c.timeout),
-		slog.Duration("approvalTimeout", c.approvalTimeout),
-		slog.Bool("hasConversation", c.conversation != nil))
+		slog.Bool("enableRemoteWorkers", c.enableRemoteWorkers),
+		slog.Duration("timeout", c.AgentExecution.Limits.Timeout),
+		slog.Duration("approvalTimeout", c.AgentExecution.Limits.ApprovalTimeout),
+		slog.Bool("hasConversation", c.AgentExecution.Session.Conversation != nil))
 
 	return c, nil
 }

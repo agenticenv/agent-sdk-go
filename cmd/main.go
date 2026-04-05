@@ -114,7 +114,7 @@ func main() {
 			break
 		}
 
-		eventCh, err := a.RunStream(context.Background(), line, convID)
+		eventCh, err := a.Stream(context.Background(), line, convID)
 		if err != nil {
 			log.Printf("agent error: %v", err)
 			continue

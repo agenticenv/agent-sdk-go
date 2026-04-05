@@ -39,7 +39,7 @@ func main() {
 
 	opts := []agent.Option{
 		agent.WithName("agent-with-stream"),
-		agent.WithDescription("Agent that streams events via RunStream"),
+		agent.WithDescription("Agent that streams events via Stream"),
 		agent.WithSystemPrompt("You are a helpful assistant with access to tools. Use them when appropriate: current time, weather, math, random numbers, Wikipedia, and web search."),
 		agent.WithTemporalConfig(&agent.TemporalConfig{
 			Host:      cfg.Host,
@@ -67,9 +67,9 @@ func main() {
 
 	fmt.Println("user:", prompt)
 
-	eventCh, err := a.RunStream(context.Background(), prompt, "")
+	eventCh, err := a.Stream(context.Background(), prompt, "")
 	if err != nil {
-		log.Printf("RunStream failed: %v", err)
+		log.Printf("Stream failed: %v", err)
 		return
 	}
 

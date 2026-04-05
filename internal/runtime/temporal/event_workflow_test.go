@@ -140,7 +140,7 @@ func TestAgentEventWorkflow_UpdateTriggersEventPublishActivity(t *testing.T) {
 
 	env.RegisterDelayedCallback(func() {
 		env.UpdateWorkflowNoRejection(agentEventName, "upd-1", t, &AgentEventUpdate{
-			AgentName:        rt.agentName,
+			AgentName:        rt.AgentSpec.Name,
 			LocalChannelName: "agent_event_mock_run",
 			Event:            &types.AgentEvent{Type: types.AgentEventContent, Content: "via-update"},
 		})

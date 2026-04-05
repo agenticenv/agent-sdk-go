@@ -22,7 +22,7 @@ const AgentEventAll AgentEventType = "*"
 
 // AgentEvent is published to subscribers when the agent produces output or errors.
 // AgentName identifies which agent in a delegation tree emitted the event (main or sub-agent).
-// RunStream uses it so AgentEventComplete from a sub-agent does not close the root stream.
+// Stream uses it so AgentEventComplete from a sub-agent does not close the root stream.
 // For AgentEventApproval, the requesting agent is also on AgentName (not duplicated on Approval).
 type AgentEvent struct {
 	Type       AgentEventType         `json:"type"`
@@ -36,7 +36,7 @@ type AgentEvent struct {
 	WorkflowID string                 `json:"workflow_id,omitempty"` // optional run identifier for correlation (implementation-defined)
 }
 
-// ToolApprovalKind classifies what the user is approving (same event type for RunStream).
+// ToolApprovalKind classifies what the user is approving (same event type for Stream).
 type ToolApprovalKind string
 
 const (
@@ -46,7 +46,7 @@ const (
 	ToolApprovalKindDelegation ToolApprovalKind = "delegation"
 )
 
-// ApprovalEvent is the payload for AgentEventApproval (RunStream).
+// ApprovalEvent is the payload for AgentEventApproval (Stream).
 // The agent that requested approval is on AgentEvent.AgentName, not repeated here.
 // Use with Agent.OnApproval when the user approves or rejects; see streaming examples.
 type ApprovalEvent struct {

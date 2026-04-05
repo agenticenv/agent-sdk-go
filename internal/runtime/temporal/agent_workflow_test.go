@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/sdk/testsuite"
 
+	sdkruntime "github.com/agenticenv/agent-sdk-go/internal/runtime"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces/mocks"
@@ -19,10 +20,14 @@ func testRuntimeForWorkflow(t *testing.T) *TemporalRuntime {
 	t.Helper()
 	return &TemporalRuntime{
 		TemporalRuntimeConfig: TemporalRuntimeConfig{
-			agentName:     "WorkflowTestAgent",
-			maxIterations: 5,
-			llmClient:     stubLLM{},
-			logger:        logger.NoopLogger(),
+			AgentSpec: sdkruntime.AgentSpec{Name: "WorkflowTestAgent"},
+			AgentExecution: sdkruntime.AgentExecution{
+				LLM:     sdkruntime.AgentLLM{Client: stubLLM{}},
+				Limits:  sdkruntime.AgentLimits{MaxIterations: 5},
+				Tools:   sdkruntime.AgentTools{Tools: nil},
+				Session: sdkruntime.AgentSession{},
+			},
+			logger: logger.NoopLogger(),
 		},
 	}
 }
@@ -69,7 +74,7 @@ func TestAgentWorkflow_StreamingPath_UsesStreamActivity(t *testing.T) {
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()
 	rt := testRuntimeForWorkflow(t)
-	rt.llmClient = streamCapableStubLLM{}
+	rt.AgentExecution.LLM.Client = streamCapableStubLLM{}
 
 	env.RegisterWorkflow(rt.AgentWorkflow)
 	env.OnActivity(rt.AgentLLMStreamActivity, mock.Anything, mock.Anything).Return(func(ctx context.Context, in AgentLLMStreamInput) (*AgentLLMResult, error) {
@@ -137,9 +142,11 @@ func TestAgentLLMActivity_MockLLM_TextOnly(t *testing.T) {
 
 	rt := &TemporalRuntime{
 		TemporalRuntimeConfig: TemporalRuntimeConfig{
-			agentName: "ActTest",
-			llmClient: mockLLM,
-			logger:    logger.NoopLogger(),
+			AgentSpec: sdkruntime.AgentSpec{Name: "ActTest"},
+			AgentExecution: sdkruntime.AgentExecution{
+				LLM: sdkruntime.AgentLLM{Client: mockLLM},
+			},
+			logger: logger.NoopLogger(),
 		},
 	}
 
@@ -180,11 +187,12 @@ func TestAgentLLMActivity_MockLLM_ToolCalls(t *testing.T) {
 
 	rt := &TemporalRuntime{
 		TemporalRuntimeConfig: TemporalRuntimeConfig{
-			agentName:          "ActTest",
-			llmClient:          mockLLM,
-			logger:             logger.NoopLogger(),
-			tools:              []interfaces.Tool{mockTool},
-			toolApprovalPolicy: policy,
+			AgentSpec: sdkruntime.AgentSpec{Name: "ActTest"},
+			AgentExecution: sdkruntime.AgentExecution{
+				LLM:   sdkruntime.AgentLLM{Client: mockLLM},
+				Tools: sdkruntime.AgentTools{Tools: []interfaces.Tool{mockTool}, ApprovalPolicy: policy},
+			},
+			logger: logger.NoopLogger(),
 		},
 	}
 
@@ -219,9 +227,11 @@ func TestAgentLLMActivity_MockLLM_UnknownToolError(t *testing.T) {
 
 	rt := &TemporalRuntime{
 		TemporalRuntimeConfig: TemporalRuntimeConfig{
-			llmClient: mockLLM,
-			logger:    logger.NoopLogger(),
-			tools:     []interfaces.Tool{},
+			AgentExecution: sdkruntime.AgentExecution{
+				LLM:   sdkruntime.AgentLLM{Client: mockLLM},
+				Tools: sdkruntime.AgentTools{Tools: []interfaces.Tool{}},
+			},
+			logger: logger.NoopLogger(),
 		},
 	}
 
@@ -249,10 +259,14 @@ func TestAgentLLMActivity_MockConversationAndLLM(t *testing.T) {
 
 	rt := &TemporalRuntime{
 		TemporalRuntimeConfig: TemporalRuntimeConfig{
-			llmClient:        mockLLM,
-			logger:           logger.NoopLogger(),
-			conversation:     mockConv,
-			conversationSize: 10,
+			AgentExecution: sdkruntime.AgentExecution{
+				LLM: sdkruntime.AgentLLM{Client: mockLLM},
+				Session: sdkruntime.AgentSession{
+					Conversation:     mockConv,
+					ConversationSize: 10,
+				},
+			},
+			logger: logger.NoopLogger(),
 		},
 	}
 
@@ -277,9 +291,11 @@ func TestAgentLLMActivity_ConversationNotConfigured(t *testing.T) {
 
 	rt := &TemporalRuntime{
 		TemporalRuntimeConfig: TemporalRuntimeConfig{
-			llmClient:    mockLLM,
-			logger:       logger.NoopLogger(),
-			conversation: nil,
+			AgentExecution: sdkruntime.AgentExecution{
+				LLM:     sdkruntime.AgentLLM{Client: mockLLM},
+				Session: sdkruntime.AgentSession{Conversation: nil},
+			},
+			logger: logger.NoopLogger(),
 		},
 	}
 
@@ -303,9 +319,11 @@ func TestAgentLLMStreamActivity_MockLLM_FallbackToGenerate(t *testing.T) {
 
 	rt := &TemporalRuntime{
 		TemporalRuntimeConfig: TemporalRuntimeConfig{
-			agentName: "StreamAct",
-			llmClient: mockLLM,
-			logger:    logger.NoopLogger(),
+			AgentSpec: sdkruntime.AgentSpec{Name: "StreamAct"},
+			AgentExecution: sdkruntime.AgentExecution{
+				LLM: sdkruntime.AgentLLM{Client: mockLLM},
+			},
+			logger: logger.NoopLogger(),
 		},
 	}
 

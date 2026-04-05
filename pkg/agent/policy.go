@@ -1,8 +1,37 @@
 package agent
 
 import (
+	"fmt"
+	"sort"
+	"strings"
+
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 )
+
+// toolPolicyFingerprint returns a stable string for temporal.ComputeAgentFingerprint so caller
+// and worker processes agree on approval semantics.
+func toolPolicyFingerprint(p interfaces.AgentToolApprovalPolicy) string {
+	if p == nil {
+		return "nil"
+	}
+	switch x := p.(type) {
+	case RequireAllToolApprovalPolicy:
+		return "require_all"
+	case *RequireAllToolApprovalPolicy:
+		return "require_all"
+	case autoToolApprovalPolicy:
+		return "auto"
+	case allowlistToolApprovalPolicy:
+		names := make([]string, 0, len(x.allowed))
+		for n := range x.allowed {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		return "allowlist:" + strings.Join(names, ",")
+	default:
+		return fmt.Sprintf("unknown:%T", p)
+	}
+}
 
 // RequireAllToolApprovalPolicy requires approval for every tool. Default when no policy is set.
 type RequireAllToolApprovalPolicy struct{}

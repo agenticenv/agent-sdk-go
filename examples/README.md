@@ -27,8 +27,8 @@ The examples use `TEMPORAL_HOST`, `TEMPORAL_PORT`, `TEMPORAL_NAMESPACE` from `.e
 | `agent_with_temporal_client` | Caller-owned Temporal client — `WithTemporalClient` + `WithTaskQueue`; create and close client yourself (TLS, API key, Cloud) |
 | `agent_with_conversation` | In-memory conversation with `WithConversation` — multi-turn context, same `conversationID` for `Run` |
 | `agent_with_tools` | Built-in tools (echo, calculator, weather, wikipedia, search) with auto-approval |
-| `agent_with_stream` | Streaming with `RunStream` + partial content (`content_delta`, `tool_call`, `complete`) |
-| `agent_with_stream_conversation` | RunStream + conversation; event handling to avoid duplicate output (ContentDelta vs Complete) |
+| `agent_with_stream` | Streaming with `Stream` + partial content (`content_delta`, `tool_call`, `complete`) |
+| `agent_with_stream_conversation` | Stream + conversation; event handling to avoid duplicate output (ContentDelta vs Complete) |
 | `agent_with_tools_approval` | Tools + `WithApprovalHandler` — user approves or rejects each tool run (Run only) |
 | `agent_with_run_async` | `RunAsync` — `resultCh` + `approvalCh`; use `req.Respond` (no `WithApprovalHandler`) |
 | `agent_with_custom_tools` | Custom tools via `WithTools` — implementing `interfaces.Tool` |
@@ -85,7 +85,7 @@ go run ./agent_with_stream "What's the current time and what's 17 * 23?"
 
 ### Streaming + conversation (event handling pattern)
 
-Interactive multi-turn with `RunStream`. Demonstrates how to handle ContentDelta/Content and Complete to avoid printing the same text twice.
+Interactive multi-turn with `Stream`. Demonstrates how to handle ContentDelta/Content and Complete to avoid printing the same text twice.
 
 ```bash
 go run ./agent_with_stream_conversation

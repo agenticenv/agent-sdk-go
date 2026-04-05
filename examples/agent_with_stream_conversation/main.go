@@ -17,7 +17,7 @@ import (
 	"github.com/agenticenv/agent-sdk-go/pkg/tools/echo"
 )
 
-// agent_with_stream_conversation demonstrates RunStream with conversation and
+// agent_with_stream_conversation demonstrates Stream with conversation and
 // proper event handling: ContentDelta/Content streamed to user, Complete content
 // not re-printed when already displayed (avoids duplicate output).
 func main() {
@@ -36,7 +36,7 @@ func main() {
 
 	opts := []agent.Option{
 		agent.WithName("agent-stream-conversation"),
-		agent.WithDescription("RunStream with conversation; shows event handling pattern to avoid duplicate output"),
+		agent.WithDescription("Stream with conversation; shows event handling pattern to avoid duplicate output"),
 		agent.WithSystemPrompt("You are a helpful assistant. Remember context. Use tools: echo, calculator."),
 		agent.WithTemporalConfig(&agent.TemporalConfig{
 			Host:      cfg.Host,
@@ -76,9 +76,9 @@ func main() {
 func runSingleTurn(ctx context.Context, a *agent.Agent, prompt, convID string) {
 	fmt.Println("user:", prompt)
 	fmt.Print("assistant: ")
-	eventCh, err := a.RunStream(ctx, prompt, convID)
+	eventCh, err := a.Stream(ctx, prompt, convID)
 	if err != nil {
-		log.Printf("RunStream failed: %v", err)
+		log.Printf("Stream failed: %v", err)
 		return
 	}
 	handleEvents(eventCh)
@@ -100,9 +100,9 @@ func runInteractive(ctx context.Context, a *agent.Agent, convID string) {
 		if prompt == "exit" || prompt == "quit" || prompt == "bye" {
 			break
 		}
-		eventCh, err := a.RunStream(ctx, prompt, convID)
+		eventCh, err := a.Stream(ctx, prompt, convID)
 		if err != nil {
-			log.Printf("RunStream failed: %v", err)
+			log.Printf("Stream failed: %v", err)
 			continue
 		}
 		fmt.Print("assistant: ")

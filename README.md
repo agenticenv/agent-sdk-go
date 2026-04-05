@@ -29,7 +29,7 @@ Use this SDK when you want **LLM-driven agents** (tools, optional specialists) w
 ## Capabilities
 
 - **LLM integration** — OpenAI, Anthropic, and Gemini with tool/function calling
-- **Streaming** — Partial content and thinking deltas via **RunStream**
+- **Streaming** — Partial content and thinking deltas via **Stream**
 - **Tools** — Built-in tools and custom tools via **interfaces.Tool**
 - **Approval gates** — Optional human-in-the-loop approval before executing tools or delegating to sub-agents
 - **Sub-agents** — Delegate work to specialist agents you register
@@ -154,9 +154,9 @@ You can add support for other LLM providers by implementing the `interfaces.LLMC
 
 Implement `LLMStream` for streaming: `Next()`, `Current()`, `Err()`, `GetResult()`. See the existing providers in `pkg/llm/` for reference.
 
-### Stream events (RunStream)
+### Stream events (Stream)
 
-`RunStream` returns a channel of `AgentEvent`. Use `agent.WithStream(true)` for partial tokens as they arrive.
+`Stream` returns a channel of `AgentEvent`. Use `agent.WithStream(true)` for partial tokens as they arrive.
 
 ```go
 a, _ := agent.NewAgent(
@@ -166,7 +166,7 @@ a, _ := agent.NewAgent(
 )
 defer a.Close()
 
-eventCh, err := a.RunStream(ctx, "What's 17 * 23?", "")
+eventCh, err := a.Stream(ctx, "What's 17 * 23?", "")
 for ev := range eventCh {
     switch ev.Type {
     case agent.AgentEventContentDelta:
@@ -197,7 +197,7 @@ Complete     → "The result is 40."   (don't re-print; use ev.Content in code)
 
 **Event types:** `ContentDelta` (streamed tokens), `Content` (full block when not streaming), `ToolCall`, `ToolResult`, `Approval` (human gate for a tool call or delegation; use `ev.Approval.Kind`), `Complete` (final response), `Error`.
 
-See [examples/agent_with_stream_conversation](examples/agent_with_stream_conversation) for a full example: RunStream with conversation and the event-handling pattern.
+See [examples/agent_with_stream_conversation](examples/agent_with_stream_conversation) for a full example: Stream with conversation and the event-handling pattern.
 
 ### Tools
 
@@ -223,9 +223,9 @@ result, _ := a.Run(ctx, "What's the weather in Tokyo?", "")
 
 ### Sub-agents
 
-Build each specialist with `**NewAgent**` (own `**TaskQueue**`, LLM, tools, prompts). Register them on the main agent with `**WithSubAgents**`. Use `**WithName**` and `**WithDescription**` on specialists when you want clearer labels for the main agent’s model. Use `**WithMaxSubAgentDepth**` only if the default nesting limit is not enough. Run `**Run**`, `**RunStream**`, or `**RunAsync**` on the main agent. Sub-agents always run without a conversation ID—they do not inherit the main agent session history. If you use `**DisableLocalWorker**`, pair each `**NewAgentWorker**` with the same options as the `**NewAgent**` that runs that agent.
+Build each specialist with `**NewAgent**` (own `**TaskQueue**`, LLM, tools, prompts). Register them on the main agent with `**WithSubAgents**`. Use `**WithName**` and `**WithDescription**` on specialists when you want clearer labels for the main agent’s model. Use `**WithMaxSubAgentDepth**` only if the default nesting limit is not enough. Run `**Run**`, `**Stream**`, or `**RunAsync**` on the main agent. Sub-agents always run without a conversation ID—they do not inherit the main agent session history. If you use `**DisableLocalWorker**`, pair each `**NewAgentWorker**` with the same options as the `**NewAgent**` that runs that agent.
 
-For streaming scenarios, the main agent is the single subscription point. When using `RunStream`, events from all delegated sub-agents fan in to the same main-agent stream, including sub-agent tool approvals and tool call/result events.
+For streaming scenarios, the main agent is the single subscription point. When using `Stream`, events from all delegated sub-agents fan in to the same main-agent stream, including sub-agent tool approvals and tool call/result events.
 
 ```go
 mathAgent, _ := agent.NewAgent(
@@ -260,7 +260,7 @@ result, _ := mainAgent.Run(ctx, "What is 144 divided by 12?", "")
 
 [examples/agent_with_subagents](examples/agent_with_subagents)
 
-**RunStream event fan-in:** Subscribe once on the main agent and you receive events from the whole delegation tree, including sub-agent tool calls and approvals. Use **`ev.AgentName`** on each `AgentEvent` to see which agent produced the event (content, tools, approvals, complete). The approval payload is `ev.Approval` (`ApprovalEvent`); the requesting agent is **not** duplicated there—use `ev.AgentName`.
+**Stream event fan-in:** Subscribe once on the main agent and you receive events from the whole delegation tree, including sub-agent tool calls and approvals. Use **`ev.AgentName`** on each `AgentEvent` to see which agent produced the event (content, tools, approvals, complete). The approval payload is `ev.Approval` (`ApprovalEvent`); the requesting agent is **not** duplicated there—use `ev.AgentName`.
 
 ### Tool approval
 
@@ -273,7 +273,7 @@ By default tools require approval, including delegation to sub-agents registered
 
 #### Sub-agents and approval
 
-- `**ApprovalRequest`** (Run / RunAsync) and stream `**ev.Approval**` (`**ApprovalEvent**`) include `**Kind**` (`tool` or `delegation`) and `**DelegateToName**` (target specialist when `Kind` is `delegation`). The agent that asked for approval is on **`ev.AgentName`** for RunStream (and `req.AgentName` on `ApprovalRequest`).
+- `**ApprovalRequest`** (Run / RunAsync) and stream `**ev.Approval**` (`**ApprovalEvent**`) include `**Kind**` (`tool` or `delegation`) and `**DelegateToName**` (target specialist when `Kind` is `delegation`). The agent that asked for approval is on **`ev.AgentName`** for Stream (and `req.AgentName` on `ApprovalRequest`).
 - **Parent (main agent):** one policy for its whole list—e.g. `RequireAll` → approving `subagent_MathSpecialist` is the same flow as approving `calculator` on that agent. `AutoToolApprovalPolicy()` → no approval for delegation or other tools on that agent.
 - **Specialist:** separate agent, **its own** `WithToolApprovalPolicy`. Calculator calls inside the specialist use **that** policy, not the parent’s.
 
@@ -296,7 +296,7 @@ a, _ := agent.NewAgent(
 a.Run(ctx, prompt, "")
 ```
 
-**RunStream** — receive `AgentEventApproval` and call `agent.OnApproval`:
+**Stream** — receive `AgentEventApproval` and call `agent.OnApproval`:
 
 ```go
 for ev := range eventCh {
@@ -324,7 +324,7 @@ if res.Err != nil { /* handle */ }
 // res.Response.Content
 ```
 
-For **Run** / **RunAsync**, use `req.Respond` only. For **RunStream**, use `OnApproval` as in the snippet above (first argument comes from `ev.Approval`).
+For **Run** / **RunAsync**, use `req.Respond` only. For **Stream**, use `OnApproval` as in the snippet above (first argument comes from `ev.Approval`).
 
 [examples/agent_with_tools_approval](examples/agent_with_tools_approval)
 
@@ -333,7 +333,7 @@ For **Run** / **RunAsync**, use `req.Respond` only. For **RunStream**, use `OnAp
 **Approval timeout:** `WithApprovalTimeout` (default: `timeout − 30s`) limits how long the user has to approve or reject a tool. If they do not respond in time:
 
 - **Run:** `Run()` returns `nil, err` with the failure.
-- **RunStream:** An `AgentEventError` is emitted on the event channel with the error message.
+- **Stream:** An `AgentEventError` is emitted on the event channel with the error message.
 - **RunAsync:** `resultCh` receives `RunAsyncResult` with `Err` set.
 
 ### Timeouts and deadlines
@@ -457,7 +457,7 @@ result, _ := a.Run(ctx, "Hello", "")
 
 Pass `agent.WithConversation(conv)` to persist message history for multi-turn context. Use `agent.WithConversationSize(n)` to limit how many messages are fetched for LLM context (default 20).
 
-**Conversation ID:** When the agent is configured with a conversation, pass the same `conversationID` to both `Run(ctx, prompt, conversationID)` and `RunStream(ctx, prompt, conversationID)` for the same session—so history is shared across turns.
+**Conversation ID:** When the agent is configured with a conversation, pass the same `conversationID` to both `Run(ctx, prompt, conversationID)` and `Stream(ctx, prompt, conversationID)` for the same session—so history is shared across turns.
 
 Choose implementation by deployment:
 
@@ -470,7 +470,7 @@ To add a new conversation store (e.g., Postgres, MongoDB), implement the `interf
 
 In-memory cannot be used with remote workers—the agent will return an error at build time.
 
-**Remote workers:** Agent and worker must use the same conversation store (same Redis config) so both processes access the same data. Only the process that calls `Run` or `RunStream` passes the conversation ID; the worker does not.
+**Remote workers:** Agent and worker must use the same conversation store (same Redis config) so both processes access the same data. Only the process that calls `Run` or `Stream` passes the conversation ID; the worker does not.
 
 ```go
 // Single process (default)
@@ -541,13 +541,13 @@ A Temporal connection is **required** — one of `WithTemporalConfig` or `WithTe
 - **WithTemporalClient**: Pre-configured Temporal client. Use for TLS, API key auth, Temporal Cloud. Requires `WithTaskQueue`. Agent does not close the client.
 - **WithTaskQueue**: Task queue name. Required when using `WithTemporalClient`. Ignored when using `WithTemporalConfig`.
 - **WithResponseFormat**: LLM response format. Omit for text-only. Use `&interfaces.ResponseFormat{Type, Name, Schema}` for JSON with schema. See [Response format](#response-format).
-- **WithConversation**: Message history store. Use `inmem` for single process; `redis` for remote workers. Pass same `conversationID` to `Run` and `RunStream` for a session. See [Conversation](#conversation-message-history).
+- **WithConversation**: Message history store. Use `inmem` for single process; `redis` for remote workers. Pass same `conversationID` to `Run` and `Stream` for a session. See [Conversation](#conversation-message-history).
 - **WithConversationSize**: Max messages to fetch for LLM context (default 20). Only applies when `WithConversation` is set.
 - **EnableRemoteWorkers**: Pass `EnableRemoteWorkers()` when using `DisableLocalWorker` with approval or streaming (starts the event worker/workflow path).
 - **WithSubAgents**: Attach specialist agents the main agent can delegate to. Each needs its own task queue and worker. See [Sub-agents](#sub-agents).
 - **WithMaxSubAgentDepth**: Maximum delegation hops from this agent (default 2). See [Sub-agents](#sub-agents).
 - **WithMaxIterations**: Max LLM rounds (default 5).
-- **WithStream**: Enable `RunStream` partial content streaming.
+- **WithStream**: Enable `Stream` partial content streaming.
 - **WithLLMSampling**: Per-agent sampling (`Temperature`, `MaxTokens`, `TopP`, `TopK`). Pass `&agent.LLMSampling{...}`; nil fields = provider default. Extensible for more params.
 - **WithApprovalTimeout**: Max wait per tool approval; must be less than agent timeout. Defaults to timeout−30s when tools require approval. Capped at 31 days.
 
@@ -597,7 +597,7 @@ See **[cmd/README.md](cmd/README.md)** for CLI details and env vars.
 
 Before using this SDK in production, align with what it actually exposes and how agents run on Temporal:
 
-- **Run and approval limits** — Use `WithTimeout` and/or a context deadline on `Run` / `RunStream`; use `WithApprovalTimeout` when tools require approval (activity retry counts inside workflows are fixed in the SDK, not user-tunable).
+- **Run and approval limits** — Use `WithTimeout` and/or a context deadline on `Run` / `Stream`; use `WithApprovalTimeout` when tools require approval (activity retry counts inside workflows are fixed in the SDK, not user-tunable).
 - **Bound agent loops** — Set `WithMaxIterations` and, if you use sub-agents, `WithMaxSubAgentDepth`.
 - **Tool and delegation risk** — Choose `WithToolApprovalPolicy` per agent (main and specialists); use human review for dangerous tools and delegation where policy requires it.
 - **Split processes** — If you use `DisableLocalWorker` or `EnableRemoteWorkers()`, use a distributed conversation store (e.g. Redis) and exercise approval/streaming paths in integration tests.
