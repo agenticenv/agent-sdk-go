@@ -38,8 +38,6 @@ How **Temporal** powers agents: **`pkg/agent`** drives a **Temporal** client tha
 
 Details: [Temporal connection](#temporal-connection), [Sub-agents](#sub-agents), [Agent and worker in separate processes](#agent-and-worker-in-separate-processes).
 
-One agent run is a single **agent workflow** (replay-safe, deterministic). The diagram below **maps** the agent loop to the primitives above—not a control-flow chart. **Solid lines** = client/workflow orchestration; **dashed lines** = the **agent worker** polls the task queue and executes scheduled workflow and activity tasks. Labels are **Temporal-first** (kind, then behavior) so they line up with how work appears in the Temporal UI.
-
 ```mermaid
 graph TD
     A[Agent] --> WF[Workflow: agent loop]
