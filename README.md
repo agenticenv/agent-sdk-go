@@ -404,6 +404,8 @@ a, _ := agent.NewAgent(
 )
 ```
 
+[examples/agent_with_json_response](examples/agent_with_json_response) — runnable example: `WithResponseFormat` with `interfaces.ResponseFormat` and `interfaces.JSONSchema` (no tools; validates and pretty-prints JSON on stdout).
+
 **Text explicitly:** Force plain text even if you later add other config:
 
 ```go

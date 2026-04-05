@@ -34,6 +34,7 @@ The examples use `TEMPORAL_HOST`, `TEMPORAL_PORT`, `TEMPORAL_NAMESPACE` from `.e
 | `agent_with_custom_tools` | Custom tools via `WithTools` — implementing `interfaces.Tool` |
 | `multiple_agents` | Multiple agents with `WithInstanceId` — sequential or concurrent |
 | `agent_with_subagents` | Main agent + math specialist — `WithSubAgents`, separate task queues |
+| `agent_with_json_response` | Structured LLM output — `WithResponseFormat` + `interfaces.JSONSchema` (JSON with schema; no tools) |
 | `agent_with_worker` | Agent and worker in separate processes — `DisableLocalWorker` + `NewAgentWorker` |
 
 ## Setup
@@ -81,6 +82,15 @@ go run ./agent_with_tools "What's the weather in Tokyo?"
 
 ```bash
 go run ./agent_with_stream "What's the current time and what's 17 * 23?"
+```
+
+### Structured JSON response (`WithResponseFormat`)
+
+Uses `agent.WithResponseFormat` with `interfaces.ResponseFormatJSON`, `Name`, and `interfaces.JSONSchema`. No tools—keeps the run in structured-output mode. Prints validated, indented JSON.
+
+```bash
+go run ./agent_with_json_response
+go run ./agent_with_json_response "What is the capital of Japan?"
 ```
 
 ### Streaming + conversation (event handling pattern)
