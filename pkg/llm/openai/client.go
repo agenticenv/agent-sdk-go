@@ -77,7 +77,24 @@ func (c *Client) buildCompletionParams(messages []openai.ChatCompletionMessagePa
 	if req.ResponseFormat != nil {
 		params.ResponseFormat = responseFormatToOpenAI(req.ResponseFormat)
 	}
+	if effort, ok := openAIReasoningEffort(req.Reasoning); ok {
+		params.ReasoningEffort = effort
+	}
 	return params
+}
+
+// openAIReasoningEffort maps generic LLMReasoning to OpenAI reasoning_effort.
+// Only non-empty Effort is sent. Standard chat models reject reasoning_effort entirely—use only
+// with reasoning-capable models (see OpenAI docs). Enabled alone does not set reasoning_effort.
+func openAIReasoningEffort(r *interfaces.LLMReasoning) (shared.ReasoningEffort, bool) {
+	if r == nil {
+		return "", false
+	}
+	effort := strings.TrimSpace(r.Effort)
+	if effort == "" {
+		return "", false
+	}
+	return shared.ReasoningEffort(effort), true
 }
 
 func responseFormatToOpenAI(rf *interfaces.ResponseFormat) openai.ChatCompletionNewParamsResponseFormatUnion {

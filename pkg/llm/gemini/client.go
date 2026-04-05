@@ -89,7 +89,47 @@ func (c *Client) buildConfig(req *interfaces.LLMRequest) *genai.GenerateContentC
 	if req.ResponseFormat != nil {
 		applyResponseFormat(cfg, req.ResponseFormat)
 	}
+	if tc := geminiThinkingConfig(req.Reasoning); tc != nil {
+		cfg.ThinkingConfig = tc
+	}
 	return cfg
+}
+
+func geminiThinkingConfig(r *interfaces.LLMReasoning) *genai.ThinkingConfig {
+	if r == nil {
+		return nil
+	}
+	active := r.Enabled || r.BudgetTokens > 0 || strings.TrimSpace(r.Effort) != ""
+	if !active {
+		return nil
+	}
+	tc := &genai.ThinkingConfig{IncludeThoughts: true}
+	// Gemini rejects requests that set both ThinkingBudget and ThinkingLevel (400 INVALID_ARGUMENT).
+	if r.BudgetTokens > 0 {
+		b := int32(r.BudgetTokens)
+		tc.ThinkingBudget = &b
+		return tc
+	}
+	if lvl := geminiThinkingLevelFromEffort(r.Effort); lvl != "" {
+		tc.ThinkingLevel = lvl
+	}
+	return tc
+}
+
+// geminiThinkingLevelFromEffort maps generic Effort strings to Gemini ThinkingLevel.
+func geminiThinkingLevelFromEffort(effort string) genai.ThinkingLevel {
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case "low":
+		return genai.ThinkingLevelLow
+	case "medium":
+		return genai.ThinkingLevelMedium
+	case "high":
+		return genai.ThinkingLevelHigh
+	case "minimal":
+		return genai.ThinkingLevelMinimal
+	default:
+		return ""
+	}
 }
 
 func applyResponseFormat(cfg *genai.GenerateContentConfig, rf *interfaces.ResponseFormat) {

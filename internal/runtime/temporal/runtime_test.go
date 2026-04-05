@@ -125,6 +125,29 @@ func TestApplyLLMSampling(t *testing.T) {
 	}
 }
 
+func TestApplyLLMSampling_reasoning(t *testing.T) {
+	req := &interfaces.LLMRequest{}
+	applyLLMSampling(&types.LLMSampling{
+		Reasoning: &interfaces.LLMReasoning{
+			Enabled:      true,
+			Effort:       "medium",
+			BudgetTokens: 2048,
+		},
+	}, req)
+	if req.Reasoning == nil {
+		t.Fatal("expected Reasoning")
+	}
+	if req.Reasoning.Effort != "medium" {
+		t.Errorf("Effort = %q", req.Reasoning.Effort)
+	}
+	if req.Reasoning.BudgetTokens != 2048 {
+		t.Errorf("BudgetTokens = %d", req.Reasoning.BudgetTokens)
+	}
+	if !req.Reasoning.Enabled {
+		t.Error("expected Enabled")
+	}
+}
+
 func TestKeyvalsToAny(t *testing.T) {
 	kv := []interface{}{"k", 1}
 	out := keyvalsToAny(kv)

@@ -35,6 +35,7 @@ The examples use `TEMPORAL_HOST`, `TEMPORAL_PORT`, `TEMPORAL_NAMESPACE` from `.e
 | `multiple_agents` | Multiple agents with `WithInstanceId` — sequential or concurrent |
 | `agent_with_subagents` | Main agent + math specialist — `WithSubAgents`, separate task queues |
 | `agent_with_json_response` | Structured LLM output — `WithResponseFormat` + `interfaces.JSONSchema` (JSON with schema; no tools) |
+| `agent_with_reasoning` | Generic `interfaces.LLMReasoning` via `WithLLMSampling` — `Stream` to observe `thinking_delta` (e.g. Anthropic) |
 | `agent_with_worker` | Agent and worker in separate processes — `DisableLocalWorker` + `NewAgentWorker` |
 
 ## Setup
@@ -91,6 +92,15 @@ Uses `agent.WithResponseFormat` with `interfaces.ResponseFormatJSON`, `Name`, an
 ```bash
 go run ./agent_with_json_response
 go run ./agent_with_json_response "What is the capital of Japan?"
+```
+
+### Reasoning / thinking (`WithLLMSampling` + `LLMReasoning`)
+
+Sets `WithLLMSampling` with `Reasoning: &interfaces.LLMReasoning{Enabled, Effort, BudgetTokens}` and uses **`Stream`** so you can see **`thinking_delta`** events when the provider emits them (e.g. Anthropic extended thinking). Pick a model that supports reasoning/thinking for your `LLM_PROVIDER`.
+
+```bash
+go run ./agent_with_reasoning
+go run ./agent_with_reasoning "Why is the sky blue? One short paragraph."
 ```
 
 ### Streaming + conversation (event handling pattern)

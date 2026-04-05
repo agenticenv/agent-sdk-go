@@ -82,7 +82,28 @@ func (c *Client) buildMessageParams(messages []anthropic.MessageParam, req *inte
 	if req.ResponseFormat != nil {
 		params.OutputConfig = responseFormatToAnthropic(req.ResponseFormat)
 	}
+	if b, ok := anthropicThinkingBudget(req.Reasoning); ok {
+		params.Thinking = anthropic.ThinkingConfigParamOfEnabled(b)
+	}
 	return params
+}
+
+// anthropicThinkingBudget maps generic LLMReasoning to extended-thinking budget (tokens).
+func anthropicThinkingBudget(r *interfaces.LLMReasoning) (int64, bool) {
+	if r == nil {
+		return 0, false
+	}
+	budget := r.BudgetTokens
+	if budget > 0 {
+		if budget < 1024 {
+			budget = 1024
+		}
+		return int64(budget), true
+	}
+	if r.Enabled {
+		return 1024, true
+	}
+	return 0, false
 }
 
 func responseFormatToAnthropic(rf *interfaces.ResponseFormat) anthropic.OutputConfigParam {

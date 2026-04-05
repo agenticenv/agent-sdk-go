@@ -114,6 +114,10 @@ func cloneLLMSampling(s *sdkruntime.LLMSampling) *sdkruntime.LLMSampling {
 		k := *s.TopK
 		c.TopK = &k
 	}
+	if s.Reasoning != nil {
+		r := *s.Reasoning
+		c.Reasoning = &r
+	}
 	return &c
 }
 

@@ -237,6 +237,7 @@ func WithResponseFormat(rf *interfaces.ResponseFormat) Option {
 
 // WithLLMSampling sets per-agent LLM sampling overrides. Applies to Agent and AgentWorker.
 // When not set, LLM clients use their provider defaults. nil fields / 0 = provider default.
+// Use Reasoning (see [interfaces.LLMReasoning]) for generic reasoning/thinking; each provider maps it.
 func WithLLMSampling(s *LLMSampling) Option {
 	return func(c *agentConfig) { c.llmSampling = s }
 }
@@ -499,6 +500,7 @@ func (c *agentConfig) runtimeAgentExecution() runtime.AgentExecution {
 			MaxTokens:   c.llmSampling.MaxTokens,
 			TopP:        c.llmSampling.TopP,
 			TopK:        c.llmSampling.TopK,
+			Reasoning:   cloneLLMReasoning(c.llmSampling.Reasoning),
 		}
 	}
 	return d
@@ -531,7 +533,16 @@ func llmSamplingRuntimeView(s *LLMSampling) *runtime.LLMSampling {
 		MaxTokens:   s.MaxTokens,
 		TopP:        s.TopP,
 		TopK:        s.TopK,
+		Reasoning:   cloneLLMReasoning(s.Reasoning),
 	}
+}
+
+func cloneLLMReasoning(r *interfaces.LLMReasoning) *interfaces.LLMReasoning {
+	if r == nil {
+		return nil
+	}
+	c := *r
+	return &c
 }
 
 // applySamplingToRequest sets Temperature, MaxTokens, TopP, TopK on req from agent LLMSampling.
@@ -552,6 +563,10 @@ func (c *agentConfig) applySamplingToRequest(req *interfaces.LLMRequest) {
 	}
 	if s.TopK != nil {
 		req.TopK = s.TopK
+	}
+	if s.Reasoning != nil {
+		r := *s.Reasoning
+		req.Reasoning = &r
 	}
 }
 

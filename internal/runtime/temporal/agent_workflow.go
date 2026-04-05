@@ -890,12 +890,17 @@ func llmSamplingToTypes(s *sdkruntime.LLMSampling) *types.LLMSampling {
 	if s == nil {
 		return nil
 	}
-	return &types.LLMSampling{
+	out := &types.LLMSampling{
 		Temperature: s.Temperature,
 		MaxTokens:   s.MaxTokens,
 		TopP:        s.TopP,
 		TopK:        s.TopK,
 	}
+	if s.Reasoning != nil {
+		r := *s.Reasoning
+		out.Reasoning = &r
+	}
+	return out
 }
 
 func retryPolicy(maxAttempts int32) *temporal.RetryPolicy {
@@ -923,5 +928,9 @@ func applyLLMSampling(sampling *types.LLMSampling, req *interfaces.LLMRequest) {
 	}
 	if s.TopK != nil {
 		req.TopK = s.TopK
+	}
+	if s.Reasoning != nil {
+		r := *s.Reasoning
+		req.Reasoning = &r
 	}
 }

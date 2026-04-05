@@ -414,6 +414,18 @@ agent.WithResponseFormat(&interfaces.ResponseFormat{Type: interfaces.ResponseFor
 
 **Note:** Structured Outputs (JSON schema) require supported models (e.g. `gpt-4o`, `gpt-4o-mini`). Older models may use JSON mode instead. See your provider docs.
 
+### Reasoning / extended thinking
+
+Use **`Reasoning: &interfaces.LLMReasoning{...}`** on **`WithLLMSampling`** (same struct on **`interfaces.LLMRequest`**). Fields are **generic**; each provider maps them:
+
+- **`Enabled`** — **OpenAI**: does not infer `reasoning_effort` from **`Enabled`** alone (standard chat models reject that parameter). **Anthropic**: if **`BudgetTokens`** is 0, uses **1024** tokens minimum for extended thinking. **Gemini**: helps turn on thought output (`IncludeThoughts`).
+- **`Effort`** — **OpenAI** → `reasoning_effort` only when non-empty (use with reasoning-capable models). **Gemini** → `ThinkingLevel` for `low` / `medium` / `high` / `minimal` (only when **`BudgetTokens`** is 0; Gemini forbids budget and level together). **Anthropic** does not use **`Effort`** for its thinking API.
+- **`BudgetTokens`** — **Anthropic** extended-thinking budget (≥1024 when non-zero; smaller values are clamped). **Gemini** → `ThinkingBudget` (wins over **`Effort`** → level). **OpenAI** does not use this field.
+
+Streaming still emits **`AgentEventThinkingDelta`** from Anthropic when the API returns thinking deltas.
+
+Runnable example: [examples/agent_with_reasoning](examples/agent_with_reasoning) (`go run ./examples/agent_with_reasoning/` from the repo root; Temporal + `.env` as in [examples/README.md](examples/README.md)).
+
 ### Multiple agents
 
 Use `agent.WithInstanceId` when multiple agents share a base TaskQueue:
@@ -551,7 +563,15 @@ A Temporal connection is **required** — one of `WithTemporalConfig` or `WithTe
 - **WithMaxSubAgentDepth**: Maximum delegation hops from this agent (default 2). See [Sub-agents](#sub-agents).
 - **WithMaxIterations**: Max LLM rounds (default 5).
 - **WithStream**: Enable `Stream` partial content streaming.
-- **WithLLMSampling**: Per-agent sampling (`Temperature`, `MaxTokens`, `TopP`, `TopK`). Pass `&agent.LLMSampling{...}`; nil fields = provider default. Extensible for more params.
+- **WithLLMSampling**: Pass `&agent.LLMSampling{...}`; nil or zero fields leave that knob to the provider default. Which fields apply where:
+  - **`Temperature`** — OpenAI, Anthropic, Gemini.
+  - **`MaxTokens`** — OpenAI, Anthropic, Gemini (max output / completion tokens).
+  - **`TopP`** — OpenAI, Gemini only (not sent to Anthropic).
+  - **`TopK`** — Anthropic only (not sent to OpenAI or Gemini).
+  - **`Reasoning`** (`*interfaces.LLMReasoning`) — optional generic controls; each LLM client maps them:
+    - **`Enabled`** — requests reasoning/thinking on providers that support it (see below).
+    - **`Effort`** — `"none"` … `"xhigh"`; **OpenAI** → `reasoning_effort` when non-empty; **Gemini** → `ThinkingLevel` when `low` / `medium` / `high` / `minimal`; **Anthropic** ignores (use **`BudgetTokens`** for extended thinking).
+    - **`BudgetTokens`** — **Anthropic** extended-thinking budget (non-zero; SDK clamps below 1024 to 1024); **Gemini** `thinkingBudget` (if set, **`Effort`** is not sent as `ThinkingLevel`—Gemini allows only one of budget or level); **OpenAI** ignores.
 - **WithApprovalTimeout**: Max wait per tool approval; must be less than agent timeout. Defaults to timeout−30s when tools require approval. Capped at 31 days.
 
 **Env config:** [examples/README.md](examples/README.md) for examples; [cmd/README.md](cmd/README.md) for CLI.

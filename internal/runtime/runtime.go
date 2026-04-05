@@ -81,13 +81,14 @@ type AgentLLM struct {
 	Sampling *LLMSampling
 }
 
-// LLMSampling holds per-run sampling overrides (temperature, max tokens, top-p/k).
+// LLMSampling holds per-run sampling overrides (temperature, max tokens, top-p/k, reasoning).
 // Semantics match agent LLMSampling / internal types.LLMSampling.
 type LLMSampling struct {
 	Temperature *float64
 	MaxTokens   int
 	TopP        *float64
 	TopK        *int
+	Reasoning   *interfaces.LLMReasoning
 }
 
 // AgentTools is registered tools, optional registry, and approval policy for this run.
