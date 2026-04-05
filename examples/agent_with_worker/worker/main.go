@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -26,20 +27,20 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to create agent worker: %v", err)
 	}
-	defer w.Close()
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt)
 
 	fmt.Printf("Agent worker starting on task queue %q. Run this before the agent.\n", cfg.TaskQueue)
-	// Start() blocks until Close() is called. Run it in a goroutine so we can handle shutdown.
+	// Start() blocks until Stop() is called. Run it in a goroutine so we can handle shutdown.
 	go func() {
 		fmt.Println("Agent worker running. Press Ctrl+C to stop.")
-		if err := w.Start(); err != nil {
+		if err := w.Start(context.Background()); err != nil {
 			log.Printf("worker stopped: %v", err)
 		}
 	}()
 
 	<-sigChan
+	w.Stop()
 	fmt.Println("Shutting down agent worker...")
 }

@@ -127,8 +127,8 @@ func main() {
 			}
 			fmt.Printf("\n--- %s ---\n", title)
 			fmt.Printf("Source agent : %s\n", ev.AgentName)
-			if ap.DelegateToName != "" {
-				fmt.Printf("Delegate to  : %s\n", ap.DelegateToName)
+			if ap.SubAgentName != "" {
+				fmt.Printf("Delegate to  : %s\n", ap.SubAgentName)
 			}
 			fmt.Printf("Tool         : %s\n", ap.ToolName)
 			fmt.Printf("Args:\n%s\nApprove? (y/n): ", string(argsJSON))

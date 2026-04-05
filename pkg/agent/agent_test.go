@@ -3,17 +3,10 @@ package agent
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
 )
-
-func TestGetEventTaskQueue(t *testing.T) {
-	if got := getEventTaskQueue("my-queue"); got != "my-queue-events" {
-		t.Errorf("getEventTaskQueue(%q) = %q, want my-queue-events", "my-queue", got)
-	}
-}
 
 func TestCopyApprovalArgs(t *testing.T) {
 	if copyApprovalArgs(nil) != nil {
@@ -31,45 +24,6 @@ func TestCopyApprovalArgs(t *testing.T) {
 	src["c"] = 99
 	if _, ok := dst["c"]; ok {
 		t.Error("copyApprovalArgs should return a copy, not share the map")
-	}
-}
-
-func TestCopyEventWithShortApprovalToken(t *testing.T) {
-	ev := &AgentEvent{Type: AgentEventApproval, Approval: &ApprovalEvent{ToolName: "t", ApprovalToken: "long"}}
-	got := copyEventWithShortApprovalToken(ev, "short")
-	if got == ev {
-		t.Error("should return a copy")
-	}
-	if got.Approval.ApprovalToken != "short" {
-		t.Errorf("ApprovalToken = %q, want short", got.Approval.ApprovalToken)
-	}
-	if got.Approval.ToolName != "t" {
-		t.Errorf("ToolName = %q, want t", got.Approval.ToolName)
-	}
-
-	evNoApproval := &AgentEvent{Type: AgentEventContent}
-	got2 := copyEventWithShortApprovalToken(evNoApproval, "x")
-	if got2.Approval != nil {
-		t.Error("ev with nil Approval should produce nil Approval in copy")
-	}
-}
-
-func TestStreamCompleteEndsRun(t *testing.T) {
-	root := "Main agent"
-	if streamCompleteEndsRun(nil, root) {
-		t.Error("nil event should not end run")
-	}
-	if streamCompleteEndsRun(&AgentEvent{Type: AgentEventContent}, root) {
-		t.Error("non-complete should not end run")
-	}
-	if !streamCompleteEndsRun(&AgentEvent{Type: AgentEventComplete, AgentName: ""}, root) {
-		t.Error("complete with empty agent should end run (legacy)")
-	}
-	if !streamCompleteEndsRun(&AgentEvent{Type: AgentEventComplete, AgentName: root}, root) {
-		t.Error("complete from root should end run")
-	}
-	if streamCompleteEndsRun(&AgentEvent{Type: AgentEventComplete, AgentName: "MathSpecialist"}, root) {
-		t.Error("complete from sub-agent should not end root run")
 	}
 }
 
@@ -93,26 +47,6 @@ func TestAgent_ValidateConversationID(t *testing.T) {
 	}
 }
 
-func TestAgent_BeginRunEndRun(t *testing.T) {
-	l := logger.DefaultLogger("error")
-	a := &Agent{agentConfig: agentConfig{logger: l}}
-
-	cleanup, err := a.beginRun("wf1")
-	if err != nil {
-		t.Fatalf("beginRun: %v", err)
-	}
-	cleanup()
-
-	_, err = a.beginRun("wf1")
-	if err != nil {
-		t.Fatalf("beginRun after cleanup: %v", err)
-	}
-	_, err = a.beginRun("wf2")
-	if err != ErrAgentAlreadyRunning {
-		t.Errorf("beginRun concurrent: got %v, want ErrAgentAlreadyRunning", err)
-	}
-}
-
 type mockConversation struct{}
 
 func (m *mockConversation) AddMessage(ctx context.Context, id string, msg interfaces.Message) error {
@@ -123,32 +57,6 @@ func (m *mockConversation) ListMessages(ctx context.Context, id string, opts ...
 }
 func (m *mockConversation) Clear(ctx context.Context, id string) error { return nil }
 func (m *mockConversation) IsDistributed() bool                        { return false }
-
-func TestSubAgentQueryFromArgs(t *testing.T) {
-	if subAgentQueryFromArgs(nil) != "" {
-		t.Error("nil args")
-	}
-	if subAgentQueryFromArgs(map[string]any{}) != "" {
-		t.Error("empty map")
-	}
-	if got := subAgentQueryFromArgs(map[string]any{"query": "hello"}); got != "hello" {
-		t.Errorf("got %q", got)
-	}
-}
-
-func TestSubAgentChildWorkflowTimeout(t *testing.T) {
-	if got := subAgentChildWorkflowTimeout(nil); got != defaultTimeout {
-		t.Fatalf("nil worker: got %v want %v", got, defaultTimeout)
-	}
-	aw := &AgentWorker{config: &agentConfig{timeout: 2 * time.Minute}}
-	if got := subAgentChildWorkflowTimeout(aw); got != 2*time.Minute {
-		t.Fatalf("custom timeout: got %v", got)
-	}
-	aw.config.timeout = 0
-	if got := subAgentChildWorkflowTimeout(aw); got != defaultTimeout {
-		t.Fatalf("zero timeout: got %v want %v", got, defaultTimeout)
-	}
-}
 
 func TestBuildWorkflowSubAgentRoutes_flat(t *testing.T) {
 	child := &Agent{agentConfig: agentConfig{Name: "Child", taskQueue: "q-child"}}

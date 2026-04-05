@@ -66,13 +66,14 @@ func main() {
 	}
 
 	fmt.Println("user:", prompt)
-	fmt.Println("--- events ---")
 
 	eventCh, err := a.RunStream(context.Background(), prompt, "")
 	if err != nil {
 		log.Printf("RunStream failed: %v", err)
 		return
 	}
+
+	fmt.Println("--- events ---")
 
 	var finalContent string
 	for ev := range eventCh {

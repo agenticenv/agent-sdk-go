@@ -4,13 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
 	"log/slog"
 
+	"github.com/agenticenv/agent-sdk-go/internal/runtime"
 	"github.com/agenticenv/agent-sdk-go/internal/runtime/temporal"
+	"github.com/agenticenv/agent-sdk-go/internal/types"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
 	"github.com/google/uuid"
@@ -26,21 +27,11 @@ import (
 //
 // When using DisableLocalWorker, the agent and NewAgentWorker must use the same TaskQueue (and
 // same InstanceId if set) so they pair correctly.
-type TemporalConfig struct {
-	Host      string
-	Port      int
-	Namespace string
-	TaskQueue string // Required. Full task queue name. Unique per agent.
-}
+type TemporalConfig = temporal.TemporalConfig
 
 // LLMSampling holds per-agent LLM sampling overrides. nil/0 = provider default.
 // One LLM client can serve multiple agents with different sampling.
-type LLMSampling struct {
-	Temperature *float64 // 0-2 OpenAI, 0-1 Anthropic
-	MaxTokens   int      // 0 = provider default
-	TopP        *float64 // 0-1; OpenAI only
-	TopK        *int     // Anthropic only
-}
+type LLMSampling = types.LLMSampling
 
 // agentConfig holds shared configuration for Agent and AgentWorker.
 //
@@ -57,8 +48,6 @@ type agentConfig struct {
 	SystemPrompt       string
 	temporalConfig     *TemporalConfig
 	temporalClient     client.Client
-	taskQueueOption    string // set by WithTaskQueue; required when using WithTemporalClient
-	ownsTemporalClient bool   // true when we create client from config; false when user provides it
 	instanceId         string
 	taskQueue          string
 	LLMClient          interfaces.LLMClient
@@ -69,7 +58,7 @@ type agentConfig struct {
 	streamEnabled      bool
 	logger             logger.Logger
 	logLevel           string
-	approvalHandler    ApprovalHandler
+	approvalHandler    types.ApprovalHandler
 	timeout            time.Duration
 	approvalTimeout    time.Duration // max wait per tool approval; must be < timeout when tools require approval
 
@@ -86,7 +75,6 @@ type agentConfig struct {
 	disableLocalWorker  bool // true when user calls DisableLocalWorker; no local worker. Agent only.
 	enableRemoteWorkers bool // true: run event worker & workflow. false (default): use agentChannel only. Agent only.
 	remoteWorker        bool // true when AgentWorker; activities use UpdateWorkflow
-	agentWorker         bool
 
 	// subAgents
 	// subAgents are direct children; each is exposed to the LLM via NewSubAgentTool (see toolsList).
@@ -98,8 +86,7 @@ type agentConfig struct {
 // defaultTimeout is used when no deadline set, to avoid blocking forever when no workers run.
 const defaultTimeout = 5 * time.Minute
 
-// maxApprovalTimeout caps approval wait. Approval activity timeout cannot exceed this.
-const maxApprovalTimeout = 31 * 24 * time.Hour
+const defaultMaxIterations int = 5
 
 // Option configures an agent. See agentConfig for which options apply to Agent vs AgentWorker.
 type Option func(*agentConfig)
@@ -122,24 +109,21 @@ func WithSystemPrompt(prompt string) Option {
 // WithTemporalConfig sets the Temporal config. Applies to Agent and AgentWorker.
 // Use either WithTemporalConfig or WithTemporalClient, not both.
 func WithTemporalConfig(cfg *TemporalConfig) Option {
-	return func(c *agentConfig) { c.temporalConfig = cfg }
+	return func(c *agentConfig) {
+		c.temporalConfig = cfg
+		c.taskQueue = cfg.TaskQueue
+	}
 }
 
 // WithTemporalClient sets a pre-configured Temporal client. Use when you need TLS, API key auth,
 // Temporal Cloud, or other connection options not supported by TemporalConfig.
 // Requires WithTaskQueue. Use either WithTemporalConfig or WithTemporalClient, not both.
 // The agent does not close the client when Close() is called; the caller owns the lifecycle.
-func WithTemporalClient(tc client.Client) Option {
+func WithTemporalClient(tc client.Client, taskQueue string) Option {
 	return func(c *agentConfig) {
 		c.temporalClient = tc
-		c.ownsTemporalClient = false
+		c.taskQueue = taskQueue
 	}
-}
-
-// WithTaskQueue sets the task queue name. Required when using WithTemporalClient.
-// Ignored when using WithTemporalConfig (TaskQueue comes from TemporalConfig).
-func WithTaskQueue(queue string) Option {
-	return func(c *agentConfig) { c.taskQueueOption = queue }
 }
 
 // WithInstanceId sets the instance identifier. Applies to Agent and AgentWorker.
@@ -196,7 +180,7 @@ func WithLogLevel(level string) Option {
 
 // WithApprovalHandler sets the approval callback for Run. Required when tools need approval.
 // The callback receives req with req.Respond set; call req.Respond(Approved|Rejected). Agent only; RunStream uses OnApproval on events.
-func WithApprovalHandler(fn ApprovalHandler) Option {
+func WithApprovalHandler(fn types.ApprovalHandler) Option {
 	return func(c *agentConfig) { c.approvalHandler = fn }
 }
 
@@ -276,6 +260,12 @@ func buildAgentConfig(opts []Option) (*agentConfig, error) {
 	for _, opt := range opts {
 		opt(c)
 	}
+
+	c.Name = strings.TrimSpace(c.Name)
+	if c.Name == "" {
+		return nil, errors.New("name is required")
+	}
+
 	if c.toolApprovalPolicy == nil {
 		c.toolApprovalPolicy = RequireAllToolApprovalPolicy{}
 	}
@@ -291,10 +281,8 @@ func buildAgentConfig(opts []Option) (*agentConfig, error) {
 			return nil, errors.New("TaskQueue is required in TemporalConfig: provide a unique name per agent")
 		}
 	}
-	if c.temporalClient != nil {
-		if c.taskQueueOption == "" {
-			return nil, errors.New("WithTaskQueue is required when using WithTemporalClient")
-		}
+	if c.temporalClient != nil && c.taskQueue == "" {
+		return nil, errors.New("taskQueue is required when using WithTemporalClient")
 	}
 	if c.LLMClient == nil {
 		return nil, errors.New("LLM client is required")
@@ -320,14 +308,15 @@ func buildAgentConfig(opts []Option) (*agentConfig, error) {
 
 	// Validate approvalTimeout when any tool requires approval (approvalTimeout must be < timeout)
 	if c.hasApprovalTools() {
+		c.logger.Debug(context.Background(), "tools require approval", slog.String("name", c.Name))
 		if c.approvalTimeout == 0 {
 			c.approvalTimeout = c.timeout - 30*time.Second
 		}
 		if c.approvalTimeout >= c.timeout {
 			return nil, fmt.Errorf("approvalTimeout (%v) must be less than agent timeout (%v)", c.approvalTimeout, c.timeout)
 		}
-		if c.approvalTimeout > maxApprovalTimeout {
-			return nil, fmt.Errorf("approvalTimeout (%v) exceeds max (%v)", c.approvalTimeout, maxApprovalTimeout)
+		if c.approvalTimeout > types.MaxApprovalTimeout {
+			return nil, fmt.Errorf("approvalTimeout (%v) exceeds max (%v)", c.approvalTimeout, types.MaxApprovalTimeout)
 		}
 	}
 
@@ -338,19 +327,8 @@ func buildAgentConfig(opts []Option) (*agentConfig, error) {
 		c.logger = logger.DefaultLogger(c.logLevel)
 	}
 
-	if c.temporalConfig != nil {
-		tc, err := newTemporalClient(c.temporalConfig, c.logger)
-		if err != nil {
-			return nil, err
-		}
-		c.temporalClient = tc
-		c.ownsTemporalClient = true
-		c.taskQueue = c.temporalConfig.TaskQueue
-	} else {
-		c.taskQueue = c.taskQueueOption
-	}
-	if c.instanceId != "" {
-		c.taskQueue = c.taskQueue + "-" + c.instanceId
+	if c.maxIterations <= 0 {
+		c.maxIterations = defaultMaxIterations
 	}
 
 	ctx := context.Background()
@@ -360,7 +338,6 @@ func buildAgentConfig(opts []Option) (*agentConfig, error) {
 		slog.String("name", c.Name),
 		slog.String("taskQueue", c.taskQueue),
 		slog.String("instanceId", c.instanceId),
-		slog.Bool("ownsTemporalClient", c.ownsTemporalClient),
 		slog.Int("maxIterations", c.maxIterations),
 		slog.Bool("streamEnabled", c.streamEnabled),
 		slog.Bool("disableLocalWorker", c.disableLocalWorker),
@@ -372,16 +349,6 @@ func buildAgentConfig(opts []Option) (*agentConfig, error) {
 		slog.String("logLevel", c.logLevel),
 		slog.Int("toolCount", len(c.toolsList())),
 		slog.Bool("hasConversation", c.conversation != nil))
-	return c, nil
-}
-
-// buildAgentConfigForWorker builds config for NewAgentWorker (allows agentWorker mode).
-func buildAgentConfigForWorker(opts []Option) (*agentConfig, error) {
-	opts = append(opts, func(c *agentConfig) { c.agentWorker = true })
-	c, err := buildAgentConfig(opts)
-	if err != nil {
-		return nil, err
-	}
 	return c, nil
 }
 
@@ -420,7 +387,7 @@ func (c *agentConfig) validateSubAgents() error {
 			return fmt.Errorf("sub-agent must not be nil")
 		}
 		if _, dup := seen[s]; dup {
-			return fmt.Errorf("duplicate sub-agent %q in WithSubAgents", subAgentLabel(s))
+			return fmt.Errorf("duplicate sub-agent %q in WithSubAgents", s.Name)
 		}
 		seen[s] = struct{}{}
 	}
@@ -435,14 +402,14 @@ func (c *agentConfig) validateSubAgents() error {
 
 func dfsSubAgentDepth(a *Agent, path map[*Agent]struct{}, depth, maxDepth int) error {
 	if depth > maxDepth {
-		return fmt.Errorf("sub-agent depth exceeds max (%d): at %q", maxDepth, subAgentLabel(a))
+		return fmt.Errorf("sub-agent depth exceeds max (%d): at %q", maxDepth, a.Name)
 	}
 	for _, child := range a.subAgents {
 		if child == nil {
-			return fmt.Errorf("sub-agent %q has a nil entry in WithSubAgents", subAgentLabel(a))
+			return fmt.Errorf("sub-agent %q has a nil entry in WithSubAgents", a.Name)
 		}
 		if _, cycle := path[child]; cycle {
-			return fmt.Errorf("sub-agent cycle detected involving %q and %q", subAgentLabel(a), subAgentLabel(child))
+			return fmt.Errorf("sub-agent cycle detected involving %q and %q", a.Name, child.Name)
 		}
 		path[child] = struct{}{}
 		if err := dfsSubAgentDepth(child, path, depth+1, maxDepth); err != nil {
@@ -451,16 +418,6 @@ func dfsSubAgentDepth(a *Agent, path map[*Agent]struct{}, depth, maxDepth int) e
 		delete(path, child)
 	}
 	return nil
-}
-
-func subAgentLabel(a *Agent) string {
-	if a == nil {
-		return "<nil>"
-	}
-	if n := strings.TrimSpace(a.Name); n != "" {
-		return n
-	}
-	return a.ID
 }
 
 // validateToolsAndSubAgentNames ensures tool names are unique across WithTools/registry and sub-agent tools.
@@ -543,61 +500,31 @@ func (c *agentConfig) hasApprovalTools() bool {
 	return false
 }
 
-func newTemporalClient(config *TemporalConfig, sdkLog logger.Logger) (client.Client, error) {
-	ctx := context.Background()
-	sdkLog.Info(ctx, "connecting to temporal server", slog.String("host", config.Host), slog.Int("port", config.Port))
-
-	clientOptions := client.Options{
-		HostPort:                config.Host + ":" + strconv.Itoa(config.Port),
-		Namespace:               config.Namespace,
-		Logger:                  temporal.NewLogAdapter(sdkLog),
-		WorkerHeartbeatInterval: -1, // Disable; requires Temporal server 1.29.1+ with frontend.WorkerHeartbeatsEnabled=true
-	}
-
-	ticker := time.NewTicker(3 * time.Second)
-	defer ticker.Stop()
-
-	connectionTimeout := 10 * time.Second
-
-	timeoutExceeded := time.After(connectionTimeout)
-
-	var c client.Client
-	var err error
-	clientReady := false
-
-	ctx, cancelFunc := context.WithCancel(context.Background())
-	defer cancelFunc()
-
-	for {
-		select {
-		case <-timeoutExceeded:
-			if !clientReady {
-				return nil, fmt.Errorf("temporal conneciton failed after %v timeout", connectionTimeout)
-			} else {
-				c.Close()
-				return nil, fmt.Errorf("temporal namespace check failed after %v timeout", connectionTimeout)
-			}
-		case <-ticker.C:
-			if !clientReady {
-				c, err = client.Dial(clientOptions)
-				if err == nil {
-					sdkLog.Info(ctx, "successfully created temporal client, checking namespace availability")
-					clientReady = true
-				} else {
-					sdkLog.Info(ctx, "failed to create temporal client, dialing again...", slog.Any("error", err))
-				}
-			} else {
-				nsClient, err := client.NewNamespaceClient(clientOptions)
-				if err == nil {
-					_, err = nsClient.Describe(ctx, config.Namespace)
-					nsClient.Close()
-					if err == nil {
-						sdkLog.Info(ctx, "successfully find temporal namespace", slog.String("namespace", config.Namespace))
-						return c, nil
-					}
-				}
-				sdkLog.Info(ctx, "failed to find temporal namespace, trying again..", slog.String("namespace", config.Namespace), slog.Any("error", err))
-			}
+func (cfg *agentConfig) buildAgentRuntime(remoteWorker bool) (runtime.Runtime, error) {
+	if cfg.temporalClient != nil || cfg.temporalConfig != nil {
+		options := []temporal.Option{
+			temporal.WithLogger(cfg.logger),
+			temporal.WithLLMClient(cfg.LLMClient),
+			temporal.WithLLMSampling(cfg.llmSampling),
+			temporal.WithTools(cfg.toolsList()...),
+			temporal.WithSystemPrompt(cfg.SystemPrompt),
+			temporal.WithResponseFormat(cfg.responseFormatForLLM()),
+			temporal.WithConversation(cfg.conversation),
+			temporal.WithConversationSize(cfg.conversationSize),
+			temporal.WithToolApprovalPolicy(cfg.toolApprovalPolicy),
+			temporal.WithTimeout(cfg.timeout),
+			temporal.WithAgentName(cfg.Name),
+			temporal.WithMaxIterations(cfg.maxIterations),
+			temporal.WithApprovalTimeout(cfg.approvalTimeout),
+			temporal.WithRemoteWorker(remoteWorker),
 		}
+		if cfg.temporalConfig != nil {
+			options = append(options, temporal.WithTemporalConfig(cfg.temporalConfig))
+		} else {
+			options = append(options, temporal.WithTemporalClient(cfg.temporalClient, cfg.taskQueue))
+		}
+		return temporal.NewTemporalRuntime(options...)
 	}
+	return nil, fmt.Errorf("supported only temporal runtime")
 }
+

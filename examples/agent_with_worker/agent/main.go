@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	config "github.com/agenticenv/agent-sdk-go/examples"
@@ -14,6 +16,9 @@ import (
 )
 
 func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	cfg := config.LoadFromEnv()
 
 	llmClient, err := config.NewLLMClientFromConfig(cfg)
@@ -42,7 +47,7 @@ func main() {
 	}
 	fmt.Println("user:", prompt)
 	fmt.Println("(Ensure worker is running in another terminal. Waits up to 15s for workers.)")
-	response, err := a.Run(context.Background(), prompt, "")
+	response, err := a.Run(ctx, prompt, "")
 	if err != nil {
 		log.Printf("failed to run agent: %v", err)
 		return

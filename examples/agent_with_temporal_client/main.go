@@ -45,8 +45,7 @@ func main() {
 		agent.WithName("temporal-client-agent"),
 		agent.WithDescription("Agent using caller-owned Temporal client"),
 		agent.WithSystemPrompt("You are a helpful assistant."),
-		agent.WithTemporalClient(tc),
-		agent.WithTaskQueue(cfg.TaskQueue),
+		agent.WithTemporalClient(tc, cfg.TaskQueue),
 		agent.WithLLMClient(llmClient),
 		agent.WithLogger(config.NewLoggerFromLogConfig(cfg)),
 	)
