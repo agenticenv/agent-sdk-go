@@ -1,6 +1,6 @@
 # Examples
 
-These programs exercise **agent-sdk-go** (`github.com/agenticenv/agent-sdk-go`). The SDK **requires a Temporal cluster**: agents execute as Temporal workflows, so a running Temporal service is mandatory—not optional—for every example below.
+These programs exercise **agent-sdk-go** (`github.com/agenticenv/agent-sdk-go`). The SDK is **Temporal-only**: there is no way to run these examples without a Temporal cluster—agents execute as Temporal workflows, so a running Temporal service is mandatory for every example below.
 
 ## Prerequisites
 
@@ -40,7 +40,7 @@ The examples use `TEMPORAL_HOST`, `TEMPORAL_PORT`, `TEMPORAL_NAMESPACE` from `.e
 
 ```bash
 cp env.sample .env
-# Edit .env: set LLM_APIKEY, LLM_MODEL (gpt-4o or claude-3-5-sonnet-20241022)
+# Edit .env: set LLM_APIKEY, LLM_MODEL (see LLM_PROVIDER: openai, anthropic, or gemini)
 ```
 
 ## Run examples
@@ -136,7 +136,7 @@ Examples send conversation (user prompt, assistant response) to **stdout** and i
 | Env var | Description |
 |---------|-------------|
 | `TEMPORAL_HOST`, `TEMPORAL_PORT`, `TEMPORAL_NAMESPACE`, `TEMPORAL_TASKQUEUE` | Temporal connection |
-| `LLM_PROVIDER` | `openai` or `anthropic` |
+| `LLM_PROVIDER` | `openai`, `anthropic`, or `gemini` (see `env.sample`) |
 | `LLM_APIKEY` | API key |
 | `LLM_MODEL` | e.g. `gpt-4o`, `claude-3-5-sonnet-20241022` |
 | `LLM_BASEURL` | Optional (custom/proxy endpoints) |

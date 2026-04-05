@@ -8,7 +8,7 @@ Before contributing, ensure you have:
 
 | Requirement | Version / Notes |
 |-------------|-----------------|
-| **Go** | 1.21 or higher (see `go.mod` for the module minimum) |
+| **Go** | 1.24 or higher (see `go.mod` for the exact toolchain) |
 | **Temporal server** | Required for running examples and integration-style tests |
 | **golangci-lint** | Required for `make lint` — install: `go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest` |
 

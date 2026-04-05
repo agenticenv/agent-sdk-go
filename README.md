@@ -10,13 +10,13 @@ Build durable, long-running AI agents in Go — tool calling, human approvals, a
 
 > **Note:** Independent community library — **not** affiliated with Temporal Technologies.
 >
-> **Runtime:** Requires a running Temporal cluster — [self-hosted](https://docs.temporal.io/self-hosted-guide) or [Temporal Cloud](https://temporal.io/cloud).
+> **Runtime:** **Temporal only** — there is no in-SDK agent loop without Temporal. You need a running cluster — [self-hosted](https://docs.temporal.io/self-hosted-guide) or [Temporal Cloud](https://temporal.io/cloud) — and `WithTemporalConfig` or `WithTemporalClient` when building the agent.
 >
 > **Version:** `v0.0.10` — Active development. Follows [semantic versioning](https://semver.org/); API may evolve before v1.0.0.
 
 ## Overview
 
-Use this SDK when you want **LLM-driven agents** (tools, optional specialists) whose runs **survive worker restarts** and can last a long time: orchestration, retries, timeouts, child workflows for delegation, and approval pauses come from **Temporal**, with history and debugging in the **Temporal UI**. Typical in-process agent loops are replaced by **replay-safe workflow code** plus activities for side effects.
+Use this SDK when you want **LLM-driven agents** (tools, optional specialists) whose runs **survive worker restarts** and can last a long time: orchestration, retries, timeouts, child workflows for delegation, and approval pauses come from **Temporal**, with history and debugging in the **Temporal UI**. Ordinary non-durable “call the LLM in a loop” designs are replaced by **replay-safe workflow code** plus activities for side effects.
 
 **Why wire agents to Temporal?**
 
@@ -35,11 +35,11 @@ Use this SDK when you want **LLM-driven agents** (tools, optional specialists) w
 - **Sub-agents** — Delegate work to specialist agents you register
 - **Durable execution** — Agents survive restarts, run for minutes to days without losing state
 - **Distributed execution** — Agents run across **agent workers** and activities, horizontally scalable across multiple instances.
-- **Temporal runtime** — Agents run as workflows; durable execution, retries, and UI visibility come from Temporal
+- **Temporal execution** — The shipped runtime is **Temporal** (`TemporalRuntime`); agents run as workflows and activities. The internal `runtime` package is the extension point if other backends are added later.
 
 ## Getting started
 
-Prerequisites: a running [Temporal](https://docs.temporal.io/self-hosted-guide) environment (required — agents do not run without it), Go 1.21+, and credentials for whatever LLM you plug in.
+Prerequisites: a running [Temporal](https://docs.temporal.io/self-hosted-guide) environment (required — agents do not run without it), **Go 1.24+** (see `go.mod`), and credentials for whatever LLM you plug in.
 
 **Module:** `github.com/agenticenv/agent-sdk-go`
 
@@ -534,6 +534,8 @@ a.Run(ctx, "What's my name?", convID) // agent uses history: "Alice"
 ---
 
 ## Configuration
+
+A Temporal connection is **required** — one of `WithTemporalConfig` or `WithTemporalClient` must be set; the agent does not run with LLM-only config.
 
 - **WithTemporalConfig**: Temporal connection (Host, Port, Namespace, TaskQueue). Use for simple setups. See [Temporal connection](#temporal-connection).
 - **WithTemporalClient**: Pre-configured Temporal client. Use for TLS, API key auth, Temporal Cloud. Requires `WithTaskQueue`. Agent does not close the client.
