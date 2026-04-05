@@ -51,15 +51,15 @@ func NewTemporalRuntime(opts ...Option) (*TemporalRuntime, error) {
 	if err != nil {
 		return nil, err
 	}
-	cfg.logger.Info(context.Background(), "temporal runtime created", slog.String("name", cfg.agentName), slog.String("taskQueue", cfg.taskQueue))
+	cfg.logger.Info(context.Background(), "runtime created", slog.String("scope", "runtime"), slog.String("name", cfg.agentName), slog.String("taskQueue", cfg.taskQueue))
 	return &TemporalRuntime{
 		TemporalRuntimeConfig: *cfg,
 		eventbus:              eventbus.NewInmem(cfg.logger),
 	}, nil
 }
 
-// override the event bus for the runtime.
-// subagents runtime are updated with main agent's event bus.
+// SetEventBus replaces the in-process event bus. Sub-agent runtimes are wired to the parent
+// agent's bus so delegation and approval events fan in correctly.
 func (rt *TemporalRuntime) SetEventBus(eventbus eventbus.EventBus) {
 	rt.eventbus = eventbus
 }
@@ -71,16 +71,16 @@ func (rt *TemporalRuntime) GetEventBus() eventbus.EventBus {
 
 // Start starts the worker (blocks until Stop is called).
 func (rt *TemporalRuntime) Start(ctx context.Context) error {
-	rt.logger.Info(ctx, "starting temporal runtime worker", slog.String("taskQueue", rt.taskQueue))
+	rt.logger.Info(ctx, "runtime worker starting", slog.String("scope", "runtime"), slog.String("taskQueue", rt.taskQueue))
 	// createAgentWorker creates and registers a Temporal worker for the agent's run workflow and activities.
 
 	rt.agentWorkerMu.Lock()
 	defer rt.agentWorkerMu.Unlock()
 	if rt.agentWorker != nil {
-		rt.logger.Debug(ctx, "temporal runtime worker already running", slog.String("taskQueue", rt.taskQueue))
+		rt.logger.Debug(ctx, "runtime worker already running", slog.String("scope", "runtime"), slog.String("taskQueue", rt.taskQueue))
 		return nil
 	}
-	rt.logger.Debug(ctx, "registering agent workflows and activities to temporal runtime worker", slog.String("taskQueue", rt.taskQueue))
+	rt.logger.Debug(ctx, "runtime worker registering workflows and activities", slog.String("scope", "runtime"), slog.String("taskQueue", rt.taskQueue))
 	w := worker.New(rt.temporalClient, rt.taskQueue, worker.Options{})
 	w.RegisterWorkflowWithOptions(rt.AgentWorkflow, workflow.RegisterOptions{Name: "AgentWorkflow"})
 	w.RegisterActivityWithOptions(rt.AgentLLMActivity, activity.RegisterOptions{Name: "AgentLLMActivity"})
@@ -92,34 +92,34 @@ func (rt *TemporalRuntime) Start(ctx context.Context) error {
 	rt.agentWorker = w
 	err := rt.agentWorker.Start()
 	if err != nil {
-		rt.logger.Error(ctx, "failed to start temporal runtime worker", slog.String("taskQueue", rt.taskQueue), slog.Any("error", err))
+		rt.logger.Error(ctx, "failed to start runtime worker", slog.String("scope", "runtime"), slog.String("taskQueue", rt.taskQueue), slog.Any("error", err))
 		return err
 	}
-	rt.logger.Debug(ctx, "temporal runtime worker started", slog.String("taskQueue", rt.taskQueue))
+	rt.logger.Debug(ctx, "runtime worker started", slog.String("scope", "runtime"), slog.String("taskQueue", rt.taskQueue))
 	return nil
 }
 
-// Stop stops the worker. Unexported; Agent calls it when closing embedded worker.
+// Stop stops the Temporal worker(s). Called when the agent package stops an embedded worker or closes the runtime.
 func (rt *TemporalRuntime) Stop() {
 	ctx := context.Background()
 	if rt.remoteWorker {
-		rt.logger.Debug(ctx, "stopping temporal runtime", slog.String("taskQueue", rt.taskQueue))
+		rt.logger.Debug(ctx, "runtime stopping remote worker path", slog.String("scope", "runtime"), slog.String("taskQueue", rt.taskQueue))
 		if rt.agentWorker != nil {
-			rt.logger.Debug(ctx, "stopping runtime remote worker", slog.String("taskQueue", rt.taskQueue))
+			rt.logger.Debug(ctx, "runtime stopping remote worker", slog.String("scope", "runtime"), slog.String("taskQueue", rt.taskQueue))
 			rt.agentWorker.Stop()
 		}
 		if rt.temporalClient != nil && rt.ownsTemporalClient {
-			rt.logger.Debug(ctx, "closing remote worker temporal client", slog.String("taskQueue", rt.taskQueue))
+			rt.logger.Debug(ctx, "runtime closing owned client (remote worker)", slog.String("scope", "runtime"), slog.String("taskQueue", rt.taskQueue))
 			rt.temporalClient.Close()
 		}
-		rt.logger.Debug(ctx, "temporal runtime remote worker stopped", slog.String("taskQueue", rt.taskQueue))
+		rt.logger.Debug(ctx, "runtime remote worker stopped", slog.String("scope", "runtime"), slog.String("taskQueue", rt.taskQueue))
 	} else {
-		rt.logger.Debug(ctx, "skipping temporal runtime stop for local worker", slog.String("taskQueue", rt.taskQueue))
+		rt.logger.Debug(ctx, "runtime stop skipped (local worker embed)", slog.String("scope", "runtime"), slog.String("taskQueue", rt.taskQueue))
 	}
 }
 
 func (rt *TemporalRuntime) Close() {
-	rt.logger.Info(context.Background(), "closing temporal runtime", slog.String("name", rt.agentName))
+	rt.logger.Info(context.Background(), "runtime closing", slog.String("scope", "runtime"), slog.String("name", rt.agentName))
 
 	rt.runMu.Lock()
 	workflowID := rt.activeRunWorkflowID
@@ -132,11 +132,11 @@ func (rt *TemporalRuntime) Close() {
 		ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		defer cancel()
 		if workflowID != "" {
-			rt.logger.Debug(ctx, "terminating active run workflow", slog.String("workflowID", workflowID))
+			rt.logger.Debug(ctx, "runtime terminating active run", slog.String("scope", "runtime"), slog.String("workflowID", workflowID))
 			_ = rt.temporalClient.TerminateWorkflow(ctx, workflowID, "", "agent closed")
 		}
 		if eventWorkflowID != "" {
-			rt.logger.Debug(ctx, "signaling event workflow to complete", slog.String("eventWorkflowID", eventWorkflowID))
+			rt.logger.Debug(ctx, "runtime signaling event pipeline to complete", slog.String("scope", "runtime"), slog.String("eventWorkflowID", eventWorkflowID))
 			_ = rt.temporalClient.SignalWorkflow(ctx, eventWorkflowID, "", eventWorkflowCompleteSignal, nil)
 			// Wait for event workflow to complete gracefully (worker must stay running to process the signal)
 			run := rt.temporalClient.GetWorkflow(ctx, eventWorkflowID, "")
@@ -145,20 +145,20 @@ func (rt *TemporalRuntime) Close() {
 	}
 
 	if rt.eventWorker != nil {
-		rt.logger.Debug(ctx, "stopping event worker on temporal runtime close")
+		rt.logger.Debug(ctx, "runtime stopping event worker", slog.String("scope", "runtime"))
 		rt.eventWorker.Stop()
 	}
 
 	if rt.agentWorker != nil {
-		rt.logger.Debug(ctx, "stopping runtime local worker", slog.String("taskQueue", rt.taskQueue))
+		rt.logger.Debug(ctx, "runtime stopping task worker", slog.String("scope", "runtime"), slog.String("taskQueue", rt.taskQueue))
 		rt.agentWorker.Stop()
 	}
 
 	if rt.temporalClient != nil && rt.ownsTemporalClient {
-		rt.logger.Debug(ctx, "closing temporal client on temporal runtime close")
+		rt.logger.Debug(ctx, "runtime closing owned temporal client", slog.String("scope", "runtime"))
 		rt.temporalClient.Close()
 	}
-	rt.logger.Info(ctx, "temporal runtime closed", slog.String("name", rt.agentName))
+	rt.logger.Info(ctx, "runtime closed", slog.String("scope", "runtime"), slog.String("name", rt.agentName))
 }
 
 func (rt *TemporalRuntime) Approve(ctx context.Context, approvalToken string, status types.ApprovalStatus) error {
@@ -173,7 +173,7 @@ func (rt *TemporalRuntime) Approve(ctx context.Context, approvalToken string, st
 }
 
 func (rt *TemporalRuntime) Run(ctx context.Context, req *runtime.RunRequest) (*types.AgentResponse, error) {
-	rt.logger.Debug(ctx, "temporal runtime run started", slog.String("agent", req.AgentName), slog.Int("inputLen", len(req.UserPrompt)))
+	rt.logger.Debug(ctx, "runtime run dispatch", slog.String("scope", "runtime"), slog.String("agent", req.AgentName), slog.Int("inputLen", len(req.UserPrompt)))
 
 	runCtx := ctx
 	d := rt.timeout
@@ -218,7 +218,7 @@ func (rt *TemporalRuntime) Run(ctx context.Context, req *runtime.RunRequest) (*t
 		wfInput.EventTypes = []types.AgentEventType{types.AgentEventApproval}
 		eventCh, closeEvent, err = rt.subscribeToAgentEvents(runCtx, wfInput.LocalChannelName)
 		if err != nil {
-			rt.logger.Error(runCtx, "failed to subscribe to agent events", slog.String("workflowID", workflowID), slog.Any("error", err))
+			rt.logger.Error(runCtx, "runtime event subscribe failed", slog.String("scope", "runtime"), slog.String("workflowID", workflowID), slog.Any("error", err))
 			return nil, err
 		}
 		defer func() { _ = closeEvent() }()
@@ -226,22 +226,23 @@ func (rt *TemporalRuntime) Run(ctx context.Context, req *runtime.RunRequest) (*t
 
 	hasWorkers := rt.hasWorkers(runCtx, rt.taskQueue)
 	if !hasWorkers {
-		rt.logger.Warn(runCtx, "no workers available on task queue", slog.String("taskQueue", rt.taskQueue))
+		rt.logger.Warn(runCtx, "no workers on task queue", slog.String("scope", "runtime"), slog.String("taskQueue", rt.taskQueue))
 		return nil, fmt.Errorf("no workers available on task queue %s", rt.taskQueue)
 	}
-	rt.logger.Debug(runCtx, "workers available on task queue", slog.String("taskQueue", rt.taskQueue))
+	rt.logger.Debug(runCtx, "task queue has workers", slog.String("scope", "runtime"), slog.String("taskQueue", rt.taskQueue))
 
-	rt.logger.Debug(runCtx, "executing agent workflow",
+	rt.logger.Debug(runCtx, "runtime workflow execute",
+		slog.String("scope", "runtime"),
 		slog.String("workflowID", workflowID),
 		slog.Bool("streamingEnabled", wfInput.StreamingEnabled),
-		slog.Bool("hasEventWorkflow", wfInput.EventWorkflowID != ""))
+		slog.Bool("hasEventPipeline", wfInput.EventWorkflowID != ""))
 
 	workfowRun, err := rt.temporalClient.ExecuteWorkflow(runCtx, client.StartWorkflowOptions{
 		ID:        workflowID,
 		TaskQueue: rt.taskQueue,
 	}, rt.AgentWorkflow, wfInput)
 	if err != nil {
-		rt.logger.Error(runCtx, "failed to execute agent workflow", slog.String("workflowID", workflowID), slog.Any("error", err))
+		rt.logger.Error(runCtx, "runtime workflow start failed", slog.String("scope", "runtime"), slog.String("workflowID", workflowID), slog.Any("error", err))
 		return nil, err
 	}
 
@@ -263,21 +264,22 @@ func (rt *TemporalRuntime) Run(ctx context.Context, req *runtime.RunRequest) (*t
 	}
 	approvalResponseCh := make(chan approvalResponse, 16)
 
-	rt.logger.Debug(runCtx, "waiting for agent workflow response", slog.String("workflowID", workflowID))
+	rt.logger.Debug(runCtx, "runtime waiting for run result", slog.String("scope", "runtime"), slog.String("workflowID", workflowID))
 
 	for {
 		select {
 		case r := <-resultCh:
-			rt.logger.Debug(runCtx, "received agent workflow response",
+			rt.logger.Debug(runCtx, "runtime run completed",
+				slog.String("scope", "runtime"),
 				slog.String("agentName", r.AgentName),
 				slog.String("model", r.Model),
 				slog.Int("contentLen", len(r.Content)))
 			return r, nil
 		case err := <-errCh:
-			rt.logger.Error(runCtx, "agent workflow failed", slog.String("workflowID", workflowID), slog.Any("error", err))
+			rt.logger.Error(runCtx, "runtime run failed", slog.String("scope", "runtime"), slog.String("workflowID", workflowID), slog.Any("error", err))
 			return nil, err
 		case <-runCtx.Done():
-			rt.logger.Debug(runCtx, "run context cancelled, terminating agent workflow", slog.String("workflowID", workflowID), slog.Any("error", runCtx.Err()))
+			rt.logger.Debug(runCtx, "runtime run cancelled", slog.String("scope", "runtime"), slog.String("workflowID", workflowID), slog.Any("error", runCtx.Err()))
 			termCtx, termCancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer termCancel()
 			if rt.temporalClient != nil {
@@ -308,7 +310,7 @@ func (rt *TemporalRuntime) Run(ctx context.Context, req *runtime.RunRequest) (*t
 			cancel()
 		case resp := <-approvalResponseCh:
 			if err := rt.OnApproval(runCtx, resp.approvalToken, resp.status); err != nil {
-				rt.logger.Error(runCtx, "failed to complete approval", slog.Any("error", err))
+				rt.logger.Error(runCtx, "runtime approval completion failed", slog.String("scope", "runtime"), slog.Any("error", err))
 				return nil, err
 			}
 		}
@@ -316,7 +318,7 @@ func (rt *TemporalRuntime) Run(ctx context.Context, req *runtime.RunRequest) (*t
 }
 
 func (rt *TemporalRuntime) RunStream(ctx context.Context, req *runtime.RunRequest) (chan *types.AgentEvent, error) {
-	rt.logger.Debug(ctx, "temporal runtime run stream started", slog.String("agent", req.AgentName), slog.Int("inputLen", len(req.UserPrompt)))
+	rt.logger.Debug(ctx, "runtime stream run dispatch", slog.String("scope", "runtime"), slog.String("agent", req.AgentName), slog.Int("inputLen", len(req.UserPrompt)))
 
 	workflowID := rt.getWorkflowID(req.AgentName, true)
 	cleanup, err := rt.beginRun(workflowID)
@@ -340,15 +342,20 @@ func (rt *TemporalRuntime) RunStream(ctx context.Context, req *runtime.RunReques
 		}
 	}
 
+	streamEventTypes := []types.AgentEventType{types.AgentEventAll}
+	if len(req.EventTypes) > 0 {
+		streamEventTypes = req.EventTypes
+	}
 	wfInput := AgentWorkflowInput{
 		UserPrompt:       req.UserPrompt,
 		EventWorkflowID:  eventWorkflowID,
 		LocalChannelName: eventChannelName(workflowID),
 		StreamingEnabled: req.StreamingEnabled,
 		ConversationID:   req.ConversationID,
-		EventTypes:       []types.AgentEventType{types.AgentEventAll},
+		EventTypes:       streamEventTypes,
 		SubAgentDepth:    0,
 		SubAgentRoutes:   req.SubAgentRoutes,
+		MaxSubAgentDepth: req.MaxSubAgentDepth,
 	}
 
 	runCtx := ctx
@@ -365,10 +372,10 @@ func (rt *TemporalRuntime) RunStream(ctx context.Context, req *runtime.RunReques
 
 	eventCh, closeEvent, err := rt.subscribeToAgentEvents(runCtx, wfInput.LocalChannelName)
 	if err != nil {
-		rt.logger.Error(runCtx, "failed to subscribe to agent events", slog.String("channel", wfInput.LocalChannelName), slog.Any("error", err))
+		rt.logger.Error(runCtx, "runtime event subscribe failed", slog.String("scope", "runtime"), slog.String("channel", wfInput.LocalChannelName), slog.Any("error", err))
 		return nil, err
 	}
-	rt.logger.Debug(runCtx, "subscribed to agent events", slog.String("channel", wfInput.LocalChannelName))
+	rt.logger.Debug(runCtx, "runtime subscribed to event stream", slog.String("scope", "runtime"), slog.String("channel", wfInput.LocalChannelName))
 	defer func() {
 		if !streamStarted && closeEvent != nil {
 			_ = closeEvent()
@@ -377,22 +384,22 @@ func (rt *TemporalRuntime) RunStream(ctx context.Context, req *runtime.RunReques
 
 	hasWorkers := rt.hasWorkers(ctx, rt.taskQueue)
 	if !hasWorkers {
-		rt.logger.Warn(runCtx, "no workers available on task queue", slog.String("taskQueue", rt.taskQueue))
+		rt.logger.Warn(runCtx, "no workers on task queue", slog.String("scope", "runtime"), slog.String("taskQueue", rt.taskQueue))
 		return nil, fmt.Errorf("no workers available on task queue %s", rt.taskQueue)
 	}
 
-	rt.logger.Debug(runCtx, "executing agent workflow (stream)", slog.String("workflowID", workflowID))
+	rt.logger.Debug(runCtx, "runtime workflow execute (stream)", slog.String("scope", "runtime"), slog.String("workflowID", workflowID))
 
 	workflowRun, err := rt.temporalClient.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
 		ID:        workflowID,
 		TaskQueue: rt.taskQueue,
 	}, rt.AgentWorkflow, wfInput)
 	if err != nil {
-		rt.logger.Error(runCtx, "failed to execute agent workflow", slog.String("workflowID", workflowID), slog.Any("error", err))
+		rt.logger.Error(runCtx, "runtime workflow start failed", slog.String("scope", "runtime"), slog.String("workflowID", workflowID), slog.Any("error", err))
 		return nil, err
 	}
 
-	rt.logger.Debug(runCtx, "agent workflow (stream) executed", slog.String("workflowID", workflowID))
+	rt.logger.Debug(runCtx, "runtime workflow started (stream)", slog.String("scope", "runtime"), slog.String("workflowID", workflowID))
 
 	streamStarted = true
 	outCh := make(chan *types.AgentEvent, 64)
@@ -433,7 +440,7 @@ func (rt *TemporalRuntime) RunStream(ctx context.Context, req *runtime.RunReques
 				}
 				return
 			case wfErr := <-wfErrCh:
-				rt.logger.Error(runCtx, "agent workflow failed (stream)", slog.String("workflowID", workflowID), slog.Any("error", wfErr))
+				rt.logger.Error(runCtx, "runtime stream run failed", slog.String("scope", "runtime"), slog.String("workflowID", workflowID), slog.Any("error", wfErr))
 				outCh <- &types.AgentEvent{
 					Type:      types.AgentEventError,
 					Content:   wfErr.Error(),
@@ -481,7 +488,7 @@ func (rt *TemporalRuntime) ensureEventWorkflowStarted(ctx context.Context, agent
 	id := rt.activeEventWorkflowID
 	rt.runMu.Unlock()
 	if id != "" {
-		rt.logger.Debug(ctx, "reusing existing event workflow", slog.String("eventWorkflowID", id))
+		rt.logger.Debug(ctx, "runtime reusing event pipeline", slog.String("scope", "runtime"), slog.String("eventWorkflowID", id))
 		return id, nil
 	}
 	rt.runMu.Lock()
@@ -491,7 +498,7 @@ func (rt *TemporalRuntime) ensureEventWorkflowStarted(ctx context.Context, agent
 	}
 
 	eventWorkflowID := rt.getEventWorkflowID(agentName)
-	rt.logger.Debug(ctx, "executing event workflow", slog.String("eventWorkflowID", eventWorkflowID))
+	rt.logger.Debug(ctx, "runtime starting event pipeline", slog.String("scope", "runtime"), slog.String("eventWorkflowID", eventWorkflowID))
 
 	_, err := rt.temporalClient.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
 		ID:                       eventWorkflowID,
@@ -499,11 +506,11 @@ func (rt *TemporalRuntime) ensureEventWorkflowStarted(ctx context.Context, agent
 		WorkflowIDConflictPolicy: enumspb.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING,
 	}, rt.AgentEventWorkflow)
 	if err != nil {
-		rt.logger.Error(ctx, "failed to start event workflow", slog.String("eventWorkflowID", eventWorkflowID), slog.Any("error", err))
+		rt.logger.Error(ctx, "runtime event pipeline start failed", slog.String("scope", "runtime"), slog.String("eventWorkflowID", eventWorkflowID), slog.Any("error", err))
 		return "", err
 	}
 	rt.activeEventWorkflowID = eventWorkflowID
-	rt.logger.Info(ctx, "event workflow started", slog.String("eventWorkflowID", eventWorkflowID))
+	rt.logger.Info(ctx, "runtime event pipeline ready", slog.String("scope", "runtime"), slog.String("eventWorkflowID", eventWorkflowID))
 	return eventWorkflowID, nil
 }
 
@@ -529,11 +536,11 @@ func (rt *TemporalRuntime) hasWorkers(ctx context.Context, taskQueue string) boo
 	for {
 		res, err := rt.temporalClient.DescribeTaskQueue(ctx, q, enumspb.TASK_QUEUE_TYPE_WORKFLOW)
 		if err == nil && len(res.GetPollers()) != 0 {
-			rt.logger.Debug(ctx, "workers found on task queue", slog.String("taskQueue", q), slog.Int("pollers", len(res.GetPollers())))
+			rt.logger.Debug(ctx, "task queue pollers seen", slog.String("scope", "runtime"), slog.String("taskQueue", q), slog.Int("pollers", len(res.GetPollers())))
 			return true
 		}
 		if time.Now().After(deadlineTime) {
-			rt.logger.Debug(ctx, "workers check timed out", slog.String("taskQueue", q))
+			rt.logger.Debug(ctx, "task queue worker wait timed out", slog.String("scope", "runtime"), slog.String("taskQueue", q))
 			return false
 		}
 		select {
@@ -552,11 +559,11 @@ func (rt *TemporalRuntime) createEventWorker() {
 	rt.eventWorkerMu.Lock()
 	defer rt.eventWorkerMu.Unlock()
 	if rt.eventWorker != nil {
-		rt.logger.Debug(context.Background(), "event worker already running", slog.String("taskQueue", rt.taskQueue))
+		rt.logger.Debug(context.Background(), "runtime event worker already running", slog.String("scope", "runtime"), slog.String("taskQueue", rt.taskQueue))
 		return
 	}
 	eventQueue := getEventTaskQueue(rt.taskQueue)
-	rt.logger.Info(context.Background(), "starting event worker", slog.String("taskQueue", eventQueue))
+	rt.logger.Info(context.Background(), "runtime event worker starting", slog.String("scope", "runtime"), slog.String("taskQueue", eventQueue))
 	w := worker.New(rt.temporalClient, eventQueue, worker.Options{})
 	w.RegisterWorkflowWithOptions(rt.AgentEventWorkflow, workflow.RegisterOptions{Name: "AgentEventWorkflow"})
 	w.RegisterActivityWithOptions(rt.EventPublishActivity, activity.RegisterOptions{Name: "EventPublishActivity"})
@@ -589,11 +596,11 @@ func (rt *TemporalRuntime) beginRun(workflowID string) (func(), error) {
 	rt.runMu.Lock()
 	defer rt.runMu.Unlock()
 	if rt.activeRunWorkflowID != "" {
-		rt.logger.Debug(context.Background(), "beginRun rejected: already running", slog.String("active", rt.activeRunWorkflowID), slog.String("requested", workflowID))
+		rt.logger.Debug(context.Background(), "runtime run rejected: already active", slog.String("scope", "runtime"), slog.String("active", rt.activeRunWorkflowID), slog.String("requested", workflowID))
 		return nil, ErrAgentAlreadyRunning
 	}
 	rt.activeRunWorkflowID = workflowID
-	rt.logger.Debug(context.Background(), "beginRun", slog.String("workflowID", workflowID))
+	rt.logger.Debug(context.Background(), "runtime run started", slog.String("scope", "runtime"), slog.String("workflowID", workflowID))
 	return func() { rt.endRun() }, nil
 }
 
@@ -602,7 +609,7 @@ func (rt *TemporalRuntime) endRun() {
 	rt.runMu.Lock()
 	defer rt.runMu.Unlock()
 	if rt.activeRunWorkflowID != "" {
-		rt.logger.Debug(context.Background(), "endRun", slog.String("workflowID", rt.activeRunWorkflowID))
+		rt.logger.Debug(context.Background(), "runtime run finished", slog.String("scope", "runtime"), slog.String("workflowID", rt.activeRunWorkflowID))
 	}
 	rt.activeRunWorkflowID = ""
 }

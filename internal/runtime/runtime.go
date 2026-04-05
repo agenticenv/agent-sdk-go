@@ -5,25 +5,31 @@ package runtime
 
 import (
 	"context"
+	"errors"
 
 	"github.com/agenticenv/agent-sdk-go/internal/eventbus"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
 )
 
+//go:generate mockgen -destination=./mocks/mock_runtime.go -package=mocks github.com/agenticenv/agent-sdk-go/internal/runtime Runtime
+
+// ErrApprovalNotSupported is returned by Runtime.Approve when the runtime does not use token-based approval.
+var ErrApprovalNotSupported = errors.New("runtime: approval not supported")
+
 // Runtime executes agent runs against a backend.
 type Runtime interface {
-	// Run starts the agent workflow and returns the result. Use WithApprovalHandler when tools require approval (Run only; handler uses req.Respond). RunStream uses AgentEventApproval + OnApproval.
+	// Run starts one execution and returns the result. The agent package supplies approval via RunRequest when needed.
 	// Use WithTimeout or a context with deadline to avoid blocking.
-	// When using WithConversation, pass the conversation ID (runtime id from user/session); agent and worker use the same ID.
+	// When using conversation, pass the conversation ID on the request; agent and worker must use the same ID.
 	Run(ctx context.Context, req *RunRequest) (*types.AgentResponse, error)
 
 	// RunStream starts the run and returns a channel of AgentEvent. Events are streamed until
 	// AgentEventComplete from this agent (the root of the run). Complete events from delegated
 	// sub-agents are still delivered but do not close the stream. After that root complete, the
-	// channel stays open until the root workflow run finishes on Temporal (there is often more
-	// work after the event, e.g. post-sub-agent activities), then closes.
-	// For approvals (tool or delegation), receive AgentEventApproval and call OnApproval as in the streaming examples.
-	// When using WithConversation, pass the conversation ID.
+	// channel may remain open until the implementation finishes the run (e.g. backend cleanup), then closes.
+	// For approvals (tool or delegation), receive AgentEventApproval and call the approval path
+	// provided by the agent package (e.g. OnApproval in streaming examples).
+	// When using conversation, pass the conversation ID on the request.
 	RunStream(ctx context.Context, req *RunRequest) (chan *types.AgentEvent, error)
 
 	// Approve completes a pending tool approval when the runtime uses out-of-band approval
@@ -53,8 +59,8 @@ type RunRequest struct {
 	ConversationID   string
 	StreamingEnabled bool
 	SpecFingerprint  string
-	// EventTypes filters streamed events; empty means default (implementation-defined).
-	EventTypes       []string
+	// EventTypes filters streamed events; empty means default (implementation-defined, often all types).
+	EventTypes       []types.AgentEventType
 	SubAgentRoutes   map[string]types.SubAgentRoute
 	MaxSubAgentDepth int
 

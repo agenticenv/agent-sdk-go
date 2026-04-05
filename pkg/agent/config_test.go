@@ -9,20 +9,22 @@ import (
 
 func TestBuildAgentConfig_NeitherTemporalConfigNorClient(t *testing.T) {
 	_, err := buildAgentConfig([]Option{
-		WithLLMClient(nil),
+		WithName("test"),
+		WithLLMClient(stubLLM{}),
 	})
-	if err == nil {
-		t.Fatal("expected error when neither Temporal config nor client is set")
+	if err == nil || !strings.Contains(err.Error(), "temporal connection is required") {
+		t.Fatalf("got %v", err)
 	}
 }
 
 func TestBuildAgentConfig_EmptyTaskQueue(t *testing.T) {
 	_, err := buildAgentConfig([]Option{
+		WithName("test"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: ""}),
-		WithLLMClient(nil),
+		WithLLMClient(stubLLM{}),
 	})
-	if err == nil {
-		t.Fatal("expected error when TaskQueue is empty")
+	if err == nil || !strings.Contains(err.Error(), "TaskQueue") {
+		t.Fatalf("got %v", err)
 	}
 }
 

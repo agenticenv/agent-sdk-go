@@ -47,7 +47,7 @@ type AgentEventUpdate struct {
 // Completes only when it receives the "complete" signal (on agent Close).
 func (rt *TemporalRuntime) AgentEventWorkflow(ctx workflow.Context) error {
 	logger := workflow.GetLogger(ctx)
-	logger.Info("agent event workflow started")
+	logger.Info("workflow: event pipeline started", "scope", "workflow")
 
 	var noOfEvents, processedCount int
 	var options workflow.UpdateHandlerOptions
@@ -66,7 +66,7 @@ func (rt *TemporalRuntime) AgentEventWorkflow(ctx workflow.Context) error {
 		if upd.Event != nil {
 			evTypeStr = string(upd.Event.Type)
 		}
-		logger.Debug("received agent event", "agent", upd.AgentName, "eventType", evTypeStr)
+		logger.Debug("workflow: event update received", "scope", "workflow", "agent", upd.AgentName, "eventType", evTypeStr)
 		eventCh.Send(ctx, upd)
 		return nil
 	}, options)
@@ -91,7 +91,7 @@ func (rt *TemporalRuntime) AgentEventWorkflow(ctx workflow.Context) error {
 				if upd.Event != nil {
 					evType = string(upd.Event.Type)
 				}
-				logger.Warn("agent event activity failed", "error", err, "eventType", evType, "agent", upd.AgentName)
+				logger.Warn("workflow: event publish activity failed", "scope", "workflow", "error", err, "eventType", evType, "agent", upd.AgentName)
 			}
 			processedCount++
 		}
@@ -106,7 +106,7 @@ func (rt *TemporalRuntime) AgentEventWorkflow(ctx workflow.Context) error {
 		completeReceived = true
 	})
 
-	logger.Debug("waiting for agent events or complete signal...")
+	logger.Debug("workflow: awaiting events or shutdown signal", "scope", "workflow")
 
 	err = workflow.Await(ctx, func() bool {
 		if completeReceived {
@@ -121,10 +121,10 @@ func (rt *TemporalRuntime) AgentEventWorkflow(ctx workflow.Context) error {
 	}
 
 	if completeReceived {
-		logger.Debug("agent event workflow received complete signal, finishing")
+		logger.Debug("workflow: event pipeline shutdown signal received", "scope", "workflow")
 		return nil
 	}
-	logger.Debug("agent event workflow continue as new")
+	logger.Debug("workflow: event pipeline continue-as-new", "scope", "workflow")
 	return workflow.NewContinueAsNewError(ctx, rt.AgentEventWorkflow)
 }
 
@@ -135,7 +135,7 @@ func (rt *TemporalRuntime) EventPublishActivity(ctx context.Context, channel str
 	if event != nil {
 		evType = string(event.Type)
 	}
-	logger.Debug("agent event activity", "channel", channel, "eventType", evType)
+	logger.Debug("activity: publish event", "scope", "activity", "channel", channel, "eventType", evType)
 	if event == nil {
 		return fmt.Errorf("event is nil")
 	}
@@ -144,7 +144,7 @@ func (rt *TemporalRuntime) EventPublishActivity(ctx context.Context, channel str
 		return err
 	}
 	if err := rt.eventbus.Publish(ctx, channel, data); err != nil {
-		logger.Error("failed to publish agent event", "channel", channel, "error", err)
+		logger.Error("activity: publish event failed", "scope", "activity", "channel", channel, "error", err)
 		return fmt.Errorf("failed to publish agent event: %w", err)
 	}
 	return nil
@@ -152,10 +152,10 @@ func (rt *TemporalRuntime) EventPublishActivity(ctx context.Context, channel str
 
 // subscribeToAgentEvents returns a channel that receives AgentEvent from the given event channel.
 func (rt *TemporalRuntime) subscribeToAgentEvents(ctx context.Context, channel string) (<-chan *types.AgentEvent, func() error, error) {
-	rt.logger.Debug(ctx, "subscribing to agent events", slog.String("channel", channel))
+	rt.logger.Debug(ctx, "runtime subscribing to event channel", slog.String("scope", "runtime"), slog.String("channel", channel))
 	ch, closeFn, err := rt.eventbus.Subscribe(ctx, channel)
 	if err != nil {
-		rt.logger.Error(ctx, "failed to subscribe to agent events", slog.String("channel", channel), slog.Any("error", err))
+		rt.logger.Error(ctx, "runtime event channel subscribe failed", slog.String("scope", "runtime"), slog.String("channel", channel), slog.Any("error", err))
 		return nil, nil, err
 	}
 
@@ -165,13 +165,13 @@ func (rt *TemporalRuntime) subscribeToAgentEvents(ctx context.Context, channel s
 		for data := range ch {
 			var ev types.AgentEvent
 			if err := json.Unmarshal(data, &ev); err != nil {
-				rt.logger.Debug(ctx, "failed to unmarshal agent event", slog.Any("error", err))
+				rt.logger.Debug(ctx, "runtime event decode skipped", slog.String("scope", "runtime"), slog.Any("error", err))
 				continue
 			}
 			eventCh <- &ev
 		}
 	}()
 
-	rt.logger.Debug(ctx, "subscribed to agent events", slog.String("channel", channel))
+	rt.logger.Debug(ctx, "runtime event channel subscribed", slog.String("scope", "runtime"), slog.String("channel", channel))
 	return eventCh, closeFn, nil
 }

@@ -1,0 +1,324 @@
+package temporal
+
+import (
+	"context"
+	"testing"
+
+	"github.com/golang/mock/gomock"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+	"go.temporal.io/sdk/testsuite"
+
+	"github.com/agenticenv/agent-sdk-go/internal/types"
+	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
+	"github.com/agenticenv/agent-sdk-go/pkg/interfaces/mocks"
+	"github.com/agenticenv/agent-sdk-go/pkg/logger"
+)
+
+func testRuntimeForWorkflow(t *testing.T) *TemporalRuntime {
+	t.Helper()
+	return &TemporalRuntime{
+		TemporalRuntimeConfig: TemporalRuntimeConfig{
+			agentName:     "WorkflowTestAgent",
+			maxIterations: 5,
+			llmClient:     stubLLM{},
+			logger:        logger.NoopLogger(),
+		},
+	}
+}
+
+// newActivityTestEnv returns a [testsuite.TestActivityEnvironment] for isolated activity tests.
+func newActivityTestEnv(t *testing.T) *testsuite.TestActivityEnvironment {
+	t.Helper()
+	var suite testsuite.WorkflowTestSuite
+	return suite.NewTestActivityEnvironment()
+}
+
+// streamCapableStubLLM enables the streaming branch in [AgentWorkflow] (useStreaming == true).
+type streamCapableStubLLM struct{ stubLLM }
+
+func (streamCapableStubLLM) IsStreamSupported() bool { return true }
+
+func TestAgentWorkflow_SingleLLMNoTools(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	rt := testRuntimeForWorkflow(t)
+
+	env.RegisterWorkflow(rt.AgentWorkflow)
+	env.OnActivity(rt.AgentLLMActivity, mock.Anything, mock.Anything).Return(func(ctx context.Context, in AgentLLMInput) (*AgentLLMResult, error) {
+		if in.Messages == nil {
+			t.Error("expected messages")
+		}
+		return &AgentLLMResult{Content: "final answer", ToolCalls: nil}, nil
+	})
+
+	env.ExecuteWorkflow(rt.AgentWorkflow, AgentWorkflowInput{
+		UserPrompt:       "hello",
+		StreamingEnabled: false,
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	var out types.AgentResponse
+	require.NoError(t, env.GetWorkflowResult(&out))
+	require.Equal(t, "final answer", out.Content)
+	require.Equal(t, "WorkflowTestAgent", out.AgentName)
+	require.Equal(t, "stub", out.Model)
+}
+
+func TestAgentWorkflow_StreamingPath_UsesStreamActivity(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	rt := testRuntimeForWorkflow(t)
+	rt.llmClient = streamCapableStubLLM{}
+
+	env.RegisterWorkflow(rt.AgentWorkflow)
+	env.OnActivity(rt.AgentLLMStreamActivity, mock.Anything, mock.Anything).Return(func(ctx context.Context, in AgentLLMStreamInput) (*AgentLLMResult, error) {
+		return &AgentLLMResult{Content: "streamed", ToolCalls: nil}, nil
+	})
+
+	env.ExecuteWorkflow(rt.AgentWorkflow, AgentWorkflowInput{
+		UserPrompt:       "hi",
+		StreamingEnabled: true,
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	var out types.AgentResponse
+	require.NoError(t, env.GetWorkflowResult(&out))
+	require.Equal(t, "streamed", out.Content)
+}
+
+func TestAgentWorkflow_OneToolThenFinal(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	rt := testRuntimeForWorkflow(t)
+
+	var llmCalls int
+	env.RegisterWorkflow(rt.AgentWorkflow)
+	env.OnActivity(rt.AgentLLMActivity, mock.Anything, mock.Anything).Return(func(ctx context.Context, in AgentLLMInput) (*AgentLLMResult, error) {
+		llmCalls++
+		if llmCalls == 1 {
+			return &AgentLLMResult{
+				Content: "using tool",
+				ToolCalls: []ToolCallRequest{{
+					ToolCallID: "tc1",
+					ToolName:   "echo",
+					Args:       map[string]any{"x": 1},
+				}},
+			}, nil
+		}
+		return &AgentLLMResult{Content: "after tool", ToolCalls: nil}, nil
+	})
+	env.OnActivity(rt.AgentToolExecuteActivity, mock.Anything, mock.Anything).Return(func(ctx context.Context, in AgentToolExecuteInput) (string, error) {
+		if in.ToolName != "echo" {
+			t.Errorf("tool name = %q", in.ToolName)
+		}
+		return "echo ok", nil
+	})
+
+	env.ExecuteWorkflow(rt.AgentWorkflow, AgentWorkflowInput{
+		UserPrompt: "run",
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	var out types.AgentResponse
+	require.NoError(t, env.GetWorkflowResult(&out))
+	require.Equal(t, "after tool", out.Content)
+	require.Equal(t, 2, llmCalls)
+}
+
+func TestAgentLLMActivity_MockLLM_TextOnly(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockLLM := mocks.NewMockLLMClient(ctrl)
+	mockLLM.EXPECT().Generate(gomock.Any(), gomock.Any()).Return(&interfaces.LLMResponse{
+		Content: "final",
+	}, nil)
+
+	rt := &TemporalRuntime{
+		TemporalRuntimeConfig: TemporalRuntimeConfig{
+			agentName: "ActTest",
+			llmClient: mockLLM,
+			logger:    logger.NoopLogger(),
+		},
+	}
+
+	actEnv := newActivityTestEnv(t)
+	actEnv.RegisterActivity(rt.AgentLLMActivity)
+	val, err := actEnv.ExecuteActivity(rt.AgentLLMActivity, AgentLLMInput{
+		Messages: []interfaces.Message{{Role: interfaces.MessageRoleUser, Content: "hi"}},
+	})
+	require.NoError(t, err)
+
+	var got AgentLLMResult
+	require.NoError(t, val.Get(&got))
+	require.Equal(t, "final", got.Content)
+	require.Empty(t, got.ToolCalls)
+}
+
+func TestAgentLLMActivity_MockLLM_ToolCalls(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockTool := mocks.NewMockTool(ctrl)
+	mockTool.EXPECT().Name().Return("echo").AnyTimes()
+	mockTool.EXPECT().Description().Return("d").AnyTimes()
+	mockTool.EXPECT().Parameters().Return(interfaces.JSONSchema{}).AnyTimes()
+
+	policy := mocks.NewMockAgentToolApprovalPolicy(ctrl)
+	policy.EXPECT().RequiresApproval(gomock.Any()).Return(false).AnyTimes()
+
+	mockLLM := mocks.NewMockLLMClient(ctrl)
+	mockLLM.EXPECT().Generate(gomock.Any(), gomock.Any()).Return(&interfaces.LLMResponse{
+		Content: "call tool",
+		ToolCalls: []*interfaces.ToolCall{{
+			ToolCallID: "tc1",
+			ToolName:   "echo",
+			Args:       map[string]any{"x": 1.0},
+		}},
+	}, nil)
+
+	rt := &TemporalRuntime{
+		TemporalRuntimeConfig: TemporalRuntimeConfig{
+			agentName:          "ActTest",
+			llmClient:          mockLLM,
+			logger:             logger.NoopLogger(),
+			tools:              []interfaces.Tool{mockTool},
+			toolApprovalPolicy: policy,
+		},
+	}
+
+	actEnv := newActivityTestEnv(t)
+	actEnv.RegisterActivity(rt.AgentLLMActivity)
+	val, err := actEnv.ExecuteActivity(rt.AgentLLMActivity, AgentLLMInput{
+		Messages: []interfaces.Message{{Role: interfaces.MessageRoleUser, Content: "run"}},
+	})
+	require.NoError(t, err)
+
+	var got AgentLLMResult
+	require.NoError(t, val.Get(&got))
+	require.Len(t, got.ToolCalls, 1)
+	require.Equal(t, "echo", got.ToolCalls[0].ToolName)
+	require.Equal(t, "tc1", got.ToolCalls[0].ToolCallID)
+	require.False(t, got.ToolCalls[0].NeedsApproval)
+}
+
+func TestAgentLLMActivity_MockLLM_UnknownToolError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockLLM := mocks.NewMockLLMClient(ctrl)
+	mockLLM.EXPECT().Generate(gomock.Any(), gomock.Any()).Return(&interfaces.LLMResponse{
+		Content: "x",
+		ToolCalls: []*interfaces.ToolCall{{
+			ToolCallID: "1",
+			ToolName:   "not_registered",
+			Args:       nil,
+		}},
+	}, nil)
+
+	rt := &TemporalRuntime{
+		TemporalRuntimeConfig: TemporalRuntimeConfig{
+			llmClient: mockLLM,
+			logger:    logger.NoopLogger(),
+			tools:     []interfaces.Tool{},
+		},
+	}
+
+	actEnv := newActivityTestEnv(t)
+	actEnv.RegisterActivity(rt.AgentLLMActivity)
+	_, err := actEnv.ExecuteActivity(rt.AgentLLMActivity, AgentLLMInput{
+		Messages: []interfaces.Message{{Role: interfaces.MessageRoleUser, Content: "q"}},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unknown tool")
+}
+
+func TestAgentLLMActivity_MockConversationAndLLM(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockConv := mocks.NewMockConversation(ctrl)
+	mockConv.EXPECT().ListMessages(gomock.Any(), "conv-1", gomock.Any()).Return(
+		[]interfaces.Message{{Role: interfaces.MessageRoleUser, Content: "prior"}},
+		nil,
+	)
+
+	mockLLM := mocks.NewMockLLMClient(ctrl)
+	mockLLM.EXPECT().Generate(gomock.Any(), gomock.Any()).Return(&interfaces.LLMResponse{Content: "answer"}, nil)
+
+	rt := &TemporalRuntime{
+		TemporalRuntimeConfig: TemporalRuntimeConfig{
+			llmClient:        mockLLM,
+			logger:           logger.NoopLogger(),
+			conversation:     mockConv,
+			conversationSize: 10,
+		},
+	}
+
+	actEnv := newActivityTestEnv(t)
+	actEnv.RegisterActivity(rt.AgentLLMActivity)
+	val, err := actEnv.ExecuteActivity(rt.AgentLLMActivity, AgentLLMInput{
+		ConversationID: "conv-1",
+		Messages:       []interfaces.Message{{Role: interfaces.MessageRoleUser, Content: "new"}},
+	})
+	require.NoError(t, err)
+
+	var got AgentLLMResult
+	require.NoError(t, val.Get(&got))
+	require.Equal(t, "answer", got.Content)
+}
+
+func TestAgentLLMActivity_ConversationNotConfigured(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockLLM := mocks.NewMockLLMClient(ctrl)
+
+	rt := &TemporalRuntime{
+		TemporalRuntimeConfig: TemporalRuntimeConfig{
+			llmClient:    mockLLM,
+			logger:       logger.NoopLogger(),
+			conversation: nil,
+		},
+	}
+
+	actEnv := newActivityTestEnv(t)
+	actEnv.RegisterActivity(rt.AgentLLMActivity)
+	_, err := actEnv.ExecuteActivity(rt.AgentLLMActivity, AgentLLMInput{
+		ConversationID: "any",
+		Messages:       []interfaces.Message{{Role: interfaces.MessageRoleUser, Content: "x"}},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "conversation is not configured")
+}
+
+func TestAgentLLMStreamActivity_MockLLM_FallbackToGenerate(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockLLM := mocks.NewMockLLMClient(ctrl)
+	mockLLM.EXPECT().IsStreamSupported().Return(false)
+	mockLLM.EXPECT().Generate(gomock.Any(), gomock.Any()).Return(&interfaces.LLMResponse{Content: "gen"}, nil)
+
+	rt := &TemporalRuntime{
+		TemporalRuntimeConfig: TemporalRuntimeConfig{
+			agentName: "StreamAct",
+			llmClient: mockLLM,
+			logger:    logger.NoopLogger(),
+		},
+	}
+
+	actEnv := newActivityTestEnv(t)
+	actEnv.RegisterActivity(rt.AgentLLMStreamActivity)
+	val, err := actEnv.ExecuteActivity(rt.AgentLLMStreamActivity, AgentLLMStreamInput{
+		AgentName:        "StreamAct",
+		Messages:         []interfaces.Message{{Role: interfaces.MessageRoleUser, Content: "s"}},
+		LocalChannelName: "ch",
+	})
+	require.NoError(t, err)
+
+	var got AgentLLMResult
+	require.NoError(t, val.Get(&got))
+	require.Equal(t, "gen", got.Content)
+}

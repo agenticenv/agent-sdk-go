@@ -14,8 +14,9 @@ import (
 	"github.com/agenticenv/agent-sdk-go/internal/types"
 )
 
-// Agent runs LLM-backed workflows via Temporal. It holds agentConfig and client-side state
-// (agentChannel, event worker). Uses AgentWorker for run workflow execution.
+// Agent runs LLM-backed agent execution through the configured execution runtime.
+// It holds configuration, that runtime, and optionally an embedded [AgentWorker] for in-process polling.
+// Sub-agents share the parent runtime's event bus for delegation and approvals in the same process.
 type Agent struct {
 	agentConfig
 	runtime          runtime.Runtime
@@ -25,10 +26,10 @@ type Agent struct {
 // ErrAgentAlreadyRunning is returned when Run, RunAsync, or RunStream is called while a run is already in progress.
 var ErrAgentAlreadyRunning = errors.New("agent already has an active run")
 
-// AgentResponse is the return value of AgentRun.Get / AgentWorkflow.
+// AgentResponse is the structured result of [Agent.Run] and [Agent.RunAsync] ([RunAsyncResult.Response]).
 type AgentResponse = types.AgentResponse
 
-// RunAsyncResult is the single outcome from RunAsync. After the channel closes, Err is non-nil
+// RunAsyncResult is the single outcome from [Agent.RunAsync]. After the channel closes, Err is non-nil
 // on failure; otherwise Response is non-nil.
 type RunAsyncResult = types.RunAsyncResult
 
@@ -58,7 +59,7 @@ func buildAgent(opts []Option) (*Agent, error) {
 
 	eventbus := a.runtime.GetEventBus()
 	// Sub-agents must share the parent's in-memory pub/sub so Run/RunStream subscribers on the main run receive
-	// delegation events and approvals from specialist workflows in the same process.
+	// delegation events and approvals from child runtimes in the same process.
 	for _, sub := range a.subAgents {
 		if sub != nil {
 			wireInMemoryEventChannelToSubAgents(eventbus, sub)
@@ -82,40 +83,41 @@ func wireInMemoryEventChannelToSubAgents(eventbus eventbus.EventBus, agent *Agen
 }
 
 // NewAgent creates an Agent with the given options.
-// Event worker is started lazily when RunStream is called or when approvals are needed.
+// Background runtime workers (when used) start lazily when [Agent.RunStream] runs or when approvals need them.
 func NewAgent(opts ...Option) (*Agent, error) {
 	a, err := buildAgent(opts)
 	if err != nil {
 		return nil, err
 	}
-	a.logger.Info(context.Background(), "agent created", slog.String("name", a.Name), slog.String("taskQueue", a.taskQueue), slog.Bool("embedWorker", a.localAgentWorker != nil))
+	a.logger.Info(context.Background(), "agent created", slog.String("scope", "agent"), slog.String("name", a.Name), slog.String("taskQueue", a.taskQueue), slog.Bool("embedWorker", a.localAgentWorker != nil))
 	if a.localAgentWorker != nil {
 		go func() { _ = a.localAgentWorker.Start(context.Background()) }()
 	}
 	return a, nil
 }
 
-// Close stops workers, terminates the active run if any, signals the event workflow to complete,
-// waits for it to finish, then closes the Temporal client. Only one run can be active per agent.
+// Close stops an embedded local worker if present, then closes the runtime (which may terminate runs,
+// release remote resources, and close backend connections owned by the runtime, depending on the implementation).
+// Only one run can be active per agent.
 func (a *Agent) Close() {
-	a.logger.Info(context.Background(), "closing agent", slog.String("name", a.Name))
+	a.logger.Info(context.Background(), "closing agent", slog.String("scope", "agent"), slog.String("name", a.Name))
 
 	ctx := context.Background()
 	if a.localAgentWorker != nil {
-		a.logger.Debug(ctx, "stopping local agent worker")
+		a.logger.Debug(ctx, "stopping local agent worker", slog.String("scope", "agent"))
 		a.localAgentWorker.Stop()
 	}
 
 	a.runtime.Close()
 
-	a.logger.Info(ctx, "agent closed", slog.String("name", a.Name))
+	a.logger.Info(ctx, "agent closed", slog.String("scope", "agent"), slog.String("name", a.Name))
 }
 
-// Run starts the agent workflow and returns the result. Use WithApprovalHandler when tools require approval (Run only; handler uses req.Respond). RunStream uses AgentEventApproval + OnApproval.
-// Use WithTimeout or a context with deadline to avoid blocking.
-// When using WithConversation, pass the conversation ID (runtime id from user/session); agent and worker use the same ID.
+// Run starts one execution and returns the result. Use [WithApprovalHandler] when tools require approval for Run (handler uses req.Respond); [RunStream] uses approval events and [Agent.OnApproval].
+// Use [WithTimeout] or a context with deadline to avoid blocking.
+// When using [WithConversation], pass the conversation ID; agent and worker must use the same ID.
 func (a *Agent) Run(ctx context.Context, input string, conversationID string) (*AgentResponse, error) {
-	a.logger.Debug(ctx, "agent run started", slog.String("agent", a.Name), slog.Int("inputLen", len(input)))
+	a.logger.Debug(ctx, "agent run started", slog.String("scope", "agent"), slog.String("name", a.Name), slog.Int("inputLen", len(input)))
 
 	if err := a.validateConversationID(conversationID); err != nil {
 		return nil, err
@@ -158,7 +160,7 @@ func (a *Agent) Run(ctx context.Context, input string, conversationID string) (*
 // WithApprovalHandler is temporarily replaced for the duration of the run; restore happens when the run finishes.
 // If tools do not require approval, approvalCh is still closed immediately with no values.
 func (a *Agent) RunAsync(ctx context.Context, input string, conversationID string) (resultCh <-chan RunAsyncResult, approvalCh <-chan *ApprovalRequest, err error) {
-	a.logger.Debug(ctx, "agent run async started", slog.String("agent", a.Name), slog.Int("inputLen", len(input)))
+	a.logger.Debug(ctx, "agent run async started", slog.String("scope", "agent"), slog.String("name", a.Name), slog.Int("inputLen", len(input)))
 
 	if err := a.validateConversationID(conversationID); err != nil {
 		return nil, nil, err
@@ -215,15 +217,15 @@ func copyApprovalArgs(src map[string]any) map[string]any {
 	return dst
 }
 
-// RunStream starts the run and returns a channel of AgentEvent. Events are streamed until
-// AgentEventComplete from this agent (the root of the run). Complete events from delegated
+// RunStream starts the run and returns a channel of [AgentEvent]. Events are streamed until
+// [AgentEventComplete] from this agent (the root of the run). Complete events from delegated
 // sub-agents are still delivered but do not close the stream. After that root complete, the
-// channel stays open until the root workflow run finishes on Temporal (there is often more
-// work after the event, e.g. post-sub-agent activities), then closes.
-// For approvals (tool or delegation), receive AgentEventApproval and call OnApproval as in the streaming examples.
-// When using WithConversation, pass the conversation ID.
+// channel may stay open until the backend finishes the run (e.g. post-delegation work), then closes;
+// exact timing depends on the runtime implementation.
+// For approvals (tool or delegation), receive [AgentEventApproval] and call [Agent.OnApproval] as in the streaming examples.
+// When using [WithConversation], pass the conversation ID.
 func (a *Agent) RunStream(ctx context.Context, input string, conversationID string) (chan *AgentEvent, error) {
-	a.logger.Debug(ctx, "agent run stream started", slog.String("agent", a.Name), slog.Int("inputLen", len(input)))
+	a.logger.Debug(ctx, "agent run stream started", slog.String("scope", "agent"), slog.String("name", a.Name), slog.Int("inputLen", len(input)))
 
 	if err := a.validateConversationID(conversationID); err != nil {
 		return nil, err
@@ -258,7 +260,7 @@ func (a *Agent) validateConversationID(conversationID string) error {
 	return nil
 }
 
-// buildSubAgentRoutes snapshots sub-agent tool names, task queues, and nested routes for workflow input.
+// buildSubAgentRoutes snapshots sub-agent tool names, task queues, and nested routes for runtime delegation (internal).
 func (a *Agent) buildSubAgentRoutes() map[string]types.SubAgentRoute {
 	if a == nil || len(a.subAgents) == 0 {
 		return nil
@@ -288,7 +290,8 @@ func (a *Agent) buildSubAgentRoutes() map[string]types.SubAgentRoute {
 			names = append(names, k)
 		}
 		sort.Strings(names)
-		a.logger.Debug(context.Background(), "built sub-agent routes for workflow input",
+		a.logger.Debug(context.Background(), "built sub-agent routes for runtime delegation",
+			slog.String("scope", "agent"),
 			slog.Any("subAgentToolNames", names),
 			slog.Int("routeCount", len(out)))
 	}

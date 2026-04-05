@@ -22,8 +22,10 @@ type Config struct {
 	LogLevel  string
 	Provider  interfaces.LLMProvider
 	APIKey    string
-	Model     string
-	BaseURL   string
+	Model   string
+	// BaseURL is optional and only used for the OpenAI client (custom or Azure-compatible endpoints).
+	// Ignored for Anthropic and Gemini.
+	BaseURL string
 }
 
 func getEnv(key, def string) string {
@@ -58,6 +60,7 @@ func LoadFromEnv() *Config {
 		Provider:  interfaces.LLMProvider(getEnv("LLM_PROVIDER", "openai")),
 		APIKey:    getEnv("LLM_APIKEY", ""),
 		Model:     getEnv("LLM_MODEL", "gpt-4o"),
+		BaseURL:   getEnv("LLM_BASEURL", ""),
 	}
 	return cfg
 }
@@ -73,21 +76,27 @@ func NewLoggerFromLogConfig(cfg *Config) logger.Logger {
 }
 
 // NewLLMClientFromConfig creates an LLM client from config using the new llm.Option-based API.
+// BaseURL is applied only for OpenAI; set LLM_BASEURL when using a non-default OpenAI-compatible API.
 func NewLLMClientFromConfig(cfg *Config) (interfaces.LLMClient, error) {
 	opts := []llm.Option{
 		llm.WithAPIKey(cfg.APIKey),
 		llm.WithModel(cfg.Model),
-		llm.WithBaseURL(cfg.BaseURL),
 		llm.WithLogger(NewLoggerFromLogConfig(cfg)),
 	}
 	switch cfg.Provider {
 	case interfaces.LLMProviderAnthropic:
 		return anthropic.NewClient(opts...)
 	case interfaces.LLMProviderOpenAI:
+		if cfg.BaseURL != "" {
+			opts = append(opts, llm.WithBaseURL(cfg.BaseURL))
+		}
 		return openai.NewClient(opts...)
 	case interfaces.LLMProviderGemini:
 		return gemini.NewClient(opts...)
 	default:
+		if cfg.BaseURL != "" {
+			opts = append(opts, llm.WithBaseURL(cfg.BaseURL))
+		}
 		return openai.NewClient(opts...)
 	}
 }

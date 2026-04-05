@@ -33,7 +33,8 @@ type LLMConfig struct {
 	Provider string `mapstructure:"provider"`
 	APIKey   string `mapstructure:"apiKey"`
 	Model    string `mapstructure:"model"`
-	BaseURL  string `mapstructure:"baseURL"`
+	// BaseURL is optional; only used when provider is openai (custom/Azure-compatible API).
+	BaseURL string `mapstructure:"baseURL"`
 }
 
 type LoggerConfig struct {
@@ -125,7 +126,6 @@ func NewLLMClient(cfg *Config, lgr logger.Logger) (interfaces.LLMClient, error) 
 	opts := []llm.Option{
 		llm.WithAPIKey(cfg.LLM.APIKey),
 		llm.WithModel(cfg.LLM.Model),
-		llm.WithBaseURL(cfg.LLM.BaseURL),
 		llm.WithLogger(lgr),
 		llm.WithLogLevel(getLogLevel(cfg.Logger)),
 	}
@@ -133,10 +133,16 @@ func NewLLMClient(cfg *Config, lgr logger.Logger) (interfaces.LLMClient, error) 
 	case interfaces.LLMProviderAnthropic:
 		return anthropic.NewClient(opts...)
 	case interfaces.LLMProviderOpenAI:
+		if cfg.LLM.BaseURL != "" {
+			opts = append(opts, llm.WithBaseURL(cfg.LLM.BaseURL))
+		}
 		return openai.NewClient(opts...)
 	case interfaces.LLMProviderGemini:
 		return gemini.NewClient(opts...)
 	default:
+		if cfg.LLM.BaseURL != "" {
+			opts = append(opts, llm.WithBaseURL(cfg.LLM.BaseURL))
+		}
 		return openai.NewClient(opts...)
 	}
 }

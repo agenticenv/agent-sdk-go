@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// maxApprovalTimeout caps approval wait. Approval activity timeout cannot exceed this.
+// maxApprovalTimeout caps how long a single approval wait may last in the runtime.
 const MaxApprovalTimeout = 31 * 24 * time.Hour
 
 type ApprovalStatus string
@@ -36,7 +36,7 @@ type ApprovalRequest struct {
 	Respond  ApprovalSender `json:"-"`
 	// Kind matches ApprovalEvent: distinguish normal tools from sub-agent delegation.
 	Kind ToolApprovalKind `json:"kind,omitempty"`
-	// AgentName is the agent running the workflow that requested approval.
+	// AgentName is the agent that requested approval for the current run.
 	AgentName string `json:"agent_name,omitempty"`
 	// SubAgentName is set for delegation: human-friendly target specialist name.
 	SubAgentName string `json:"sub_agent_name,omitempty"`

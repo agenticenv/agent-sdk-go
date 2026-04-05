@@ -9,7 +9,6 @@ import (
 
 	"log/slog"
 
-	"github.com/agenticenv/agent-sdk-go/internal/runtime"
 	"github.com/agenticenv/agent-sdk-go/internal/runtime/temporal"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
@@ -18,29 +17,30 @@ import (
 	"go.temporal.io/sdk/client"
 )
 
-// TemporalConfig holds Temporal connection settings (Host, Port, Namespace) and the task queue name.
+// TemporalConfig holds connection settings for the Temporal-based execution runtime (host, namespace, task queue).
 //
-// TaskQueue is required and must be unique per agent. Use different TaskQueues when running
+// TaskQueue is required and must be unique per agent. Use different task queues when running
 // multiple agents in the same process (e.g. "my-agent-math", "my-agent-creative").
 // For multiple instances of the same agent (e.g. scaled pods), use WithInstanceId() so each
 // instance gets a unique queue derived as {TaskQueue}-{InstanceId}.
 //
 // When using DisableLocalWorker, the agent and NewAgentWorker must use the same TaskQueue (and
-// same InstanceId if set) so they pair correctly.
+// same InstanceId if set) so client and worker runtimes pair correctly.
 type TemporalConfig = temporal.TemporalConfig
 
-// LLMSampling holds per-agent LLM sampling overrides. nil/0 = provider default.
-// One LLM client can serve multiple agents with different sampling.
+// LLMSampling holds per-agent LLM sampling overrides. nil or zero values mean provider defaults.
+// One LLM client can serve multiple agents with different sampling settings.
 type LLMSampling = types.LLMSampling
 
 // agentConfig holds shared configuration for Agent and AgentWorker.
 //
 // Option applicability:
-//   - Agent only: EnableRemoteWorkers, DisableLocalWorker, WithApprovalHandler, WithTimeout
-//   - AgentWorker only: (none—worker inherits from options passed to NewAgentWorker)
+//   - Agent only: EnableRemoteWorkers, DisableLocalWorker, WithApprovalHandler, WithTimeout, WithApprovalTimeout
+//   - AgentWorker only: (none; worker inherits options passed to NewAgentWorker)
 //   - Both: WithName, WithDescription, WithSystemPrompt, WithTemporalConfig, WithTemporalClient,
-//     WithTaskQueue, WithInstanceId, WithLLMClient, WithToolApprovalPolicy, WithTools,
-//     WithToolRegistry, WithMaxIterations, WithStream, WithLogger, WithLogLevel, WithConversation
+//     WithInstanceId, WithLLMClient, WithToolApprovalPolicy, WithTools, WithToolRegistry,
+//     WithMaxIterations, WithStream, WithLogger, WithLogLevel, WithConversation, WithConversationSize,
+//     WithResponseFormat, WithLLMSampling, WithSubAgents, WithMaxSubAgentDepth
 type agentConfig struct {
 	ID                 string
 	Name               string
@@ -73,8 +73,8 @@ type agentConfig struct {
 
 	// build-time flags
 	disableLocalWorker  bool // true when user calls DisableLocalWorker; no local worker. Agent only.
-	enableRemoteWorkers bool // true: run event worker & workflow. false (default): use agentChannel only. Agent only.
-	remoteWorker        bool // true when AgentWorker; activities use UpdateWorkflow
+	enableRemoteWorkers bool // true: run remote event path for streaming/approvals. false (default): in-process only. Agent only.
+	remoteWorker        bool // true for AgentWorker: worker-side runtime (remote activities/updates).
 
 	// subAgents
 	// subAgents are direct children; each is exposed to the LLM via NewSubAgentTool (see toolsList).
@@ -106,7 +106,7 @@ func WithSystemPrompt(prompt string) Option {
 	return func(c *agentConfig) { c.SystemPrompt = prompt }
 }
 
-// WithTemporalConfig sets the Temporal config. Applies to Agent and AgentWorker.
+// WithTemporalConfig sets connection options for the Temporal execution runtime. Applies to Agent and AgentWorker.
 // Use either WithTemporalConfig or WithTemporalClient, not both.
 func WithTemporalConfig(cfg *TemporalConfig) Option {
 	return func(c *agentConfig) {
@@ -115,9 +115,9 @@ func WithTemporalConfig(cfg *TemporalConfig) Option {
 	}
 }
 
-// WithTemporalClient sets a pre-configured Temporal client. Use when you need TLS, API key auth,
-// Temporal Cloud, or other connection options not supported by TemporalConfig.
-// Requires WithTaskQueue. Use either WithTemporalConfig or WithTemporalClient, not both.
+// WithTemporalClient sets a pre-configured client for the Temporal execution runtime. Use when you need TLS,
+// API keys, cloud endpoints, or other options not covered by [TemporalConfig].
+// Task queue must still be set (via this option's taskQueue argument). Use either WithTemporalConfig or WithTemporalClient, not both.
 // The agent does not close the client when Close() is called; the caller owns the lifecycle.
 func WithTemporalClient(tc client.Client, taskQueue string) Option {
 	return func(c *agentConfig) {
@@ -196,9 +196,9 @@ func WithApprovalTimeout(d time.Duration) Option {
 	return func(c *agentConfig) { c.approvalTimeout = d }
 }
 
-// EnableRemoteWorkers enables the event worker and event workflow. Agent only.
-// If this option is not passed, approvals and events use agentChannel directly (no event worker/workflow).
-// Call EnableRemoteWorkers() to run the event worker and event workflow (required when using NewAgentWorker with DisableLocalWorker, and for some approval/streaming setups).
+// EnableRemoteWorkers enables the runtime's remote event path (out-of-process event delivery). Agent only.
+// If unset, streaming and approvals use in-process channels only.
+// Required for some setups with [DisableLocalWorker] and [NewAgentWorker], and for certain approval/streaming configurations.
 func EnableRemoteWorkers() Option {
 	return func(c *agentConfig) { c.enableRemoteWorkers = true }
 }
@@ -241,7 +241,7 @@ func WithLLMSampling(s *LLMSampling) Option {
 }
 
 // WithSubAgents registers sub-agents. Each is exposed to the parent LLM as a tool (AgentTool).
-// Execution is via workflow (child workflow), not Tool.Execute — see future workflow integration.
+// Delegation runs through the execution runtime (child run), not Tool.Execute.
 // The sub-agent graph is validated at agent build: no cycles, depth <= WithMaxSubAgentDepth (default 2).
 func WithSubAgents(subAgents ...*Agent) Option {
 	return func(c *agentConfig) { c.subAgents = subAgents }
@@ -253,8 +253,9 @@ func WithMaxSubAgentDepth(depth int) Option {
 	return func(c *agentConfig) { c.maxSubAgentDepth = depth }
 }
 
-// buildAgentConfig applies options, validates, and creates the Temporal client.
-// remoteWorker is false for Agent (local); NewAgentWorker overrides to true.
+// buildAgentConfig applies options, validates, and sets defaults (logger, timeouts, iterations).
+// WithTemporalConfig lets the runtime create a Temporal client from host settings; WithTemporalClient supplies a caller-owned client.
+// remoteWorker is false for Agent; NewAgentWorker sets it to true for worker-side activities.
 func buildAgentConfig(opts []Option) (*agentConfig, error) {
 	c := &agentConfig{remoteWorker: false, ID: uuid.New().String()}
 	for _, opt := range opts {
@@ -308,7 +309,7 @@ func buildAgentConfig(opts []Option) (*agentConfig, error) {
 
 	// Validate approvalTimeout when any tool requires approval (approvalTimeout must be < timeout)
 	if c.hasApprovalTools() {
-		c.logger.Debug(context.Background(), "tools require approval", slog.String("name", c.Name))
+		c.logger.Debug(context.Background(), "tools require approval", slog.String("scope", "agent"), slog.String("name", c.Name))
 		if c.approvalTimeout == 0 {
 			c.approvalTimeout = c.timeout - 30*time.Second
 		}
@@ -332,9 +333,10 @@ func buildAgentConfig(opts []Option) (*agentConfig, error) {
 	}
 
 	ctx := context.Background()
-	c.logger.Info(ctx, "agent config built", slog.String("name", c.Name), slog.String("taskQueue", c.taskQueue))
+	c.logger.Info(ctx, "agent config built", slog.String("scope", "agent"), slog.String("name", c.Name), slog.String("taskQueue", c.taskQueue))
 	// Debug: full config summary for troubleshooting (no sensitive: systemPrompt, API keys)
-	c.logger.Debug(ctx, "agent config",
+	c.logger.Debug(ctx, "agent config detail",
+		slog.String("scope", "agent"),
 		slog.String("name", c.Name),
 		slog.String("taskQueue", c.taskQueue),
 		slog.String("instanceId", c.instanceId),
@@ -500,31 +502,4 @@ func (c *agentConfig) hasApprovalTools() bool {
 	return false
 }
 
-func (cfg *agentConfig) buildAgentRuntime(remoteWorker bool) (runtime.Runtime, error) {
-	if cfg.temporalClient != nil || cfg.temporalConfig != nil {
-		options := []temporal.Option{
-			temporal.WithLogger(cfg.logger),
-			temporal.WithLLMClient(cfg.LLMClient),
-			temporal.WithLLMSampling(cfg.llmSampling),
-			temporal.WithTools(cfg.toolsList()...),
-			temporal.WithSystemPrompt(cfg.SystemPrompt),
-			temporal.WithResponseFormat(cfg.responseFormatForLLM()),
-			temporal.WithConversation(cfg.conversation),
-			temporal.WithConversationSize(cfg.conversationSize),
-			temporal.WithToolApprovalPolicy(cfg.toolApprovalPolicy),
-			temporal.WithTimeout(cfg.timeout),
-			temporal.WithAgentName(cfg.Name),
-			temporal.WithMaxIterations(cfg.maxIterations),
-			temporal.WithApprovalTimeout(cfg.approvalTimeout),
-			temporal.WithRemoteWorker(remoteWorker),
-		}
-		if cfg.temporalConfig != nil {
-			options = append(options, temporal.WithTemporalConfig(cfg.temporalConfig))
-		} else {
-			options = append(options, temporal.WithTemporalClient(cfg.temporalClient, cfg.taskQueue))
-		}
-		return temporal.NewTemporalRuntime(options...)
-	}
-	return nil, fmt.Errorf("supported only temporal runtime")
-}
 

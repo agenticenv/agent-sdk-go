@@ -2,7 +2,7 @@ package agent
 
 import "github.com/agenticenv/agent-sdk-go/internal/types"
 
-// AgentEventType is the type of agent events
+// AgentEventType identifies a streamed event kind from the execution runtime.
 type AgentEventType = types.AgentEventType
 
 const (
@@ -17,13 +17,13 @@ const (
 	AgentEventComplete      AgentEventType = types.AgentEventComplete
 )
 
-// AgentEvent is published to subscribers when the agent produces output or errors.
+// AgentEvent is published to subscribers when the agent produces output or errors during a run.
 // AgentName identifies which agent in a delegation tree emitted the event (main or sub-agent).
-// RunStream uses it so AgentEventComplete from a sub-agent does not close the root stream.
-// For AgentEventApproval, the requesting agent is also on AgentName (not duplicated on Approval).
+// [Agent.RunStream] uses it so [AgentEventComplete] from a sub-agent does not close the root stream.
+// For [AgentEventApproval], the requesting agent is also on AgentName (not duplicated on Approval).
 type AgentEvent = types.AgentEvent
 
-// ToolApprovalKind classifies what the user is approving (same event type for RunStream).
+// ToolApprovalKind classifies what the user is approving when using streaming or approval events.
 type ToolApprovalKind = types.ToolApprovalKind
 
 const (
@@ -33,11 +33,12 @@ const (
 	ToolApprovalKindDelegation ToolApprovalKind = types.ToolApprovalKindDelegation
 )
 
-// ApprovalEvent is the payload for AgentEventApproval (RunStream).
-// The agent that requested approval is on AgentEvent.AgentName, not repeated here.
-// Use with Agent.OnApproval when the user approves or rejects; see streaming examples.
+// ApprovalEvent is the payload for [AgentEventApproval].
+// The agent that requested approval is on the enclosing AgentEvent's AgentName field, not repeated here.
+// Use with [Agent.OnApproval] when the user approves or rejects; see streaming examples.
 type ApprovalEvent = types.ApprovalEvent
 
+// ToolCallStatus is the lifecycle state of a tool call in streamed events.
 type ToolCallStatus = types.ToolCallStatus
 
 const (
@@ -47,4 +48,5 @@ const (
 	ToolCallStatusFailed    ToolCallStatus = types.ToolCallStatusFailed
 )
 
+// ToolCallEvent carries tool name, arguments, and result in streamed events.
 type ToolCallEvent = types.ToolCallEvent

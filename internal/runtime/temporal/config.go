@@ -172,7 +172,8 @@ func buildTemporalRuntimeConfig(opts ...Option) (*TemporalRuntimeConfig, error) 
 		return nil, fmt.Errorf("llm client is required")
 	}
 
-	c.logger.Debug(context.Background(), "temporal runtime config",
+	c.logger.Debug(context.Background(), "runtime config resolved",
+		slog.String("scope", "runtime"),
 		slog.String("agentName", c.agentName),
 		slog.String("taskQueue", c.taskQueue),
 		slog.String("instanceId", c.instanceId),
@@ -187,7 +188,7 @@ func buildTemporalRuntimeConfig(opts ...Option) (*TemporalRuntimeConfig, error) 
 
 func newTemporalClient(config *TemporalConfig, sdkLog logger.Logger) (client.Client, error) {
 	ctx := context.Background()
-	sdkLog.Info(ctx, "connecting to temporal server", slog.String("host", config.Host), slog.Int("port", config.Port))
+	sdkLog.Info(ctx, "runtime connecting to temporal server", slog.String("scope", "runtime"), slog.String("host", config.Host), slog.Int("port", config.Port))
 
 	clientOptions := client.Options{
 		HostPort:                config.Host + ":" + strconv.Itoa(config.Port),
@@ -223,10 +224,10 @@ func newTemporalClient(config *TemporalConfig, sdkLog logger.Logger) (client.Cli
 			if !clientReady {
 				c, err = client.Dial(clientOptions)
 				if err == nil {
-					sdkLog.Info(ctx, "successfully created temporal client, checking namespace availability")
+					sdkLog.Debug(ctx, "runtime temporal client dialed, verifying namespace", slog.String("scope", "runtime"))
 					clientReady = true
 				} else {
-					sdkLog.Info(ctx, "failed to create temporal client, dialing again...", slog.Any("error", err))
+					sdkLog.Debug(ctx, "runtime temporal dial retry", slog.String("scope", "runtime"), slog.Any("error", err))
 				}
 			} else {
 				nsClient, err := client.NewNamespaceClient(clientOptions)
@@ -234,11 +235,11 @@ func newTemporalClient(config *TemporalConfig, sdkLog logger.Logger) (client.Cli
 					_, err = nsClient.Describe(ctx, config.Namespace)
 					nsClient.Close()
 					if err == nil {
-						sdkLog.Info(ctx, "successfully find temporal namespace", slog.String("namespace", config.Namespace))
+						sdkLog.Info(ctx, "runtime ready (temporal connected)", slog.String("scope", "runtime"), slog.String("namespace", config.Namespace), slog.String("host", config.Host))
 						return c, nil
 					}
 				}
-				sdkLog.Info(ctx, "failed to find temporal namespace, trying again..", slog.String("namespace", config.Namespace), slog.Any("error", err))
+				sdkLog.Debug(ctx, "runtime namespace check retry", slog.String("scope", "runtime"), slog.String("namespace", config.Namespace), slog.Any("error", err))
 			}
 		}
 	}

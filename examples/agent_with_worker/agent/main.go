@@ -46,7 +46,7 @@ func main() {
 		prompt = "Hello, what can you do?"
 	}
 	fmt.Println("user:", prompt)
-	fmt.Println("(Ensure worker is running in another terminal. Waits up to 15s for workers.)")
+	fmt.Println("(Start the worker in another terminal first. The runtime waits for pollers on the task queue before running.)")
 	response, err := a.Run(ctx, prompt, "")
 	if err != nil {
 		log.Printf("failed to run agent: %v", err)

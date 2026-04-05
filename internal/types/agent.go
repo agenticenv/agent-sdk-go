@@ -1,6 +1,6 @@
 package types
 
-// AgentResponse is the return value of Agent Run
+// AgentResponse is the structured result of a completed run (content, model, metadata).
 type AgentResponse struct {
 	Content   string         `json:"content"`
 	AgentName string         `json:"agent_name"`

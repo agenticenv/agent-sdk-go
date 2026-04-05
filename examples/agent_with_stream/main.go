@@ -75,22 +75,20 @@ func main() {
 
 	fmt.Println("--- events ---")
 
-	var finalContent string
+	streamed := false
 	for ev := range eventCh {
 		if ev == nil {
 			continue
 		}
-		printEvent(ev)
-		if ev.Type == agent.AgentEventComplete {
-			finalContent = ev.Content
+		if ev.Type == agent.AgentEventContentDelta || ev.Type == agent.AgentEventThinkingDelta {
+			streamed = true
 		}
+		printEvent(ev, streamed)
 	}
-
-	fmt.Println("--- final response ---")
-	fmt.Println(finalContent)
+	fmt.Println()
 }
 
-func printEvent(ev *agent.AgentEvent) {
+func printEvent(ev *agent.AgentEvent, streamedSoFar bool) {
 	switch ev.Type {
 	case agent.AgentEventContent:
 		if ev.Content != "" {
@@ -120,7 +118,12 @@ func printEvent(ev *agent.AgentEvent) {
 	case agent.AgentEventError:
 		fmt.Printf("[error] %s\n", ev.Content)
 	case agent.AgentEventComplete:
-		fmt.Printf("[complete] %s\n", ev.Content)
+		// Final text is often duplicate when tokens were streamed; skip verbose line.
+		if ev.Content != "" && !streamedSoFar {
+			fmt.Printf("[complete] %s\n", ev.Content)
+		} else if ev.Content != "" {
+			fmt.Println("[complete]")
+		}
 	default:
 		fmt.Printf("[%s] %+v\n", ev.Type, ev)
 	}

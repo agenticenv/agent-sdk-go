@@ -7,15 +7,13 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/agenticenv/agent-sdk-go/internal/types"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/tools"
 )
 
 var _ AgentTool = (*subAgentTool)(nil)
 var _ interfaces.Tool = (*subAgentTool)(nil)
-
-// subAgentToolParamQuery is the parameter name for the query to send to the sub-agent.
-const subAgentToolParamQuery = "query"
 
 // Sub-agent tool names must be identifier-like for LLM tool APIs; normalize display names accordingly.
 var subAgentToolNameNonIdent = regexp.MustCompile(`[^a-zA-Z0-9]+`)
@@ -69,8 +67,8 @@ func (t *subAgentTool) Description() string {
 
 func (t *subAgentTool) Parameters() interfaces.JSONSchema {
 	return tools.Params(map[string]interfaces.JSONSchema{
-		subAgentToolParamQuery: tools.ParamString("Task or question to send to the sub-agent."),
-	}, subAgentToolParamQuery)
+		types.SubAgentToolParamQuery: tools.ParamString("Task or question to send to the sub-agent."),
+	}, types.SubAgentToolParamQuery)
 }
 
 func (t *subAgentTool) Execute(_ context.Context, _ map[string]any) (any, error) {

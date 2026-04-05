@@ -1,6 +1,6 @@
 // Package redis provides Redis-backed conversation storage.
 // Use when using remote workers so the worker process can access conversation data.
-// Agent and worker use the same Redis config; conversation ID is passed at runtime via Run and workflow input.
+// Agent and worker use the same Redis config; conversation ID is passed at runtime via Run and the agent run input.
 package redis
 
 import (

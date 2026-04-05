@@ -2,7 +2,7 @@ package types
 
 import "time"
 
-// AgentEventType is the type of agent events
+// AgentEventType identifies a streamed agent event kind.
 type AgentEventType string
 
 const (
@@ -17,8 +17,7 @@ const (
 	AgentEventComplete      AgentEventType = "complete"
 )
 
-// agentEventAll is the workflow EventTypes sentinel meaning "emit every event type" (JSON "*").
-// Unexported so it is not part of the public SDK surface.
+// AgentEventAll is the EventTypes sentinel meaning "emit every event type" (JSON "*").
 const AgentEventAll AgentEventType = "*"
 
 // AgentEvent is published to subscribers when the agent produces output or errors.
@@ -34,7 +33,7 @@ type AgentEvent struct {
 	Error      error                  `json:"error,omitempty"`
 	Metadata   map[string]interface{} `json:"metadata,omitempty"`
 	Timestamp  time.Time              `json:"timestamp"`
-	WorkflowID string                 `json:"workflow_id,omitempty"` // run workflow ID; for correlation only
+	WorkflowID string                 `json:"workflow_id,omitempty"` // optional run identifier for correlation (implementation-defined)
 }
 
 // ToolApprovalKind classifies what the user is approving (same event type for RunStream).

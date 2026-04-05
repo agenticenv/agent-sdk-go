@@ -2,11 +2,149 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
+	"github.com/golang/mock/gomock"
+
+	"github.com/agenticenv/agent-sdk-go/internal/runtime"
+	rtmocks "github.com/agenticenv/agent-sdk-go/internal/runtime/mocks"
+	"github.com/agenticenv/agent-sdk-go/internal/types"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
 )
+
+func testAgentWithRuntime(rt runtime.Runtime) *Agent {
+	return &Agent{
+		agentConfig: agentConfig{
+			Name:             "TestAgent",
+			logger:           logger.DefaultLogger("error"),
+			maxSubAgentDepth: 2,
+		},
+		runtime: rt,
+	}
+}
+
+func TestAgent_Run_ForwardsRequestAndReturnsResponse(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	mockRT := rtmocks.NewMockRuntime(ctrl)
+	mockRT.EXPECT().Run(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, req *runtime.RunRequest) (*types.AgentResponse, error) {
+		if req.StreamingEnabled {
+			t.Error("Run must set StreamingEnabled false")
+		}
+		if req.UserPrompt != "hello" {
+			t.Errorf("UserPrompt = %q", req.UserPrompt)
+		}
+		return &types.AgentResponse{Content: "reply", AgentName: req.AgentName, Model: "m1"}, nil
+	})
+
+	a := testAgentWithRuntime(mockRT)
+	resp, err := a.Run(context.Background(), "hello", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Content != "reply" || resp.Model != "m1" || resp.AgentName != "TestAgent" {
+		t.Fatalf("response = %+v", resp)
+	}
+}
+
+func TestAgent_RunStream_SetsStreamingEnabled(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	mockRT := rtmocks.NewMockRuntime(ctrl)
+	var streamReq *runtime.RunRequest
+	mockRT.EXPECT().RunStream(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, req *runtime.RunRequest) (chan *types.AgentEvent, error) {
+		streamReq = req
+		ch := make(chan *types.AgentEvent, 2)
+		ch <- &types.AgentEvent{Type: types.AgentEventComplete, AgentName: req.AgentName, Content: "done"}
+		close(ch)
+		return ch, nil
+	})
+
+	a := testAgentWithRuntime(mockRT)
+	ch, err := a.RunStream(context.Background(), "prompt", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		for range ch {
+		}
+	}()
+	if streamReq == nil || !streamReq.StreamingEnabled {
+		t.Fatalf("RunStream request = %+v", streamReq)
+	}
+	if streamReq.UserPrompt != "prompt" {
+		t.Errorf("UserPrompt = %q", streamReq.UserPrompt)
+	}
+	ev := <-ch
+	if ev == nil || ev.Type != types.AgentEventComplete {
+		t.Fatalf("event = %+v", ev)
+	}
+}
+
+func TestAgent_RunAsync_DeliversResult(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	mockRT := rtmocks.NewMockRuntime(ctrl)
+	mockRT.EXPECT().Run(gomock.Any(), gomock.Any()).Return(&types.AgentResponse{Content: "mock", AgentName: "TestAgent", Model: "stub"}, nil)
+
+	a := testAgentWithRuntime(mockRT)
+	resCh, apprCh, err := a.RunAsync(context.Background(), "async", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case r := <-resCh:
+		if r.Err != nil {
+			t.Fatal(r.Err)
+		}
+		if r.Response == nil || r.Response.Content != "mock" {
+			t.Fatalf("result = %+v", r)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for RunAsync result")
+	}
+	for range apprCh {
+		t.Fatal("unexpected approval request")
+	}
+}
+
+func TestAgent_RunStream_CustomStreamFn(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	mockRT := rtmocks.NewMockRuntime(ctrl)
+	mockRT.EXPECT().RunStream(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, req *runtime.RunRequest) (chan *types.AgentEvent, error) {
+		ch := make(chan *types.AgentEvent, 1)
+		ch <- &types.AgentEvent{Type: types.AgentEventContent, Content: "partial"}
+		close(ch)
+		return ch, nil
+	})
+
+	a := testAgentWithRuntime(mockRT)
+	ch, err := a.RunStream(context.Background(), "x", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := <-ch
+	if ev == nil || ev.Content != "partial" {
+		t.Fatalf("ev = %+v", ev)
+	}
+}
+
+// stubLLM is a minimal [interfaces.LLMClient] for config/runtime unit tests.
+type stubLLM struct{}
+
+func (stubLLM) Generate(ctx context.Context, req *interfaces.LLMRequest) (*interfaces.LLMResponse, error) {
+	return &interfaces.LLMResponse{}, nil
+}
+func (stubLLM) GenerateStream(ctx context.Context, req *interfaces.LLMRequest) (interfaces.LLMStream, error) {
+	return nil, errors.New("stub")
+}
+func (stubLLM) GetModel() string                           { return "stub" }
+func (stubLLM) GetProvider() interfaces.LLMProvider        { return interfaces.LLMProviderOpenAI }
+func (stubLLM) IsStreamSupported() bool                    { return false }
 
 func TestCopyApprovalArgs(t *testing.T) {
 	if copyApprovalArgs(nil) != nil {

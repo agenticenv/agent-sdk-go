@@ -49,5 +49,5 @@ func main() {
 		log.Printf("agent foreground run failed: %v", err)
 		return
 	}
-	fmt.Println("assistant: ", response.Content)
+	fmt.Printf("assistant: %s\n", response.Content)
 }
