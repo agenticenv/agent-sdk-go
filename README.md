@@ -18,7 +18,7 @@ Build durable, long-running AI agents in Go — tool calling, human approvals, a
 
 ## Runtimes
 
-- **Temporal (default)** — Durable, distributed execution (workflows, activities, workers). Requires a Temporal cluster.
+- **Temporal (supported)** — Durable, distributed execution (workflows, activities, workers). Requires a Temporal cluster.
 - **In-process (coming soon)** — Lightweight, no infrastructure required.
 - **Custom (coming soon)** — Bring your own runtime via the `Runtime` interface.
 
