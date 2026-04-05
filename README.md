@@ -43,6 +43,7 @@ One agent run is a single **agent workflow** (replay-safe, deterministic). The d
 ```mermaid
 graph TD
     A[Agent] --> WF[Workflow: agent loop]
+    W[Agent Worker] --> WF
     WF --> LLM[Activity: LLM call]
     WF --> Appr[Activity: approval]
     WF --> Tool[Activity: tool execution]
@@ -51,16 +52,6 @@ graph TD
     Child --> LLM2[Activity: LLM call]
     Child --> Tool2[Activity: tool execution]
     Child --> Mem2[Activity: conversation memory]
-    Worker[Agent Worker]
-    Worker -.->|workflow task| WF
-    Worker -.->|activity task| LLM
-    Worker -.->|activity task| Appr
-    Worker -.->|activity task| Tool
-    Worker -.->|activity task| Mem
-    Worker -.->|workflow task| Child
-    Worker -.->|activity task| LLM2
-    Worker -.->|activity task| Tool2
-    Worker -.->|activity task| Mem2
 ```
 
 ## Getting Started
