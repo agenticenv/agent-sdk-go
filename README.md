@@ -1,4 +1,6 @@
-# AI Agent SDK for Go, Powered by Temporal
+# AI Agent SDK for Go
+
+Build reliable, production-grade AI agents with pluggable execution runtimes — **Temporal-first**
 
 [![CI](https://github.com/agenticenv/agent-sdk-go/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/agenticenv/agent-sdk-go/actions)
 [![Release](https://img.shields.io/github/v/release/agenticenv/agent-sdk-go?label=Release)](https://github.com/agenticenv/agent-sdk-go/releases)
@@ -6,19 +8,33 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/agenticenv/agent-sdk-go)](https://goreportcard.com/report/github.com/agenticenv/agent-sdk-go)
 [![License](https://img.shields.io/github/license/agenticenv/agent-sdk-go?label=License)](LICENSE)
 
-Build durable, long-running AI agents in Go — tool calling, human approvals, and sub-agent delegation, powered by **[Temporal](https://temporal.io)**.
+Build durable, long-running AI agents in Go — tool calling, human approvals, and sub-agent delegation. Runs execute as replay-safe workflows and activities; use the **Temporal UI** for history and debugging.
 
 > **Note:** Independent community library — **not** affiliated with Temporal Technologies.
 >
-> **Runtime:** **Temporal only** — there is no in-SDK agent loop without Temporal. You need a running cluster — [self-hosted](https://docs.temporal.io/self-hosted-guide) or [Temporal Cloud](https://temporal.io/cloud) — and `WithTemporalConfig` or `WithTemporalClient` when building the agent.
+> **Today:** `NewAgent` requires **[Temporal](https://temporal.io)** (`WithTemporalConfig` or `WithTemporalClient`) and a cluster — [self-hosted](https://docs.temporal.io/self-hosted-guide) or [Temporal Cloud](https://temporal.io/cloud). In-process and custom runtimes are not on the public API yet; `internal/runtime` defines `Execute` / `ExecuteStream` for future backends.
 >
 > **Version:** `v0.0.10` — Active development. Follows [semantic versioning](https://semver.org/); API may evolve before v1.0.0.
+
+## Runtimes
+
+- **Temporal (default)** — Durable, distributed execution (workflows, activities, workers). Requires a Temporal cluster.
+- **In-process (coming soon)** — Lightweight, no infrastructure required.
+- **Custom (coming soon)** — Bring your own runtime via the `Runtime` interface.
+
+## Architecture
+
+| Layer | Role |
+| ----- | ---- |
+| `pkg/agent` | Public API — `Run`, `Stream`, `RunAsync`, `NewAgent` / `NewAgentWorker`, and configuration options. |
+| `internal/runtime` | Runtime contract — `Runtime`, `Execute`, `ExecuteStream`, `ExecuteRequest` (not imported by apps). |
+| Temporal | Default runtime — replay-safe workflows, activities, and workers. |
 
 ## Overview
 
 Use this SDK when you want **LLM-driven agents** (tools, optional specialists) whose runs **survive worker restarts** and can last a long time: orchestration, retries, timeouts, child workflows for delegation, and approval pauses come from **Temporal**, with history and debugging in the **Temporal UI**. Ordinary non-durable “call the LLM in a loop” designs are replaced by **replay-safe workflow code** plus activities for side effects.
 
-**Why wire agents to Temporal?**
+**Why use Temporal as the execution engine today?**
 
 - Reliable tool execution (retries, failure recovery around activities)
 - Human-in-the-loop gates before tools or sub-agent delegation
@@ -33,9 +49,9 @@ Use this SDK when you want **LLM-driven agents** (tools, optional specialists) w
 - **Tools** — Built-in tools and custom tools via **interfaces.Tool**
 - **Approval gates** — Optional human-in-the-loop approval before executing tools or delegating to sub-agents
 - **Sub-agents** — Delegate work to specialist agents you register
-- **Durable execution** — Agents survive restarts, run for minutes to days without losing state
-- **Distributed execution** — Agents run across **agent workers** and activities, horizontally scalable across multiple instances.
-- **Temporal execution** — The shipped runtime is **Temporal** (`TemporalRuntime`); agents run as workflows and activities. The internal `runtime` package is the extension point if other backends are added later.
+- **Durable execution** — With Temporal, agents survive restarts and run for minutes to days without losing state
+- **Distributed execution** — Agents run across **agent workers** and activities, horizontally scalable across multiple instances
+- **Pluggable execution** — `runtime.Runtime` + `ExecuteRequest`; Temporal is shipped; other backends planned
 
 ## Getting started
 
@@ -595,7 +611,7 @@ See **[cmd/README.md](cmd/README.md)** for CLI details and env vars.
 
 ## Production Readiness Checklist
 
-Before using this SDK in production, align with what it actually exposes and how agents run on Temporal:
+Before using this SDK in production, align with what it exposes and how the **Temporal-backed** runtime runs agents:
 
 - **Run and approval limits** — Use `WithTimeout` and/or a context deadline on `Run` / `Stream`; use `WithApprovalTimeout` when tools require approval (activity retry counts inside workflows are fixed in the SDK, not user-tunable).
 - **Bound agent loops** — Set `WithMaxIterations` and, if you use sub-agents, `WithMaxSubAgentDepth`.
