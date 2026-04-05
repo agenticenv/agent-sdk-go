@@ -16,9 +16,13 @@ const (
 )
 
 type LLMClient interface {
+	// Generate generates a response from the LLM.
 	Generate(ctx context.Context, request *LLMRequest) (*LLMResponse, error)
+	// GenerateStream generates a response from the LLM using streaming.
 	GenerateStream(ctx context.Context, request *LLMRequest) (LLMStream, error)
+	// GetModel returns the model name.
 	GetModel() string
+	// GetProvider returns the provider name.
 	GetProvider() LLMProvider
 	// IsStreamSupported returns true if the client supports streaming (e.g. OpenAI, Anthropic).
 	IsStreamSupported() bool
