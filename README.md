@@ -24,13 +24,13 @@ Build durable, long-running AI agents in Go — tool calling, human approvals, a
 
 ## Architecture
 
+The SDK is structured in two layers. The public API (`pkg/agent`) exposes `Run`, `Stream`, and `RunAsync` — this is what your application code imports. Beneath it, the runtime layer (`internal/runtime`) defines the `Runtime` interface (`Execute` / `ExecuteStream`) and `ExecuteRequest`, which implementations use to run work. **Temporal** is the supported backend today; the split keeps app code on `pkg/agent` so additional runtimes can follow the same contract when exposed by the SDK.
 
 | Layer              | Role                                                                                                |
 | ------------------ | --------------------------------------------------------------------------------------------------- |
 | `pkg/agent`        | Public API — `Run`, `Stream`, `RunAsync`, `NewAgent` / `NewAgentWorker`, and configuration options. |
 | `internal/runtime` | Runtime contract — `Runtime`, `Execute`, `ExecuteStream`, `ExecuteRequest` (not imported by apps).  |
 | Temporal           | Default runtime — replay-safe workflows, activities, and workers.                                   |
-
 
 ## Overview
 
@@ -53,7 +53,7 @@ Use this SDK when you want **LLM-driven agents** (tools, optional specialists) w
 - **Sub-agents** — Delegate work to specialist agents you register
 - **Durable execution** — With Temporal, agents survive restarts and run for minutes to days without losing state
 - **Distributed execution** — Agents run across **agent workers** and activities, horizontally scalable across multiple instances
-- **Pluggable execution** — `runtime.Runtime` + `ExecuteRequest`; Temporal is shipped; other backends planned
+- **Pluggable execution** — `runtime.Runtime` + `ExecuteRequest`; Temporal is supported; other backends planned
 
 ## Getting started
 
