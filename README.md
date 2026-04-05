@@ -36,8 +36,6 @@ How **Temporal** powers agents: **`pkg/agent`** drives a **Temporal** client tha
 - **Child workflows** — **Sub-agent delegation** is modeled as **child workflows** so specialists can run on their own task queues with their own workers.
 - **Workers & task queues** — Processes **poll** a queue and run scheduled workflow and activity tasks; **scale horizontally** by adding workers. Each agent / sub-agent typically has its own **task queue** name.
 
-Details: [Temporal connection](#temporal-connection), [Sub-agents](#sub-agents), [Agent and worker in separate processes](#agent-and-worker-in-separate-processes).
-
 ```mermaid
 graph TD
     A[Agent] --> WF[Workflow: agent loop]
@@ -51,6 +49,8 @@ graph TD
     Child --> Tool2[Activity: tool execution]
     Child --> Mem2[Activity: save memory]
 ```
+
+Details: [Temporal connection](#temporal-connection), [Sub-agents](#sub-agents), [Agent and worker in separate processes](#agent-and-worker-in-separate-processes).
 
 ## Getting Started
 
