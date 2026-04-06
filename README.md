@@ -42,9 +42,9 @@ graph TD
     W[Agent Worker] --> WF
     WF --> LLM[Activity: LLM call]
     WF --> Appr[Activity: approval]
+    WF --> Child[Child Workflow: agent loop]
     WF --> Tool[Activity: tool execution]
     WF --> Mem[Activity: save memory]
-    WF --> Child[Child Workflow: agent loop]
     Child --> LLM2[Activity: LLM call]
     Child --> Tool2[Activity: tool execution]
     Child --> Mem2[Activity: save memory]
