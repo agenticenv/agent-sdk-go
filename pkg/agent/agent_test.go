@@ -150,9 +150,9 @@ func (stubLLM) Generate(ctx context.Context, req *interfaces.LLMRequest) (*inter
 func (stubLLM) GenerateStream(ctx context.Context, req *interfaces.LLMRequest) (interfaces.LLMStream, error) {
 	return nil, errors.New("stub")
 }
-func (stubLLM) GetModel() string                           { return "stub" }
-func (stubLLM) GetProvider() interfaces.LLMProvider        { return interfaces.LLMProviderOpenAI }
-func (stubLLM) IsStreamSupported() bool                    { return false }
+func (stubLLM) GetModel() string                    { return "stub" }
+func (stubLLM) GetProvider() interfaces.LLMProvider { return interfaces.LLMProviderOpenAI }
+func (stubLLM) IsStreamSupported() bool             { return false }
 
 func TestCopyApprovalArgs(t *testing.T) {
 	if copyApprovalArgs(nil) != nil {

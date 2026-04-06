@@ -22,7 +22,7 @@ type Config struct {
 	LogLevel  string
 	Provider  interfaces.LLMProvider
 	APIKey    string
-	Model   string
+	Model     string
 	// BaseURL is optional and only used for the OpenAI client (custom or Azure-compatible endpoints).
 	// Ignored for Anthropic and Gemini.
 	BaseURL string

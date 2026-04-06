@@ -593,7 +593,7 @@ A Temporal connection is **required** — one of `WithTemporalConfig` or `WithTe
 Contributors: see **[CONTRIBUTING.md](CONTRIBUTING.md)** for prerequisites (Go version, Temporal setup), development workflow, and guidelines.
 Project policies: **[SECURITY.md](SECURITY.md)** for vulnerability reporting and **[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)** for community standards.
 
-Quick commands: `make test` | `make lint` | `make tidy` | `make test-coverage`
+Quick commands: `make test` | `make lint` | `make fmt` | `make tidy` | `make test-coverage` (`make lint` runs `gofmt -s` check first)
 
 ---
 

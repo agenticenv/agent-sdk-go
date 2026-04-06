@@ -22,10 +22,10 @@ type TemporalConfig struct {
 // TemporalRuntimeConfig holds connection settings plus the same [sdkruntime.AgentSpec] /
 // [sdkruntime.AgentExecution] shape as [sdkruntime.ExecuteRequest], so workers and pkg/agent share one layout.
 type TemporalRuntimeConfig struct {
-	temporalConfig      *TemporalConfig
-	temporalClient      client.Client
-	taskQueue           string
-	instanceId          string
+	temporalConfig     *TemporalConfig
+	temporalClient     client.Client
+	taskQueue          string
+	instanceId         string
 	ownsTemporalClient bool
 	// enableRemoteWorkers: start event worker + event workflow in Execute/ExecuteStream (client agent runtime).
 	enableRemoteWorkers bool

@@ -39,10 +39,10 @@ type LLMConfig struct {
 
 type LoggerConfig struct {
 	Level     string `mapstructure:"level"`
-	Output    string `mapstructure:"output"`      // stdout | stderr | file path; default resolves to cmd/logs/agent.log
-	Format    string `mapstructure:"format"`      // text | json (file/stdout/stderr)
-	AddSource bool   `mapstructure:"add_source"`  // include file:line in each log line (slog source)
-	TeeStderr bool   `mapstructure:"tee_stderr"`  // when output is a file, also copy to stderr (usually off so the REPL stays clean)
+	Output    string `mapstructure:"output"`     // stdout | stderr | file path; default resolves to cmd/logs/agent.log
+	Format    string `mapstructure:"format"`     // text | json (file/stdout/stderr)
+	AddSource bool   `mapstructure:"add_source"` // include file:line in each log line (slog source)
+	TeeStderr bool   `mapstructure:"tee_stderr"` // when output is a file, also copy to stderr (usually off so the REPL stays clean)
 }
 
 // LoadConfig loads config from file (YAML). Env vars with AGENT_ prefix override file values.

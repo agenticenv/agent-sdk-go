@@ -281,9 +281,9 @@ func (a *Agent) buildSubAgentRoutes() map[string]types.SubAgentRoute {
 		}
 		name := SubAgentToolName(sub)
 		out[name] = types.SubAgentRoute{
-			Name:            sub.Name,
-			TaskQueue:       tq,
-			ChildRoutes:     sub.buildSubAgentRoutes(),
+			Name:             sub.Name,
+			TaskQueue:        tq,
+			ChildRoutes:      sub.buildSubAgentRoutes(),
 			AgentFingerprint: sub.agentConfigFingerprint(),
 		}
 	}

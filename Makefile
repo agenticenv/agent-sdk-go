@@ -1,4 +1,4 @@
-.PHONY: build install test lint tidy clean
+.PHONY: build install test lint tidy clean fmt fmt-check
 
 BIN_DIR := cmd/bin
 BINARY := $(BIN_DIR)/agentctl
@@ -34,8 +34,25 @@ test-coverage:
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "==> Coverage report: coverage.html"
 
-# Run linters (go vet + golangci-lint; requires golangci-lint: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest)
-lint:
+# Format all Go files (gofmt with simplify; same as Go Report Card / many style checks)
+fmt:
+	@echo "==> gofmt -s -w"
+	gofmt -s -w .
+	@echo "==> Format complete"
+
+# Fail if any .go file needs gofmt -s (run `make fmt` to fix)
+fmt-check:
+	@echo "==> Checking gofmt -s..."
+	@files=$$(gofmt -s -l .); \
+	if [ -n "$$files" ]; then \
+		echo "These files are not gofmt -s formatted. Run: make fmt"; \
+		echo "$$files"; \
+		exit 1; \
+	fi
+	@echo "==> gofmt -s OK"
+
+# Run linters (gofmt -s check, go vet + golangci-lint; requires golangci-lint: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest)
+lint: fmt-check
 	@echo "==> Checking lints (go vet + golangci-lint)..."
 	go vet ./...
 	golangci-lint run ./...
