@@ -10,7 +10,7 @@
 
 > **Note:** Independent community library — **not** affiliated with Temporal Technologies.
 >
-> **Version:** `v0.0.10` — Active development. Follows [semantic versioning](https://semver.org/); API may evolve before v1.0.0.
+> **Versioning:** [Semantic versioning](https://semver.org/); published lines are **git tags** (e.g. `v0.1.0`). See the **[latest release](https://github.com/agenticenv/agent-sdk-go/releases/latest)** — the README does not pin a patch number so it stays accurate after each tag.
 
 ## Overview
 
