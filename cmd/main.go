@@ -22,8 +22,11 @@ import (
 	"github.com/agenticenv/agent-sdk-go/pkg/tools/wikipedia"
 )
 
+// version is set at link time by GoReleaser (release) or Makefile (local build).
+// Plain `go run` / `go build` without -ldflags leaves the default "dev".
+var version = "dev"
+
 const (
-	version    = "1.0.0"
 	exitPrompt = "Type 'exit', 'quit', or 'bye' to end the conversation."
 	convID     = "interactive"
 )

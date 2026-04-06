@@ -10,7 +10,7 @@ Only users with **push access** to the repository can create tags and trigger re
 
 1. **You create and push a tag** (e.g. `v0.0.1`, `v1.0.0`, `v2.0.3`)
 2. **GitHub Actions runs** the Release workflow via [GoReleaser](https://goreleaser.com)
-3. **Builds** `agentctl` for Linux, macOS, and Windows (amd64 and arm64 where supported)
+3. **Builds** `agentctl` for Linux, macOS, and Windows (amd64 and arm64 where supported), embedding **`agentctl -version`** as the git tag (`ldflags -X main.version={{.Tag}}` in `.goreleaser.yaml`)
 4. **Creates a GitHub Release** with archives (tar.gz / zip) and a checksums file
 
 ## Checklist before tagging
@@ -72,6 +72,7 @@ Use `goreleaser check` to validate the config.
 
 ## Notes
 
+- **[SECURITY.md](SECURITY.md)** describes supported versions in policy terms (latest release + `main`); it does **not** list a fixed version number, so you do not need to edit it when cutting a release.
 - **Tag = release.** Pushing a tag immediately triggers the build and creates the release. Double-check the version before pushing.
 - **Tags are immutable.** If you push `v0.0.1` by mistake, you must create a new tag (e.g. `v0.0.2`) — you cannot change or delete the release tag easily.
 - **Go modules:** The tag becomes the module version for `go get github.com/agenticenv/agent-sdk-go@v1.0.0`.

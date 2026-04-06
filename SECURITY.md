@@ -2,9 +2,12 @@
 
 ## Supported Versions
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 1.0.0   | :white_check_mark: |
+Security fixes are applied to the **default branch** (`main`) and released as **semver tags** (`vMAJOR.MINOR.PATCH`). Treat the **[latest GitHub release](https://github.com/agenticenv/agent-sdk-go/releases/latest)** as the current supported line.
+
+- **Latest release:** full support (including security fixes).
+- **Older tags:** we do not guarantee long-term support for every past version; upgrade to the latest release when possible.
+
+Maintainers document breaking changes in release notes. See [RELEASING.md](RELEASING.md) for how versions are cut.
 
 ## Reporting a Vulnerability
 

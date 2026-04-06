@@ -9,6 +9,9 @@ builds:
   - id: agentctl
     main: ./cmd
     binary: agentctl
+    ldflags:
+      - -s -w
+      - -X=main.version={{.Tag}}
     goos:
       - linux
       - darwin

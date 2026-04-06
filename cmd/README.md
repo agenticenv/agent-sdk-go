@@ -64,7 +64,13 @@ make build
 ./cmd/bin/agentctl
 ```
 
-Or build manually: `go build -o cmd/bin/agentctl ./cmd`
+Or build manually with an embedded version (matches `make build`, which uses `git describe`):
+
+```bash
+go build -ldflags "-X main.version=$(git describe --tags --always --dirty 2>/dev/null || echo dev)" -o cmd/bin/agentctl ./cmd
+```
+
+A plain `go build ./cmd` leaves the version as `dev` until you pass `-ldflags`. **Release binaries** from GitHub get the tag via GoReleaser (see `.goreleaser.yaml`, `-X main.version=<git tag>`).
 
 The `cmd/bin/` directory is gitignored.
 

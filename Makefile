@@ -3,12 +3,15 @@
 BIN_DIR := cmd/bin
 BINARY := $(BIN_DIR)/agentctl
 GOPATH_BIN := $(shell go env GOPATH)/bin
+# Embedded in agentctl -version (git describe, or "dev" outside a repo)
+VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS := -ldflags "-X main.version=$(VERSION)"
 
 # Build the cmd binary into cmd/bin
 build:
 	@echo "==> Building..."
 	@mkdir -p $(BIN_DIR)
-	go build -o $(BINARY) ./cmd
+	go build $(LDFLAGS) -o $(BINARY) ./cmd
 	@echo "==> Build complete: $(BINARY)"
 
 # Install agentctl to $(GOPATH)/bin (run agentctl from anywhere if that dir is in PATH)
