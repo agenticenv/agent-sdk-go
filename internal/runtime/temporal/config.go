@@ -176,7 +176,7 @@ func newTemporalClient(config *TemporalConfig, sdkLog logger.Logger) (client.Cli
 		select {
 		case <-timeoutExceeded:
 			if !clientReady {
-				return nil, fmt.Errorf("temporal conneciton failed after %v timeout", connectionTimeout)
+				return nil, fmt.Errorf("temporal connection failed after %v timeout", connectionTimeout)
 			} else {
 				c.Close()
 				return nil, fmt.Errorf("temporal namespace check failed after %v timeout", connectionTimeout)

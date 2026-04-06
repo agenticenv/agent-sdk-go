@@ -12,6 +12,7 @@ Before contributing, ensure you have:
 | **Temporal server** | Required for running examples and integration-style tests |
 | **golangci-lint** | Required for `make lint` — install: `go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest` |
 | **gofmt** | `make lint` runs `gofmt -s` check first; run `make fmt` to apply `gofmt -s -w` project-wide |
+| **misspell** | `make spell` or `make lint` — typos via `misspell` (similar to Go Report Card) |
 
 ## Temporal Service Setup
 

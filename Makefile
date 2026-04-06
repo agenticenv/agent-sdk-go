@@ -1,4 +1,4 @@
-.PHONY: build install test lint tidy clean fmt fmt-check
+.PHONY: build install test lint tidy clean fmt fmt-check spell
 
 BIN_DIR := cmd/bin
 BINARY := $(BIN_DIR)/agentctl
@@ -51,8 +51,13 @@ fmt-check:
 	fi
 	@echo "==> gofmt -s OK"
 
-# Run linters (gofmt -s check, go vet + golangci-lint; requires golangci-lint: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest)
-lint: fmt-check
+# Typos in source (same family of checks as Go Report Card "misspell"; no extra install — uses go run)
+spell:
+	@echo "==> misspell"
+	go run github.com/client9/misspell/cmd/misspell@latest -error .
+
+# Run linters (gofmt -s, misspell, go vet + golangci-lint; requires golangci-lint: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest)
+lint: fmt-check spell
 	@echo "==> Checking lints (go vet + golangci-lint)..."
 	go vet ./...
 	golangci-lint run ./...
