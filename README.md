@@ -14,6 +14,8 @@
 
 ## Overview
 
+Most agent frameworks run in-process — if your server restarts, the agent run is lost. agent-sdk-go is Temporal-first, so every agent run is a durable workflow.
+
 **A Go SDK for production AI agents**—tools, human-in-the-loop approvals, and delegation to specialists—without anchoring a long run in a fragile “LLM in a loop” process. Agent work is **orchestrated as durable execution**: runs outlast crashes and deploys, respect timeouts and retries, and stay observable as first-class operations. Durable orchestration here is **[Temporal](https://temporal.io)** workflows and activities only—there is no separate agent execution path that bypasses Temporal.
 
 **How it fits together:** **`pkg/agent`** (`Run`, `Stream`, `RunAsync`) maps to Temporal: each agent run uses durable **workflows** and **activities**. Connect **`NewAgent`** with **`WithTemporalConfig`** or **`WithTemporalClient`** to your cluster ([self-hosted](https://docs.temporal.io/self-hosted-guide) or [Cloud](https://temporal.io/cloud)). **[Getting Started](#getting-started)** and **[Temporal connection](#temporal-connection)** walk through setup; **[Temporal Runtime](#temporal-runtime)** goes deeper on workers, task queues, and delegation.
