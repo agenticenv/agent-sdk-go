@@ -430,6 +430,9 @@ func (rt *TemporalRuntime) ExecuteStream(ctx context.Context, req *runtime.Execu
 	streamStarted = true
 	outCh := make(chan *types.AgentEvent, 64)
 	wfErrCh := make(chan error, 1)
+	// Buffered so workflowRun.Get can signal completion without blocking before getWG.Done (avoids
+	// deadlock with the forwarding goroutine blocked on getWG.Wait after a streamed root complete).
+	workflowDoneCh := make(chan *types.AgentResponse, 1)
 	var getWG sync.WaitGroup
 	getWG.Add(1)
 	go func() {
@@ -438,19 +441,29 @@ func (rt *TemporalRuntime) ExecuteStream(ctx context.Context, req *runtime.Execu
 		// can finish (after root complete, work remains: e.g. SendAgentEventUpdateActivity—longer
 		// when a sub-agent child workflow just ran).
 		defer cleanup()
-		defer func() {
+		var response *types.AgentResponse
+		if err := workflowRun.Get(runCtx, &response); err != nil {
+			// Cancel the run timeout context on failure so the event loop and subscriber unwind.
 			if runCancel != nil {
 				runCancel()
 			}
-		}()
-		var response *types.AgentResponse
-		if err := workflowRun.Get(runCtx, &response); err != nil {
 			wfErrCh <- err
+			return
+		}
+		// On success, do not cancel runCtx here. Get can return before AgentEventComplete is
+		// delivered (async pipeline: UpdateWorkflow → event workflow → publish activity → inmem).
+		// Cancelling immediately races with the forwarding goroutine and produces a spurious
+		// "request timed out" AgentEventError. The loop cancels after it forwards root complete.
+		// Non-blocking: if the buffer is full the forward goroutine already consumed the signal.
+		select {
+		case workflowDoneCh <- response:
+		default:
 		}
 	}()
 	go func() {
 		defer close(outCh)
 		defer func() { _ = closeEvent() }()
+		rootName := agentNameFromExecuteRequest(req)
 		for {
 			select {
 			case <-runCtx.Done():
@@ -473,6 +486,14 @@ func (rt *TemporalRuntime) ExecuteStream(ctx context.Context, req *runtime.Execu
 					Timestamp: time.Now(),
 				}
 				return
+			case resp := <-workflowDoneCh:
+				// workflowRun.Get returned: publish complete from the durable result immediately.
+				// Do not wait on further eventCh reads (avoids hanging; streaming tail may be skipped).
+				outCh <- syntheticStreamCompleteEvent(resp, rootName)
+				if runCancel != nil {
+					runCancel()
+				}
+				return
 			case ev, ok := <-eventCh:
 				if !ok {
 					return
@@ -481,11 +502,14 @@ func (rt *TemporalRuntime) ExecuteStream(ctx context.Context, req *runtime.Execu
 					continue
 				}
 				outCh <- ev
-				if streamCompleteEndsRun(ev, agentNameFromExecuteRequest(req)) {
+				if streamCompleteEndsRun(ev, rootName) {
 					// Root complete is emitted before the workflow returns; after sub-agent delegation
 					// there is often more server-side work. Wait for Get+cleanup so the run reaches
 					// Completed before we close the channel (avoids Close() terminating a live run).
 					getWG.Wait()
+					if runCancel != nil {
+						runCancel()
+					}
 					return
 				}
 			}
@@ -595,6 +619,27 @@ func (rt *TemporalRuntime) createEventWorker() {
 	w.RegisterActivityWithOptions(rt.EventPublishActivity, activity.RegisterOptions{Name: "EventPublishActivity"})
 	rt.eventWorker = w
 	go func() { _ = rt.eventWorker.Start() }()
+}
+
+// syntheticStreamCompleteEvent builds a root AgentEventComplete from workflow.Get. ExecuteStream
+// sends this as soon as Get returns so the client is not blocked on the async event pipeline.
+func syntheticStreamCompleteEvent(resp *types.AgentResponse, rootName string) *types.AgentEvent {
+	ev := &types.AgentEvent{
+		Type:      types.AgentEventComplete,
+		Timestamp: time.Now(),
+	}
+	if resp != nil {
+		ev.Content = resp.Content
+		ev.Usage = resp.Usage
+		if strings.TrimSpace(resp.AgentName) != "" {
+			ev.AgentName = strings.TrimSpace(resp.AgentName)
+		} else if strings.TrimSpace(rootName) != "" {
+			ev.AgentName = strings.TrimSpace(rootName)
+		}
+	} else if strings.TrimSpace(rootName) != "" {
+		ev.AgentName = strings.TrimSpace(rootName)
+	}
+	return ev
 }
 
 // streamCompleteEndsRun is true when this complete event should end ExecuteStream for the root agent.

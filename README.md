@@ -14,24 +14,26 @@
 
 ## Overview
 
-Most agent frameworks run in-process — if your server restarts, the agent run is lost. agent-sdk-go is Temporal-first, so every agent run is a durable workflow.
+**agent-sdk-go** is a Go SDK for production AI agents — tools, human-in-the-loop approvals, and multi-agent delegation — built on [Temporal](https://temporal.io) durable execution.
 
-**A Go SDK for production AI agents**—tools, human-in-the-loop approvals, and delegation to specialists—without anchoring a long run in a fragile “LLM in a loop” process. Agent work is **orchestrated as durable execution**: runs outlast crashes and deploys, respect timeouts and retries, and stay observable as first-class operations. Durable orchestration here is **[Temporal](https://temporal.io)** workflows and activities only—there is no separate agent execution path that bypasses Temporal.
+Most agent frameworks live and die inside a single process: if your server restarts, the run is lost. Here, every agent run is a Temporal workflow end to end. Runs survive crashes and deploys, respect timeouts and retries, and are observable as real service operations. There is no execution path outside Temporal.
 
-**How it fits together:** **`pkg/agent`** (`Run`, `Stream`, `RunAsync`) maps to Temporal: each agent run uses durable **workflows** and **activities**. Connect **`NewAgent`** with **`WithTemporalConfig`** or **`WithTemporalClient`** to your cluster ([self-hosted](https://docs.temporal.io/self-hosted-guide) or [Cloud](https://temporal.io/cloud)). **[Getting Started](#getting-started)** and **[Temporal connection](#temporal-connection)** walk through setup; **[Temporal Runtime](#temporal-runtime)** goes deeper on workers, task queues, and delegation.
+`pkg/agent` exposes three entry points — `Run`, `Stream`, and `RunAsync` — each mapped directly to a Temporal workflow. Connect via `WithTemporalConfig` or `WithTemporalClient` to your cluster. See [Getting Started](#getting-started) to set up, or [Temporal Runtime](#temporal-runtime) for deeper detail on workers, queues, and streaming.
 
 ## Capabilities
 
-- **LLM** — OpenAI, Anthropic, Gemini (`interfaces.LLMClient`; add your own provider).
-- **Stream** — Partial tokens / events (`Stream` + `WithStream`).
-- **Tools** — Registry + custom `interfaces.Tool`.
-- **Approvals** — Tool and delegation gates (`Run` / `RunAsync` / `Stream` paths).
-- **Sub-agents** — Delegate to specialist agents (`WithSubAgents`).
-- **Scale** — Workers and activities; scale out by adding Temporal workers.
+- **LLM providers** — OpenAI, Anthropic, and Gemini out of the box; bring your own via `interfaces.LLMClient`.
+- **Streaming** — Partial tokens and events via `Stream` and `WithStream`.
+- **Reasoning** — Extended thinking / chain-of-thought where supported (Anthropic, Gemini).
+- **Token usage** — Track input, output, and reasoning token counts per run.
+- **Tools** — Register built-in or custom tools via `interfaces.Tool`.
+- **Human-in-the-loop** — Approval gates on tool calls and delegation across `Run`, `RunAsync`, and `Stream`.
+- **Sub-agents** — Delegate to specialist agents via `WithSubAgents`.
+- **Scale** — Add Temporal workers to scale agent execution horizontally.
 
 ## Temporal Runtime
 
-How **Temporal** powers agents: **`pkg/agent`** drives a **Temporal** client that starts **agent workflows**; **workers** (often `NewAgentWorker`) poll **task queues** and execute workflow and activity code. At a high level:
+**Temporal** powers agents through three moving parts: a **Temporal client** (started by `pkg/agent`) that launches agent workflows, **workers** (typically `NewAgentWorker`) that poll task queues and execute workflow and activity code, and **workflow history** that makes each run durable. Workers are stateless — they replay and advance history, not hold state themselves.
 
 - **Workflows** — Durable, **replay-safe** orchestration: the agent “loop” (model rounds, tool routing, when to delegate). Workflow code must stay deterministic; long work happens in activities.
 - **Activities** — **LLM calls**, **tool** execution, **conversation** updates, approval steps—side effects and I/O. Retries, timeouts, and failure handling apply here.
@@ -53,6 +55,16 @@ graph TD
 ```
 
 Details: [Temporal connection](#temporal-connection), [Sub-agents](#sub-agents), [Agent and worker in separate processes](#agent-and-worker-in-separate-processes).
+
+### Streaming and approvals
+
+Stream events and approval events cross two boundaries: **Temporal** (durable workflow) and **your** hosts and subscribers. The guarantees differ on each side. These constraints matter most in interactive, user-facing scenarios — autonomous backend agents are largely unaffected since they do not depend on live event delivery.
+
+- **Agent runs are durable.** After a worker restart or deploy, the run resumes from recorded progress in Temporal. You do not need a single process alive for the entire run.
+- **Live stream is not backfilled.** Incremental stream traffic — tokens, tool updates — is delivered as produced. If your client was disconnected, you may miss chunks even though the agent completed successfully in Temporal.
+- **Approvals degrade gracefully.** If an approval event cannot be delivered, the run continues rather than hanging — the tool is skipped with a clear message. This is intentional for autonomous backend execution; for interactive scenarios, design your UX so users are not silently blocked.
+- **Your responsibility.** Keep worker processes supervised and restarting on crash, maintain a stable connection to your Temporal cluster, and ensure stream subscribers can reconnect.
+- **Client reconnection and UX.** For interactive apps, if the process serving `Stream` crashes, the workflow continues in Temporal but your client loses the connection. Once a stream is lost, reconnecting to that specific run is not supported — the recommended approach is to block the user from sending a new prompt until the current one completes, then fetch the final response and display it. This keeps conversation turns sequential and avoids out-of-order state. For autonomous agents, this is a non-issue since the caller waits for completion and the workflow finishes regardless.
 
 ## Reference apps
 
@@ -177,7 +189,7 @@ Other providers: implement [`interfaces.LLMClient`](pkg/interfaces/llm.go) (`Gen
 
 ### Stream events (Stream)
 
-`Stream` returns a channel of `AgentEvent`. Use `agent.WithStream(true)` for partial tokens as they arrive.
+`Stream` returns a channel of `AgentEvent`. Use `agent.WithStream(true)` for partial tokens as they arrive. For how **Temporal** durability relates to **live** events (restarts, approvals), see **[Streaming and approvals](#streaming-and-approvals)** under **[Temporal Runtime](#temporal-runtime)**.
 
 ```go
 a, _ := agent.NewAgent(

@@ -16,7 +16,8 @@ var (
 	agentEventChannelPrefix = "agent_event_"
 
 	agentEventActivityTaskTimeout time.Duration = 2 * time.Minute
-	agentEventActivityMaxAttempts int32         = 3
+	// Single attempt: dead inmem / subscriber does not recover with retries; avoids long backoff when the agent process is gone.
+	agentEventActivityMaxAttempts int32 = 1
 
 	agentEventName              = "agent-event"
 	eventWorkflowCompleteSignal = "complete" // received when agent Close is called
@@ -60,6 +61,8 @@ func (rt *TemporalRuntime) AgentEventWorkflow(ctx workflow.Context) error {
 
 	eventCh := workflow.NewChannel(ctx)
 
+	// Handler only hands off to eventCh; it does not wait for EventPublishActivity. Client WaitForStage (Accepted vs Completed)
+	// applies when this handler returns, not when inmem publish succeeds (that runs in the goroutine below).
 	err := workflow.SetUpdateHandlerWithOptions(ctx, agentEventName, func(ctx workflow.Context, upd *AgentEventUpdate) error {
 		noOfEvents++
 		evTypeStr := ""

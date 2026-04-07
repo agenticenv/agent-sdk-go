@@ -1,4 +1,4 @@
-.PHONY: build install test lint tidy clean fmt fmt-check spell secrets-scan
+.PHONY: build install test lint tidy clean fmt fmt-check spell secrets-scan check
 
 BIN_DIR := cmd/bin
 BINARY := $(BIN_DIR)/agentctl
@@ -26,6 +26,10 @@ test:
 	go test ./pkg/... -count=1
 	go test ./internal/... -count=1
 	@echo "==> Tests complete"
+
+# Full gate: format, then tests + fmt-check + spell + go vet + golangci-lint + secrets-scan (lint runs fmt-check and spell)
+check: fmt test lint secrets-scan
+	@echo "==> All checks passed"
 
 # Run tests with coverage
 test-coverage:

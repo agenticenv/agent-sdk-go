@@ -15,6 +15,8 @@ const (
 	ApprovalStatusPending  ApprovalStatus = "PENDING"
 	ApprovalStatusApproved ApprovalStatus = "APPROVED"
 	ApprovalStatusRejected ApprovalStatus = "REJECTED"
+	// ApprovalStatusUnavailable means the approval request could not be delivered (e.g. event stream down). It is not a user rejection.
+	ApprovalStatusUnavailable ApprovalStatus = "UNAVAILABLE"
 )
 
 // ApprovalSender sends an approval result. Call once per request. Safe for concurrent use—

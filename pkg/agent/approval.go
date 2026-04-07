@@ -9,10 +9,11 @@ import (
 type ApprovalStatus = types.ApprovalStatus
 
 const (
-	ApprovalStatusNone     ApprovalStatus = types.ApprovalStatusNone
-	ApprovalStatusPending  ApprovalStatus = types.ApprovalStatusPending
-	ApprovalStatusApproved ApprovalStatus = types.ApprovalStatusApproved
-	ApprovalStatusRejected ApprovalStatus = types.ApprovalStatusRejected
+	ApprovalStatusNone        ApprovalStatus = types.ApprovalStatusNone
+	ApprovalStatusPending     ApprovalStatus = types.ApprovalStatusPending
+	ApprovalStatusApproved    ApprovalStatus = types.ApprovalStatusApproved
+	ApprovalStatusRejected    ApprovalStatus = types.ApprovalStatusRejected
+	ApprovalStatusUnavailable ApprovalStatus = types.ApprovalStatusUnavailable
 )
 
 // ApprovalSender sends an approval result for the current run. Call once per request. Safe for concurrent use—
