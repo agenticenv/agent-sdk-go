@@ -1,4 +1,4 @@
-.PHONY: build install test lint tidy clean fmt fmt-check spell
+.PHONY: build install test lint tidy clean fmt fmt-check spell secrets-scan
 
 BIN_DIR := cmd/bin
 BINARY := $(BIN_DIR)/agentctl
@@ -6,6 +6,18 @@ GOPATH_BIN := $(shell go env GOPATH)/bin
 # Embedded in agentctl -version (git describe, or "dev" outside a repo)
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -ldflags "-X main.version=$(VERSION)"
+
+# Scan tracked files for leaked secrets (install: https://github.com/gitleaks/gitleaks#installing)
+secrets-scan:
+	@echo "==> gitleaks detect"
+	@if command -v gitleaks >/dev/null 2>&1; then \
+		gitleaks detect --source . --verbose --redact; \
+	elif command -v docker >/dev/null 2>&1; then \
+		docker run --rm -v "$$(pwd):/repo" -w /repo zricethezav/gitleaks:latest detect --source=/repo --verbose --redact; \
+	else \
+		echo "Install gitleaks or Docker."; \
+		exit 1; \
+	fi
 
 # Build the cmd binary into cmd/bin
 build:
