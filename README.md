@@ -54,6 +54,12 @@ graph TD
 
 Details: [Temporal connection](#temporal-connection), [Sub-agents](#sub-agents), [Agent and worker in separate processes](#agent-and-worker-in-separate-processes).
 
+## Reference apps
+
+Demo applications that use **agent-sdk-go** end-to-end. More may be added over time (e.g. web apps, autonomous agents, other integration patterns).
+
+- **[Agent Chat](https://github.com/agenticenv/agent-chat)** — Web chat demo with durable conversations; a good reference for wiring the SDK into an HTTP-backed app.
+
 ## Getting Started
 
 How to **use** the SDK—agents, LLMs, Temporal connection, examples.
