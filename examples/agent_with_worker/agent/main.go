@@ -55,7 +55,7 @@ func main() {
 	fmt.Println("=== agent_with_worker interactive stream ===")
 	fmt.Println("Events arrive via the event workflow (UpdateWorkflow path).")
 	fmt.Println("Simulate scenarios: kill the worker or this process mid-run, then restart.")
-	fmt.Println("Type 'exit' or 'quit' to stop.")
+	fmt.Println("Type 'exit' or 'quit' or 'bye' to stop.")
 	fmt.Println()
 
 	scanner := bufio.NewScanner(os.Stdin)
@@ -75,8 +75,8 @@ func main() {
 		if line == "" {
 			continue
 		}
-		if line == "exit" || line == "quit" {
-			fmt.Println("bye.")
+		if line == "exit" || line == "quit" || line == "bye" {
+			fmt.Println("Goodbye!")
 			break
 		}
 

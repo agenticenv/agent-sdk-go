@@ -20,7 +20,8 @@ func Common(
 	l logger.Logger,
 ) []agent.Option {
 	return []agent.Option{
-		agent.WithName("agent-worker"),
+		// Display name may include spaces; Temporal run/event workflow IDs sanitize it for ID-safe segments.
+		agent.WithName("Remote worker"),
 		agent.WithDescription("Agent with remote worker - client and worker run in separate processes"),
 		agent.WithSystemPrompt("You are a helpful assistant."),
 		agent.WithTemporalConfig(&agent.TemporalConfig{
