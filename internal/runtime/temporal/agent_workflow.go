@@ -66,10 +66,10 @@ func (rt *TemporalRuntime) sendAgentEventWorkflowUpdate(ctx context.Context, eve
 
 	startOp := rt.temporalClient.NewWithStartWorkflowOperation(
 		client.StartWorkflowOptions{
-			ID:                        eventWorkflowID,
-			TaskQueue:                 eventTaskQueue,
-			WorkflowIDConflictPolicy:  enumspb.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING,
-			WorkflowIDReusePolicy:     enumspb.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE,
+			ID:                       eventWorkflowID,
+			TaskQueue:                eventTaskQueue,
+			WorkflowIDConflictPolicy: enumspb.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING,
+			WorkflowIDReusePolicy:    enumspb.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE,
 		},
 		rt.AgentEventWorkflow,
 	)
@@ -170,8 +170,8 @@ type AgentToolApprovalInput struct {
 
 // SendAgentEventActivityInput is the payload for SendAgentEventUpdateActivity (workflow + activity).
 type SendAgentEventActivityInput struct {
-	EventWorkflowID string           `json:"event_workflow_id,omitempty"`
-	EventTaskQueue  string           `json:"event_task_queue,omitempty"`
+	EventWorkflowID string            `json:"event_workflow_id,omitempty"`
+	EventTaskQueue  string            `json:"event_task_queue,omitempty"`
 	Update          *AgentEventUpdate `json:"update"`
 }
 
@@ -286,8 +286,8 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 		var res SendAgentEventResult
 		actIn := SendAgentEventActivityInput{
 			EventWorkflowID: eventWorkflowID,
-			EventTaskQueue:    eventTaskQueue,
-			Update:            upd,
+			EventTaskQueue:  eventTaskQueue,
+			Update:          upd,
 		}
 		if err := workflow.ExecuteActivity(sendEventCtx, rt.SendAgentEventUpdateActivity, actIn).Get(ctx, &res); err != nil {
 			return err
