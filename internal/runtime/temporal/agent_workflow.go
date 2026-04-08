@@ -55,18 +55,32 @@ type SendAgentEventResult struct {
 	StreamUnavailable bool `json:"stream_unavailable,omitempty"`
 }
 
-// sendAgentEventWorkflowUpdate sends one update to AgentEventWorkflow with a bounded RPC deadline.
+// sendAgentEventWorkflowUpdate sends one update to AgentEventWorkflow using UpdateWithStartWorkflow so the
+// event workflow is started lazily on first use (no separate ExecuteWorkflow). USE_EXISTING applies the update
+// when a run is already active. Bounded RPC deadline; errors are mapped to soft failure by callers.
 // Use WorkflowUpdateStageAccepted for token traffic; WorkflowUpdateStageCompleted for approval so the handler
-// has returned before AgentToolApprovalActivity blocks on ErrResultPending. Errors (including deadline) are
-// mapped to soft failure by callers — Temporal may still apply the update later if the client timed out.
-func (rt *TemporalRuntime) sendAgentEventWorkflowUpdate(ctx context.Context, eventWorkflowID string, upd *AgentEventUpdate, stage client.WorkflowUpdateStage, rpcTimeout time.Duration) error {
+// has returned before AgentToolApprovalActivity blocks on ErrResultPending.
+func (rt *TemporalRuntime) sendAgentEventWorkflowUpdate(ctx context.Context, eventWorkflowID, eventTaskQueue string, upd *AgentEventUpdate, stage client.WorkflowUpdateStage, rpcTimeout time.Duration) error {
 	rpcCtx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
-	_, err := rt.temporalClient.UpdateWorkflow(rpcCtx, client.UpdateWorkflowOptions{
-		WorkflowID:   eventWorkflowID,
-		UpdateName:   agentEventName,
-		Args:         []interface{}{upd},
-		WaitForStage: stage,
+
+	startOp := rt.temporalClient.NewWithStartWorkflowOperation(
+		client.StartWorkflowOptions{
+			ID:                        eventWorkflowID,
+			TaskQueue:                 eventTaskQueue,
+			WorkflowIDConflictPolicy:  enumspb.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING,
+			WorkflowIDReusePolicy:     enumspb.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE,
+		},
+		rt.AgentEventWorkflow,
+	)
+	_, err := rt.temporalClient.UpdateWithStartWorkflow(rpcCtx, client.UpdateWithStartWorkflowOptions{
+		StartWorkflowOperation: startOp,
+		UpdateOptions: client.UpdateWorkflowOptions{
+			WorkflowID:   eventWorkflowID,
+			UpdateName:   agentEventName,
+			Args:         []interface{}{upd},
+			WaitForStage: stage,
+		},
 	})
 	return err
 }
@@ -79,11 +93,14 @@ func (rt *TemporalRuntime) sendAgentEventWorkflowUpdate(ctx context.Context, eve
 // LocalChannelName is the in-process pub/sub channel name used for in-memory event fan-in across the
 // delegation tree. Set once at the top level (agent_event_<main-workflow-id>) and propagated unchanged
 // to all sub-agents. Contrast with EventWorkflowID which is used for out-of-process (remote) routing.
+// EventTaskQueue is the Temporal task queue for AgentEventWorkflow (e.g. main TaskQueue + "-events"); required
+// for UpdateWithStartWorkflow when EventWorkflowID is set.
 // EventTypes is set by the SDK; a single "*" element means emit all event kinds (used for Stream).
 // AgentFingerprint is the SHA-256 hex digest of the worker-local agent config; activities reject on mismatch.
 type AgentWorkflowInput struct {
 	UserPrompt       string                         `json:"user_prompt,omitempty"`
 	EventWorkflowID  string                         `json:"event_workflow_id,omitempty"`
+	EventTaskQueue   string                         `json:"event_task_queue,omitempty"`
 	LocalChannelName string                         `json:"local_channel_name,omitempty"`
 	StreamingEnabled bool                           `json:"streaming_enabled,omitempty"`
 	ConversationID   string                         `json:"conversation_id,omitempty"`
@@ -109,6 +126,7 @@ type AgentLLMStreamInput struct {
 	ConversationID   string               `json:"conversation_id,omitempty"`
 	Messages         []interfaces.Message `json:"messages,omitempty"`
 	EventWorkflowID  string               `json:"event_workflow_id,omitempty"`
+	EventTaskQueue   string               `json:"event_task_queue,omitempty"`
 	LocalChannelName string               `json:"local_channel_name,omitempty"`
 	SkipTools        bool                 `json:"skip_tools,omitempty"`
 	AgentFingerprint string               `json:"agent_fingerprint,omitempty"`
@@ -144,9 +162,17 @@ type AgentToolApprovalInput struct {
 	Args             map[string]any `json:"args"`
 	ToolCallID       string         `json:"tool_call_id"`
 	EventWorkflowID  string         `json:"event_workflow_id"`
+	EventTaskQueue   string         `json:"event_task_queue,omitempty"`
 	LocalChannelName string         `json:"local_channel_name,omitempty"`
 	SubAgentName     string         `json:"sub_agent_name,omitempty"`
 	AgentFingerprint string         `json:"agent_fingerprint,omitempty"`
+}
+
+// SendAgentEventActivityInput is the payload for SendAgentEventUpdateActivity (workflow + activity).
+type SendAgentEventActivityInput struct {
+	EventWorkflowID string           `json:"event_workflow_id,omitempty"`
+	EventTaskQueue  string           `json:"event_task_queue,omitempty"`
+	Update          *AgentEventUpdate `json:"update"`
 }
 
 // AddConversationMessagesInput is the input to AddConversationMessagesActivity.
@@ -169,6 +195,7 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 			"subAgentDepth", input.SubAgentDepth)
 	}
 	eventWorkflowID := input.EventWorkflowID
+	eventTaskQueue := input.EventTaskQueue
 	agentName := rt.AgentSpec.Name
 
 	maxIter := rt.AgentExecution.Limits.MaxIterations
@@ -257,7 +284,12 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 			Event:            ev,
 		}
 		var res SendAgentEventResult
-		if err := workflow.ExecuteActivity(sendEventCtx, rt.SendAgentEventUpdateActivity, eventWorkflowID, upd).Get(ctx, &res); err != nil {
+		actIn := SendAgentEventActivityInput{
+			EventWorkflowID: eventWorkflowID,
+			EventTaskQueue:    eventTaskQueue,
+			Update:            upd,
+		}
+		if err := workflow.ExecuteActivity(sendEventCtx, rt.SendAgentEventUpdateActivity, actIn).Get(ctx, &res); err != nil {
 			return err
 		}
 		if res.StreamUnavailable {
@@ -286,6 +318,7 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 			ConversationID:   input.ConversationID,
 			Messages:         messages,
 			EventWorkflowID:  eventWorkflowID,
+			EventTaskQueue:   eventTaskQueue,
 			LocalChannelName: input.LocalChannelName,
 			AgentFingerprint: input.AgentFingerprint,
 		}
@@ -388,6 +421,7 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 						ToolName:         tc.ToolName,
 						Args:             tc.Args,
 						EventWorkflowID:  eventWorkflowID,
+						EventTaskQueue:   eventTaskQueue,
 						LocalChannelName: input.LocalChannelName,
 						AgentFingerprint: input.AgentFingerprint,
 					}
@@ -552,7 +586,7 @@ func (rt *TemporalRuntime) AgentLLMStreamActivity(ctx context.Context, input Age
 		}
 		if input.EventWorkflowID != "" {
 			// Best-effort: same deadline semantics as SendAgentEventUpdateActivity (event worker down / slow).
-			_ = rt.sendAgentEventWorkflowUpdate(ctx, input.EventWorkflowID, upd, client.WorkflowUpdateStageAccepted, updateWorkflowEventRPCTimeout)
+			_ = rt.sendAgentEventWorkflowUpdate(ctx, input.EventWorkflowID, input.EventTaskQueue, upd, client.WorkflowUpdateStageAccepted, updateWorkflowEventRPCTimeout)
 		} else if rt.eventbus != nil {
 			data, _ := json.Marshal(ev)
 			_ = rt.eventbus.Publish(ctx, input.LocalChannelName, data)
@@ -729,7 +763,7 @@ func (rt *TemporalRuntime) AgentToolApprovalActivity(ctx context.Context, input 
 			LocalChannelName: input.LocalChannelName,
 			Event:            ev,
 		}
-		if err := rt.sendAgentEventWorkflowUpdate(ctx, input.EventWorkflowID, upd, client.WorkflowUpdateStageCompleted, updateWorkflowApprovalRPCTimeout); err != nil {
+		if err := rt.sendAgentEventWorkflowUpdate(ctx, input.EventWorkflowID, input.EventTaskQueue, upd, client.WorkflowUpdateStageCompleted, updateWorkflowApprovalRPCTimeout); err != nil {
 			return types.ApprovalStatusUnavailable, nil
 		}
 		logger.Debug("activity: approval sent to event pipeline", "scope", "activity", "eventPipelineID", input.EventWorkflowID, "tool", input.ToolName)
@@ -750,14 +784,13 @@ func (rt *TemporalRuntime) AgentToolApprovalActivity(ctx context.Context, input 
 	return types.ApprovalStatusPending, activity.ErrResultPending
 }
 
-// SendAgentEventUpdateActivity sends event: via event workflow when eventWorkflowID is set; else in-memory agentChannel.
-// Event pipeline path uses UpdateWorkflow with WorkflowUpdateStageAccepted and updateWorkflowEventRPCTimeout so a dead
-// event worker does not block until sendEventActivityTaskTimeout.
+// SendAgentEventUpdateActivity sends event: via UpdateWithStartWorkflow when eventWorkflowID is set; else in-memory agentChannel.
 // Returns StreamUnavailable without error when delivery fails but the workflow should continue (dead stream / pipeline).
 // Returns a non-nil error for configuration or internal failures (fatal to the workflow).
-func (rt *TemporalRuntime) SendAgentEventUpdateActivity(ctx context.Context, eventWorkflowID string, upd *AgentEventUpdate) (SendAgentEventResult, error) {
+func (rt *TemporalRuntime) SendAgentEventUpdateActivity(ctx context.Context, in SendAgentEventActivityInput) (SendAgentEventResult, error) {
 	logger := activity.GetLogger(ctx)
-	logger.Debug("activity: send event update started", "scope", "activity", "eventPipelineID", eventWorkflowID)
+	upd := in.Update
+	logger.Debug("activity: send event update started", "scope", "activity", "eventPipelineID", in.EventWorkflowID)
 
 	if upd == nil || upd.Event == nil {
 		return SendAgentEventResult{}, nil
@@ -768,11 +801,11 @@ func (rt *TemporalRuntime) SendAgentEventUpdateActivity(ctx context.Context, eve
 	}
 
 	// Route via event workflow when eventWorkflowID is set (TemporalRuntime.enableRemoteWorkers)
-	if eventWorkflowID != "" {
-		if err := rt.sendAgentEventWorkflowUpdate(ctx, eventWorkflowID, upd, client.WorkflowUpdateStageAccepted, updateWorkflowEventRPCTimeout); err != nil {
+	if in.EventWorkflowID != "" {
+		if err := rt.sendAgentEventWorkflowUpdate(ctx, in.EventWorkflowID, in.EventTaskQueue, upd, client.WorkflowUpdateStageAccepted, updateWorkflowEventRPCTimeout); err != nil {
 			return SendAgentEventResult{StreamUnavailable: true}, nil
 		}
-		logger.Debug("activity: event sent to pipeline", "scope", "activity", "eventPipelineID", eventWorkflowID, "agent", upd.AgentName)
+		logger.Debug("activity: event sent to pipeline", "scope", "activity", "eventPipelineID", in.EventWorkflowID, "agent", upd.AgentName)
 	} else {
 		if rt.eventbus == nil {
 			return SendAgentEventResult{}, fmt.Errorf("agentChannel required when eventWorkflowID is empty")
@@ -868,6 +901,7 @@ func (rt *TemporalRuntime) delegateToSubAgent(ctx workflow.Context, input AgentW
 	childInput := AgentWorkflowInput{
 		UserPrompt:       query,
 		EventWorkflowID:  input.EventWorkflowID,
+		EventTaskQueue:   input.EventTaskQueue,
 		LocalChannelName: input.LocalChannelName,
 		StreamingEnabled: input.StreamingEnabled,
 		ConversationID:   "",

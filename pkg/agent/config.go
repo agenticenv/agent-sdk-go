@@ -92,7 +92,9 @@ const defaultMaxIterations int = 5
 // Option configures an agent. See agentConfig for which options apply to Agent vs AgentWorker.
 type Option func(*agentConfig)
 
-// WithName sets the agent name. Applies to Agent and AgentWorker.
+// WithName sets the human-readable agent name (any characters; leading/trailing space trimmed on build).
+// It appears in responses and streaming events as-is. Temporal workflow ID segments derived from the name
+// are sanitized separately (spaces and unsafe characters become hyphens); task queue names are not derived from Name.
 func WithName(name string) Option {
 	return func(c *agentConfig) { c.Name = name }
 }

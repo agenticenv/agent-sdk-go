@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/agenticenv/agent-sdk-go/internal/eventbus"
 	sdkruntime "github.com/agenticenv/agent-sdk-go/internal/runtime"
@@ -179,13 +181,52 @@ func TestGetWorkflowID_Format(t *testing.T) {
 	if !strings.HasPrefix(stream, "agent-stream-Helper-") {
 		t.Fatalf("unexpected stream id: %q", stream)
 	}
+	// Spaces/special chars sanitized like event workflow IDs.
+	if got := rt.getWorkflowID("  my agent  ", false); !strings.HasPrefix(got, "agent-run-my-agent-") {
+		t.Fatalf("sanitize run id: %q", got)
+	}
 }
 
 func TestGetEventWorkflowID_Format(t *testing.T) {
 	rt := &TemporalRuntime{}
 	id := rt.getEventWorkflowID("AgentX")
-	if !strings.HasPrefix(id, "agent-event-AgentX-") {
+	if !strings.HasPrefix(id, "agent-event-AgentX-") || len(id) < len("agent-event-AgentX-")+8 {
 		t.Fatalf("unexpected event workflow id: %q", id)
+	}
+	id2 := rt.getEventWorkflowID("AgentX")
+	if id2 != id {
+		t.Fatalf("expected stable id for same runtime+name: %q vs %q", id, id2)
+	}
+	other := (&TemporalRuntime{}).getEventWorkflowID("AgentX")
+	if other == id {
+		t.Fatalf("different TemporalRuntime should not share event workflow id: %q", id)
+	}
+	// Same runtime: sanitized name shares the per-runtime suffix.
+	wantHello := fmt.Sprintf("agent-event-hello-world-%s", rt.eventWorkflowIDSuffix)
+	if got := rt.getEventWorkflowID("  hello world  "); got != wantHello {
+		t.Fatalf("sanitize: got %q want %q", got, wantHello)
+	}
+}
+
+func TestSanitizeTemporalWorkflowIDSegment_maxLength(t *testing.T) {
+	long := strings.Repeat("a", 300)
+	got := sanitizeTemporalWorkflowIDSegment(long)
+	if len(got) != maxAgentNameWorkflowSegmentBytes {
+		t.Fatalf("len=%d want %d", len(got), maxAgentNameWorkflowSegmentBytes)
+	}
+}
+
+func TestTruncateUTF8String(t *testing.T) {
+	// "hello" (5) + U+65E5 日 (3 UTF-8 bytes) = 8 bytes total.
+	s := "hello" + "\u65e5"
+	if truncateUTF8String(s, 8) != s {
+		t.Fatalf("8-byte cap should keep full string")
+	}
+	if got := truncateUTF8String(s, 7); got != "hello" {
+		t.Fatalf("7-byte cap must not split 日; got %q", got)
+	}
+	if !utf8.ValidString(truncateUTF8String(s, 6)) {
+		t.Fatal("result must be valid UTF-8")
 	}
 }
 

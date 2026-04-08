@@ -59,6 +59,7 @@ type Runtime interface {
 // It is attached to [ExecuteRequest.AgentSpec] so custom Runtime implementations can read name, prompts,
 // and response format without importing pkg/agent.
 type AgentSpec struct {
+	// Name is a human-readable label (may include spaces). Runtimes may sanitize it when embedding in workflow IDs.
 	Name           string
 	Description    string
 	SystemPrompt   string

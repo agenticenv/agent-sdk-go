@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/agenticenv/agent-sdk-go/internal/eventbus"
 	"github.com/agenticenv/agent-sdk-go/internal/runtime"
@@ -26,6 +27,10 @@ var _ runtime.Runtime = (*TemporalRuntime)(nil)
 const (
 	// workersCheckTimeout is how long hasWorkers polls for pollers before giving up.
 	workersCheckTimeout = 15 * time.Second
+
+	// maxAgentNameWorkflowSegmentBytes caps the sanitized agent-name segment embedded in Temporal workflow IDs.
+	// Shorter than typical server limits; truncation uses truncateUTF8String to avoid splitting UTF-8 code points.
+	maxAgentNameWorkflowSegmentBytes = 128
 )
 
 // ErrAgentAlreadyRunning is returned when Execute, ExecuteStream, or RunAsync is called while a run is already in progress.
@@ -44,6 +49,10 @@ type TemporalRuntime struct {
 	runMu                 sync.Mutex
 	activeRunWorkflowID   string
 	activeEventWorkflowID string
+	// eventWorkflowIDOnce + suffix make agent-event-<name>-<uuid> unique per TemporalRuntime so
+	// multiple agents in one process do not collide; lazy start still uses the same ID for that runtime.
+	eventWorkflowIDOnce   sync.Once
+	eventWorkflowIDSuffix string
 
 	eventWorker   worker.Worker
 	eventWorkerMu sync.Mutex
@@ -231,7 +240,7 @@ func (rt *TemporalRuntime) Execute(ctx context.Context, req *runtime.ExecuteRequ
 	if rt.enableRemoteWorkers {
 		rt.createEventWorker()
 		var err error
-		wfInput.EventWorkflowID, err = rt.ensureEventWorkflowStarted(runCtx, agentNameFromExecuteRequest(req))
+		wfInput.EventWorkflowID, wfInput.EventTaskQueue, err = rt.resolveEventPipeline(runCtx, agentNameFromExecuteRequest(req))
 		if err != nil {
 			return nil, err
 		}
@@ -357,11 +366,11 @@ func (rt *TemporalRuntime) ExecuteStream(ctx context.Context, req *runtime.Execu
 		}
 	}()
 
-	var eventWorkflowID string
+	var eventWorkflowID, eventTaskQueue string
 	if rt.enableRemoteWorkers {
 		rt.createEventWorker()
 		var err error
-		eventWorkflowID, err = rt.ensureEventWorkflowStarted(ctx, agentNameFromExecuteRequest(req))
+		eventWorkflowID, eventTaskQueue, err = rt.resolveEventPipeline(ctx, agentNameFromExecuteRequest(req))
 		if err != nil {
 			return nil, err
 		}
@@ -374,6 +383,7 @@ func (rt *TemporalRuntime) ExecuteStream(ctx context.Context, req *runtime.Execu
 	wfInput := AgentWorkflowInput{
 		UserPrompt:       req.UserPrompt,
 		EventWorkflowID:  eventWorkflowID,
+		EventTaskQueue:   eventTaskQueue,
 		LocalChannelName: eventChannelName(workflowID),
 		StreamingEnabled: req.StreamingEnabled,
 		ConversationID:   req.ConversationID,
@@ -532,36 +542,21 @@ func (rt *TemporalRuntime) OnApproval(ctx context.Context, approvalToken string,
 	return rt.temporalClient.CompleteActivity(ctx, taskToken, status, nil)
 }
 
-// ensureEventWorkflowStarted starts the event workflow once per agent. Sets activeEventWorkflowID on first call.
-func (rt *TemporalRuntime) ensureEventWorkflowStarted(ctx context.Context, agentName string) (string, error) {
+// resolveEventPipeline returns the deterministic event workflow ID and event task queue when remote
+// workers are enabled. The AgentEventWorkflow is started lazily on the first UpdateWithStart from an activity.
+func (rt *TemporalRuntime) resolveEventPipeline(ctx context.Context, agentName string) (eventWorkflowID string, eventTaskQueue string, err error) {
+	eventWorkflowID = rt.getEventWorkflowID(agentName)
+	eventTaskQueue = getEventTaskQueue(rt.taskQueue)
 	rt.runMu.Lock()
-	id := rt.activeEventWorkflowID
+	if rt.activeEventWorkflowID == "" {
+		rt.activeEventWorkflowID = eventWorkflowID
+		rt.logger.Info(ctx, "runtime event pipeline (lazy start on first update)",
+			slog.String("scope", "runtime"),
+			slog.String("eventWorkflowID", eventWorkflowID),
+			slog.String("eventTaskQueue", eventTaskQueue))
+	}
 	rt.runMu.Unlock()
-	if id != "" {
-		rt.logger.Debug(ctx, "runtime reusing event pipeline", slog.String("scope", "runtime"), slog.String("eventWorkflowID", id))
-		return id, nil
-	}
-	rt.runMu.Lock()
-	defer rt.runMu.Unlock()
-	if rt.activeEventWorkflowID != "" {
-		return rt.activeEventWorkflowID, nil
-	}
-
-	eventWorkflowID := rt.getEventWorkflowID(agentName)
-	rt.logger.Debug(ctx, "runtime starting event pipeline", slog.String("scope", "runtime"), slog.String("eventWorkflowID", eventWorkflowID))
-
-	_, err := rt.temporalClient.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
-		ID:                       eventWorkflowID,
-		TaskQueue:                getEventTaskQueue(rt.taskQueue),
-		WorkflowIDConflictPolicy: enumspb.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING,
-	}, rt.AgentEventWorkflow)
-	if err != nil {
-		rt.logger.Error(ctx, "runtime event pipeline start failed", slog.String("scope", "runtime"), slog.String("eventWorkflowID", eventWorkflowID), slog.Any("error", err))
-		return "", err
-	}
-	rt.activeEventWorkflowID = eventWorkflowID
-	rt.logger.Info(ctx, "runtime event pipeline ready", slog.String("scope", "runtime"), slog.String("eventWorkflowID", eventWorkflowID))
-	return eventWorkflowID, nil
+	return eventWorkflowID, eventTaskQueue, nil
 }
 
 // hasWorkers returns true if there are pollers on the given task queue.
@@ -687,13 +682,55 @@ func (rt *TemporalRuntime) endRun() {
 
 func (rt *TemporalRuntime) getWorkflowID(agentName string, isStream bool) string {
 	id := uuid.New().String()
+	name := sanitizeTemporalWorkflowIDSegment(agentName)
 	if isStream {
-		return fmt.Sprintf("agent-stream-%s-%s", agentName, id)
+		return fmt.Sprintf("agent-stream-%s-%s", name, id)
 	}
-	return fmt.Sprintf("agent-run-%s-%s", agentName, id)
+	return fmt.Sprintf("agent-run-%s-%s", name, id)
 }
 
 func (rt *TemporalRuntime) getEventWorkflowID(agentName string) string {
-	id := uuid.New().String()
-	return fmt.Sprintf("agent-event-%s-%s", agentName, id)
+	rt.eventWorkflowIDOnce.Do(func() {
+		rt.eventWorkflowIDSuffix = uuid.New().String()
+	})
+	return fmt.Sprintf("agent-event-%s-%s", sanitizeTemporalWorkflowIDSegment(agentName), rt.eventWorkflowIDSuffix)
+}
+
+// sanitizeTemporalWorkflowIDSegment maps a human-readable label (e.g. [runtime.AgentSpec] Name) to a safe
+// workflow ID segment: alphanumeric, hyphen, underscore, dot; spaces and other runes become hyphens.
+// The result is capped at [maxAgentNameWorkflowSegmentBytes] using UTF-8-safe truncation.
+func sanitizeTemporalWorkflowIDSegment(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "agent"
+	}
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r == ' ' || r == '\t':
+			b.WriteByte('-')
+		case (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if out == "" {
+		return "agent"
+	}
+	return truncateUTF8String(out, maxAgentNameWorkflowSegmentBytes)
+}
+
+// truncateUTF8String returns s if len(s) <= maxBytes; otherwise returns a prefix of at most maxBytes bytes
+// that is valid UTF-8 (does not split a multibyte code point).
+func truncateUTF8String(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	s = s[:maxBytes]
+	for len(s) > 0 && !utf8.ValidString(s) {
+		s = s[:len(s)-1]
+	}
+	return s
 }
