@@ -14,6 +14,8 @@ import (
 )
 
 //go:generate mockgen -destination=./mocks/mock_runtime.go -package=mocks github.com/agenticenv/agent-sdk-go/internal/runtime Runtime
+//go:generate mockgen -destination=./mocks/mock_worker_runtime.go -package=mocks github.com/agenticenv/agent-sdk-go/internal/runtime WorkerRuntime
+//go:generate mockgen -destination=./mocks/mock_event_bus_runtime.go -package=mocks github.com/agenticenv/agent-sdk-go/internal/runtime EventBusRuntime
 
 // ErrApprovalNotSupported is returned by Runtime.Approve when the runtime does not use token-based approval.
 var ErrApprovalNotSupported = errors.New("runtime: approval not supported")
@@ -42,16 +44,26 @@ type Runtime interface {
 
 	// Close closes the runtime and releases resources.
 	Close()
+}
 
+// WorkerRuntime is [Runtime] plus optional in-process task-queue polling (e.g. Temporal worker).
+// [AgentWorker] and embedded local workers type-assert [Runtime] to WorkerRuntime for Start/Stop;
+// backends that only act as clients implement [Runtime] but not this interface.
+type WorkerRuntime interface {
+	Runtime
 	// Start begins polling; it typically blocks until Stop is called or ctx is cancelled.
 	Start(ctx context.Context) error
-
 	// Stop stops polling and releases worker resources.
 	Stop()
+}
 
-	// SetEventBus sets the event bus for the runtime.
+// EventBusRuntime extends [Runtime] with in-process event bus access for sub-agent delegation and
+// streaming fan-in. SDK backends (e.g. Temporal) implement it; [pkg/agent] asserts to it when wiring
+// the agent tree. Custom [Runtime] implementations need only implement [Runtime] unless they participate
+// in that fan-in.
+type EventBusRuntime interface {
+	Runtime
 	SetEventBus(eventbus eventbus.EventBus)
-	// GetEventBus returns the event bus for the runtime.
 	GetEventBus() eventbus.EventBus
 }
 

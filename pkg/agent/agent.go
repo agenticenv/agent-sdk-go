@@ -57,28 +57,35 @@ func buildAgent(opts []Option) (*Agent, error) {
 		a.localAgentWorker = &AgentWorker{agentConfig: *cfg, runtime: rt}
 	}
 
-	eventbus := a.runtime.GetEventBus()
-	// Sub-agents must share the parent's in-memory pub/sub so Run/Stream subscribers on the main run receive
-	// delegation events and approvals from child runtimes in the same process.
-	for _, sub := range a.subAgents {
-		if sub != nil {
-			wireInMemoryEventChannelToSubAgents(eventbus, sub)
+	// Sub-agents share the parent's in-memory pub/sub when the runtime implements [runtime.EventBusRuntime]
+	// (e.g. Temporal). A custom [runtime.Runtime] from a future WithRuntime need only implement [Runtime];
+	// wiring is skipped when the assert to EventBusRuntime fails.
+	if ir, ok := a.runtime.(runtime.EventBusRuntime); ok {
+		bus := ir.GetEventBus()
+		for _, sub := range a.subAgents {
+			if sub != nil {
+				wireInMemoryEventChannelToSubAgents(bus, sub)
+			}
 		}
 	}
 
 	return a, nil
 }
 
-func wireInMemoryEventChannelToSubAgents(eventbus eventbus.EventBus, agent *Agent) {
-	if agent == nil || eventbus == nil {
+func wireInMemoryEventChannelToSubAgents(bus eventbus.EventBus, agent *Agent) {
+	if agent == nil || bus == nil {
 		return
 	}
-	agent.runtime.SetEventBus(eventbus)
+	if ir, ok := agent.runtime.(runtime.EventBusRuntime); ok {
+		ir.SetEventBus(bus)
+	}
 	if agent.localAgentWorker != nil {
-		agent.localAgentWorker.runtime.SetEventBus(eventbus)
+		if ir, ok := agent.localAgentWorker.runtime.(runtime.EventBusRuntime); ok {
+			ir.SetEventBus(bus)
+		}
 	}
 	for _, child := range agent.subAgents {
-		wireInMemoryEventChannelToSubAgents(eventbus, child)
+		wireInMemoryEventChannelToSubAgents(bus, child)
 	}
 }
 
@@ -91,7 +98,11 @@ func NewAgent(opts ...Option) (*Agent, error) {
 	}
 	a.logger.Info(context.Background(), "agent created", slog.String("scope", "agent"), slog.String("name", a.Name), slog.String("taskQueue", a.taskQueue), slog.Bool("embedWorker", a.localAgentWorker != nil))
 	if a.localAgentWorker != nil {
-		go func() { _ = a.localAgentWorker.Start(context.Background()) }()
+		go func() {
+			if err := a.localAgentWorker.Start(context.Background()); err != nil {
+				a.logger.Error(context.Background(), "embedded agent worker failed to start", slog.String("scope", "agent"), slog.Any("error", err))
+			}
+		}()
 	}
 	return a, nil
 }

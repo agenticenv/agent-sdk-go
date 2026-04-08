@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 
 	"log/slog"
 
@@ -30,13 +31,20 @@ func NewAgentWorker(opts ...Option) (*AgentWorker, error) {
 }
 
 // Start starts the worker (blocks until Stop is called).
+// Returns an error if [Runtime] does not implement [runtime.WorkerRuntime] (in-process polling not supported).
 func (aw *AgentWorker) Start(ctx context.Context) error {
 	aw.logger.Info(ctx, "agent worker starting", slog.String("scope", "agent"), slog.String("taskQueue", aw.taskQueue))
-	return aw.runtime.Start(ctx)
+	wr, ok := aw.runtime.(runtime.WorkerRuntime)
+	if !ok {
+		return fmt.Errorf("runtime does not implement WorkerRuntime (in-process Start/Stop); use a backend that supports local workers")
+	}
+	return wr.Start(ctx)
 }
 
-// Stop stops the worker.
+// Stop stops the worker if [Runtime] implements [runtime.WorkerRuntime].
 func (aw *AgentWorker) Stop() {
 	aw.logger.Info(context.Background(), "agent worker stopping", slog.String("scope", "agent"), slog.String("taskQueue", aw.taskQueue))
-	aw.runtime.Stop()
+	if wr, ok := aw.runtime.(runtime.WorkerRuntime); ok {
+		wr.Stop()
+	}
 }

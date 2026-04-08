@@ -22,7 +22,10 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
-var _ runtime.Runtime = (*TemporalRuntime)(nil)
+var (
+	_ runtime.WorkerRuntime   = (*TemporalRuntime)(nil)
+	_ runtime.EventBusRuntime = (*TemporalRuntime)(nil) // embeds [runtime.Runtime]
+)
 
 const (
 	// workersCheckTimeout is how long hasWorkers polls for pollers before giving up.

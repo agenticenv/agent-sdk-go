@@ -8,7 +8,6 @@ import (
 	context "context"
 	reflect "reflect"
 
-	eventbus "github.com/agenticenv/agent-sdk-go/internal/eventbus"
 	runtime "github.com/agenticenv/agent-sdk-go/internal/runtime"
 	types "github.com/agenticenv/agent-sdk-go/internal/types"
 	gomock "github.com/golang/mock/gomock"
@@ -91,56 +90,4 @@ func (m *MockRuntime) ExecuteStream(arg0 context.Context, arg1 *runtime.ExecuteR
 func (mr *MockRuntimeMockRecorder) ExecuteStream(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExecuteStream", reflect.TypeOf((*MockRuntime)(nil).ExecuteStream), arg0, arg1)
-}
-
-// GetEventBus mocks base method.
-func (m *MockRuntime) GetEventBus() eventbus.EventBus {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetEventBus")
-	ret0, _ := ret[0].(eventbus.EventBus)
-	return ret0
-}
-
-// GetEventBus indicates an expected call of GetEventBus.
-func (mr *MockRuntimeMockRecorder) GetEventBus() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetEventBus", reflect.TypeOf((*MockRuntime)(nil).GetEventBus))
-}
-
-// SetEventBus mocks base method.
-func (m *MockRuntime) SetEventBus(arg0 eventbus.EventBus) {
-	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "SetEventBus", arg0)
-}
-
-// SetEventBus indicates an expected call of SetEventBus.
-func (mr *MockRuntimeMockRecorder) SetEventBus(arg0 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetEventBus", reflect.TypeOf((*MockRuntime)(nil).SetEventBus), arg0)
-}
-
-// Start mocks base method.
-func (m *MockRuntime) Start(arg0 context.Context) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Start", arg0)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// Start indicates an expected call of Start.
-func (mr *MockRuntimeMockRecorder) Start(arg0 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Start", reflect.TypeOf((*MockRuntime)(nil).Start), arg0)
-}
-
-// Stop mocks base method.
-func (m *MockRuntime) Stop() {
-	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "Stop")
-}
-
-// Stop indicates an expected call of Stop.
-func (mr *MockRuntimeMockRecorder) Stop() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Stop", reflect.TypeOf((*MockRuntime)(nil).Stop))
 }

@@ -13,7 +13,7 @@ func (cfg *agentConfig) hasTemporalRuntime() bool {
 }
 
 // buildAgentRuntime constructs the execution backend from agentConfig.
-// Extend with additional branches when new Runtime implementations are added.
+// Extend with additional branches when new [runtime.Runtime] implementations are added.
 func (cfg *agentConfig) buildAgentRuntime(remoteWorker bool) (runtime.Runtime, error) {
 	if cfg.hasTemporalRuntime() {
 		return cfg.buildTemporalRuntime(remoteWorker)
