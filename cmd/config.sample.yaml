@@ -30,3 +30,34 @@ logger:
   format: json             # json | text
   add_source: false
   tee_stderr: false
+
+# Optional MCP servers. Set enabled: true on entries you use.
+# When any server is enabled, the CLI uses auto tool approval (same pattern as examples with MCP).
+# Transports: stdio | local (subprocess); streamable_http | http | remote | streamable (URL).
+mcp:
+  servers:
+    # Local subprocess MCP (example: leave disabled until command/args match your install)
+    - enabled: false
+      name: local
+      transport: stdio
+      command: node
+      args: []   # e.g. ["-y","@modelcontextprotocol/server-filesystem","/path/to/dir"]
+      env: {}    # optional string map for subprocess env
+      timeout_seconds: 60
+      retry_attempts: 3
+      # allow_tools: [list, of, tool, names]
+      # block_tools: []
+
+    # Remote streamable HTTP MCP (example: public demo URL — verify in MCP docs before relying on it)
+    - enabled: false
+      name: remote
+      transport: streamable_http
+      url: ""   # e.g. https://example-server.modelcontextprotocol.io/mcp
+      bearer_token: ""   # optional static bearer; omit if using oauth below
+      oauth_client_id: ""
+      oauth_client_secret: ""
+      oauth_token_url: ""
+      skip_tls_verify: false
+      # headers: {}   # optional custom headers (API keys, etc.)
+      timeout_seconds: 30
+      retry_attempts: 3

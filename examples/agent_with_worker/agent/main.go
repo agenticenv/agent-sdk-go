@@ -165,7 +165,6 @@ func handleApproval(ctx context.Context, a *agent.Agent, scanner *bufio.Scanner,
 	ap := ev.Approval
 	args, _ := json.Marshal(ap.Args)
 	fmt.Printf("\n[approval] agent=%s tool=%s args=%s\n", ev.AgentName, ap.ToolName, string(args))
-	fmt.Printf("           token=%s\n", ap.ApprovalToken)
 
 	for {
 		fmt.Print("approve? (y/n)> ")

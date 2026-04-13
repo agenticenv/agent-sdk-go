@@ -37,6 +37,7 @@ type TemporalRuntimeConfig struct {
 	AgentSpec         sdkruntime.AgentSpec
 	AgentExecution    sdkruntime.AgentExecution
 	PolicyFingerprint string // from pkg/agent toolPolicyFingerprint; must match caller temporal.ComputeAgentFingerprint inputs
+	MCPFingerprint    string // from pkg/agent mcpConfigFingerprint; must match caller temporal.ComputeAgentFingerprint inputs
 }
 
 // Option configures a TemporalRuntime.
@@ -103,6 +104,14 @@ func WithAgentExecution(exec sdkruntime.AgentExecution) Option {
 func WithPolicyFingerprint(fp string) Option {
 	return func(c *TemporalRuntimeConfig) {
 		c.PolicyFingerprint = fp
+	}
+}
+
+// WithMCPFingerprint sets the MCP wiring digest used with [ComputeAgentFingerprint].
+// Must match pkg/agent's mcpConfigFingerprint for the same WithMCPConfig / WithMCPClients wiring.
+func WithMCPFingerprint(fp string) Option {
+	return func(c *TemporalRuntimeConfig) {
+		c.MCPFingerprint = fp
 	}
 }
 

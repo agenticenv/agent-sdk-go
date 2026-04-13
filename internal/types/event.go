@@ -2,8 +2,6 @@ package types
 
 import (
 	"time"
-
-	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 )
 
 // AgentEventType identifies a streamed agent event kind.
@@ -37,7 +35,7 @@ type AgentEvent struct {
 	Error     error                  `json:"error,omitempty"`
 	Metadata  map[string]interface{} `json:"metadata,omitempty"`
 	// Usage is set on AgentEventComplete for the root agent: aggregated token usage for the run.
-	Usage      *interfaces.LLMUsage `json:"usage,omitempty"`
+	Usage *LLMUsage `json:"usage,omitempty"`
 	Timestamp  time.Time            `json:"timestamp"`
 	WorkflowID string               `json:"workflow_id,omitempty"` // optional run identifier for correlation (implementation-defined)
 }

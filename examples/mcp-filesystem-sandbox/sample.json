@@ -1,0 +1,7 @@
+{
+  "purpose": "mcp-filesystem-sandbox",
+  "items": [
+    {"id": 1, "name": "alpha"},
+    {"id": 2, "name": "beta"}
+  ]
+}

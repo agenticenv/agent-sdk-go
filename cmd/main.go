@@ -65,6 +65,11 @@ func main() {
 	reg.Register(wikipedia.New())
 	reg.Register(search.New())
 
+	mcpServers, err := BuildMCPServers(cfg)
+	if err != nil {
+		log.Fatalf("mcp config: %v", err)
+	}
+
 	conv := inmem.NewInMemoryConversation(inmem.WithMaxSize(100))
 
 	// Single stdin reader: avoids conflict between main loop and approval handler after timeout
@@ -92,6 +97,12 @@ func main() {
 		agent.WithConversation(conv),
 		agent.WithConversationSize(20),
 		agent.WithLogger(lgr),
+	}
+	if len(mcpServers) > 0 {
+		opts = append(opts,
+			agent.WithMCPConfig(mcpServers),
+			agent.WithToolApprovalPolicy(agent.AutoToolApprovalPolicy()),
+		)
 	}
 
 	a, err := agent.NewAgent(opts...)

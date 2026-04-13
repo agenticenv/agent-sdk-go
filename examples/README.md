@@ -37,6 +37,8 @@ The examples use `TEMPORAL_HOST`, `TEMPORAL_PORT`, `TEMPORAL_NAMESPACE` from `.e
 | `agent_with_json_response` | Structured LLM output — `WithResponseFormat` + `interfaces.JSONSchema` (JSON with schema; no tools) |
 | `agent_with_reasoning` | Generic `interfaces.LLMReasoning` via `WithLLMSampling` — `Stream` to observe `thinking_delta` (e.g. Anthropic) |
 | `agent_with_worker` | Agent and worker in separate processes — `DisableLocalWorker` + `NewAgentWorker` |
+| `agent_with_mcp_config` | MCP via `WithMCPConfig` — transport from env: `mcp.MCPStdio` (command, JSON args/env) or `mcp.MCPStreamableHTTP` (URL, optional bearer/OAuth); see `examples/env.sample` |
+| `agent_with_mcp_client` | Same transports via `mcpclient.NewClient` + `WithMCPClients`; same env vars as `agent_with_mcp_config` |
 
 ## Setup
 
@@ -134,6 +136,28 @@ go run ./agent_with_worker/worker &   # start worker in background
 go run ./agent_with_worker/agent "Hello from remote agent!"
 ```
 
+### MCP (`WithMCPConfig` vs `WithMCPClients`)
+
+Two examples use the **same env-driven transport** but wire the agent differently:
+
+- **`agent_with_mcp_config`** — `agent.WithMCPConfig(agent.MCPServers{<serverName>: mcpCfg})`. The SDK builds the default MCP client per server.
+- **`agent_with_mcp_client`** — `mcpclient.NewClient(<serverName>, transport, opts...)` then `agent.WithMCPClients(client)`.
+
+**Transport** must be set explicitly with **`MCP_TRANSPORT`**: `stdio` or `streamable_http` (see aliases in **`env.sample`**). See **`env.sample`** for every variable.
+
+- **Remote — `streamable_http`:** set **`MCP_STREAMABLE_HTTP_URL`**. Auth optional: **`MCP_BEARER_TOKEN`**, or OAuth trio **`MCP_CLIENT_ID`** + **`MCP_CLIENT_SECRET`** + **`MCP_TOKEN_URL`** (OAuth wins over bearer when all three are set). **`MCP_SKIP_TLS_VERIFY=true`** for dev TLS only.
+- **Local — `stdio`:** set **`MCP_STDIO_COMMAND`** and optional **`MCP_STDIO_ARGS`** (JSON string array) and **`MCP_STDIO_ENV`** (JSON string→string object).
+
+Shared optional knobs: **`MCP_SERVER_NAME`**, **`MCP_TIMEOUT_SECONDS`**, **`MCP_RETRY_ATTEMPTS`**, **`MCP_ALLOW_TOOLS`** / **`MCP_BLOCK_TOOLS`** (comma-separated; only one list type).
+
+```bash
+go run ./agent_with_mcp_config
+go run ./agent_with_mcp_config "List tools you can call."
+
+go run ./agent_with_mcp_client
+go run ./agent_with_mcp_client "List tools you can call."
+```
+
 ## Logging
 
 Examples send conversation (user prompt, assistant response) to **stdout** and internal logs to **stderr**. By default only errors are logged.
@@ -162,3 +186,15 @@ Examples send conversation (user prompt, assistant response) to **stdout** and i
 | `LLM_BASEURL` | Optional (custom/proxy endpoints) |
 | `LOG_LEVEL` | `error` (default), `warn`, `info`, `debug` — logs go to stderr |
 | `SERPER_API_KEY` | For search tool |
+| `MCP_TRANSPORT` | **Required** for MCP examples: `stdio` or `streamable_http` (aliases: `local`, `http`, `remote`, …) |
+| `MCP_SERVER_NAME` | Optional server id for wiring (defaults: `local` for stdio, `remote` for HTTP) |
+| `MCP_STREAMABLE_HTTP_URL` | Remote MCP base URL (required for `streamable_http`) |
+| `MCP_STDIO_COMMAND` | Executable for local subprocess MCP (required for `stdio`) |
+| `MCP_STDIO_ARGS` | Optional JSON array of argv strings, e.g. `["-y","@scope/pkg","/dir"]` |
+| `MCP_STDIO_ENV` | Optional JSON object of extra subprocess env vars |
+| `MCP_BEARER_TOKEN` | Optional static bearer for MCP HTTP; ignored when OAuth env trio is all set |
+| `MCP_TIMEOUT_SECONDS` | Optional; positive seconds cap MCP connect+RPC timeout |
+| `MCP_RETRY_ATTEMPTS` | Optional; max attempts per MCP operation when > 0 |
+| `MCP_ALLOW_TOOLS`, `MCP_BLOCK_TOOLS` | Optional comma-separated allow/block tool lists (mutually exclusive) |
+| `MCP_CLIENT_ID`, `MCP_CLIENT_SECRET`, `MCP_TOKEN_URL` | Optional together: OAuth2 client credentials for MCP HTTP transport |
+| `MCP_SKIP_TLS_VERIFY` | Optional; set to `true` to skip TLS verify for MCP/token HTTP (dev only) |

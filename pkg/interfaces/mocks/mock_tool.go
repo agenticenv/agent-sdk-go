@@ -8,6 +8,7 @@ import (
 	context "context"
 	reflect "reflect"
 
+	types "github.com/agenticenv/agent-sdk-go/internal/types"
 	interfaces "github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	gomock "github.com/golang/mock/gomock"
 )
@@ -79,10 +80,10 @@ func (mr *MockToolMockRecorder) Name() *gomock.Call {
 }
 
 // Parameters mocks base method.
-func (m *MockTool) Parameters() interfaces.JSONSchema {
+func (m *MockTool) Parameters() types.JSONSchema {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Parameters")
-	ret0, _ := ret[0].(interfaces.JSONSchema)
+	ret0, _ := ret[0].(types.JSONSchema)
 	return ret0
 }
 

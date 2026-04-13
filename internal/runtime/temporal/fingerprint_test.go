@@ -17,6 +17,7 @@ func TestComputeAgentFingerprint_stableAndToolOrder(t *testing.T) {
 		nil,
 		10,
 		lim,
+		"",
 	)
 	h1 := ComputeAgentFingerprint(m)
 	h2 := ComputeAgentFingerprint(m)
@@ -24,10 +25,23 @@ func TestComputeAgentFingerprint_stableAndToolOrder(t *testing.T) {
 		t.Fatalf("fingerprint len=%d h1=%q h2=%q", len(h1), h1, h2)
 	}
 
-	hA := ComputeAgentFingerprint(BuildAgentFingerprintPayload(spec, []string{"a", "b", "c"}, "auto", nil, 0, lim))
-	hB := ComputeAgentFingerprint(BuildAgentFingerprintPayload(spec, []string{"c", "a", "b"}, "auto", nil, 0, lim))
+	hA := ComputeAgentFingerprint(BuildAgentFingerprintPayload(spec, []string{"a", "b", "c"}, "auto", nil, 0, lim, ""))
+	hB := ComputeAgentFingerprint(BuildAgentFingerprintPayload(spec, []string{"c", "a", "b"}, "auto", nil, 0, lim, ""))
 	if hA != hB {
 		t.Fatalf("tool order should not matter: %q vs %q", hA, hB)
+	}
+}
+
+func TestComputeAgentFingerprint_mcpFingerprintChangesDigest(t *testing.T) {
+	spec := sdkruntime.AgentSpec{Name: "a", SystemPrompt: "p"}
+	lim := sdkruntime.AgentLimits{MaxIterations: 3}
+	tools := []string{"mcp_srv_echo"}
+	base := BuildAgentFingerprintPayload(spec, tools, "auto", nil, 0, lim, "")
+	withMCP := BuildAgentFingerprintPayload(spec, tools, "auto", nil, 0, lim, "abc123deadbeef")
+	h0 := ComputeAgentFingerprint(base)
+	h1 := ComputeAgentFingerprint(withMCP)
+	if h0 == h1 {
+		t.Fatalf("expected different digests when mcp fingerprint set: %q vs %q", h0, h1)
 	}
 }
 

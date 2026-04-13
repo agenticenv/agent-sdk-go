@@ -25,11 +25,15 @@ const defaultMaxSubAgentDepth = 2
 // Normal runs delegate via AgentWorkflow child workflows; Execute() is only for misconfigured or direct activity calls.
 var ErrSubAgentToolNotExecutable = errors.New("sub-agent tool must be executed via workflow, not Execute()")
 
+// ErrSubAgentNameInvalid is returned when computing a sub-agent delegation tool name from a display name fails
+// for a delegation tool (empty name, or name contains no letters or digits after normalization).
+var ErrSubAgentNameInvalid = errors.New("sub-agent name invalid for delegation tool")
+
 // AgentTool marks a tool that represents sub-agent delegation (child AgentWorkflow), not normal Tool.Execute.
 //
 // AgentWorkflow chooses delegation vs AgentToolExecuteActivity using SubAgentRoutes keyed by tool name, not by
 // asserting AgentTool in workflow code. AgentTool is still used elsewhere (e.g. toolApprovalMetadata walks
-// toolsList() and asserts AgentTool to set delegation fields on approval events).
+// toolsList and asserts AgentTool to set delegation fields on approval events).
 type AgentTool interface {
 	interfaces.Tool
 	// SubAgent returns the sub-agent this tool delegates to.
@@ -40,19 +44,46 @@ type AgentTool interface {
 // Execution is handled by the agent workflow (child workflow), not Execute.
 type subAgentTool struct {
 	agent *Agent
+	name  string // delegation tool name at construction
+}
+
+// subAgentToolName returns the registered delegation tool name for a sub-agent display name (typically [Agent.Name]
+// from [WithName]). Single source: [NewSubAgentTool], validateToolNames, and buildSubAgentRoutes use this (or [subAgentTool.Name]).
+//
+// The name is not used verbatim: runs of non-alphanumeric ASCII become a single underscore; leading/trailing
+// underscores are trimmed. Empty input or a name with no letters or digits after normalization is rejected ([ErrSubAgentNameInvalid]).
+func subAgentToolName(name string) (string, error) {
+	base := strings.TrimSpace(name)
+	if base == "" {
+		return "", fmt.Errorf("%w: set WithName on the sub-agent", ErrSubAgentNameInvalid)
+	}
+	safe := strings.Trim(subAgentToolNameNonIdent.ReplaceAllString(base, "_"), "_")
+	if safe == "" {
+		return "", fmt.Errorf("%w: name %q must contain at least one letter or digit", ErrSubAgentNameInvalid, base)
+	}
+	return "subagent_" + safe, nil
 }
 
 // NewSubAgentTool wraps a sub-agent as a tool for the parent LLM.
-// Name is derived from the sub-agent's Name when set; otherwise a stable default is used.
-// Returns nil if sub is nil; callers should skip nil tools.
+// The sub-agent must have a non-empty [Agent.Name] that yields at least one letter or digit after normalization
+// (same normalization as delegation tool names from display names). Returns nil if sub is nil or the name is invalid.
 func NewSubAgentTool(sub *Agent) interfaces.Tool {
 	if sub == nil {
 		return nil
 	}
-	return &subAgentTool{agent: sub}
+	n, err := subAgentToolName(sub.Name)
+	if err != nil {
+		return nil
+	}
+	return &subAgentTool{agent: sub, name: n}
 }
 
-func (t *subAgentTool) Name() string { return SubAgentToolName(t.agent) }
+func (t *subAgentTool) Name() string {
+	if t == nil {
+		return ""
+	}
+	return t.name
+}
 
 func (t *subAgentTool) Description() string {
 	d := strings.TrimSpace(t.agent.Description)
@@ -72,27 +103,10 @@ func (t *subAgentTool) Parameters() interfaces.JSONSchema {
 }
 
 func (t *subAgentTool) Execute(_ context.Context, _ map[string]any) (any, error) {
-	return nil, fmt.Errorf("%w: %s", ErrSubAgentToolNotExecutable, SubAgentToolName(t.agent))
+	if t == nil {
+		return nil, ErrSubAgentToolNotExecutable
+	}
+	return nil, fmt.Errorf("%w: %s", ErrSubAgentToolNotExecutable, t.name)
 }
 
 func (t *subAgentTool) SubAgent() *Agent { return t.agent }
-
-// SubAgentToolName returns the tool name the parent LLM and workflow routing use for this sub-agent.
-// Single source: NewSubAgentTool, validateToolsAndSubAgentNames, and buildSubAgentRoutes must use this (or Name() on the tool).
-//
-// Display names are not used verbatim: runs of non-alphanumeric ASCII become a single underscore; leading/trailing
-// underscores are trimmed. An empty or all-symbol name falls back to subagent_<Agent.ID> so the name stays stable and API-safe.
-func SubAgentToolName(a *Agent) string {
-	if a == nil {
-		return ""
-	}
-	base := strings.TrimSpace(a.Name)
-	if base == "" {
-		return "subagent_" + a.ID
-	}
-	safe := strings.Trim(subAgentToolNameNonIdent.ReplaceAllString(base, "_"), "_")
-	if safe == "" {
-		return "subagent_" + a.ID
-	}
-	return "subagent_" + safe
-}

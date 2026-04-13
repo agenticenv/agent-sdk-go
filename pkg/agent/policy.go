@@ -45,13 +45,51 @@ type autoToolApprovalPolicy struct{}
 
 func (autoToolApprovalPolicy) RequiresApproval(t interfaces.Tool) bool { return false }
 
-// AllowlistToolApprovalPolicy allows only the listed tools without approval; all others require approval.
-func AllowlistToolApprovalPolicy(toolNames ...string) interfaces.AgentToolApprovalPolicy {
+// AllowlistToolApprovalConfig selects tools and capabilities that may run without user approval.
+// Entries are expanded to registered [interfaces.Tool] names (what [interfaces.Tool.Name] returns);
+// [allowlistToolApprovalPolicy.RequiresApproval] compares against those names.
+type AllowlistToolApprovalConfig struct {
+	// ToolNames are plain registry / [WithTools] names (e.g. "echo", "calculator").
+	ToolNames []string
+	// SubAgentNames are trimmed sub-agent display names ([WithName]) for agents registered with [WithSubAgents].
+	// Each entry is expanded with the same rules as sub-agent delegation tool names (see [NewSubAgentTool]). Invalid names make
+	// [AllowlistToolApprovalPolicy] return an error.
+	SubAgentNames []string
+	// MCPTools maps MCP server key (same as [MCPTool.ServerName] / MCP config) to server tool ids
+	// ([interfaces.ToolSpec.Name] as returned by the server). Each pair expands to mcp_<server>_<toolId>.
+	MCPTools map[string][]string
+}
+
+// AllowlistToolApprovalPolicy builds an allowlist policy from [AllowlistToolApprovalConfig].
+// Empty [AllowlistToolApprovalConfig.ToolNames] and MCP server/tool entries are skipped.
+// Invalid [AllowlistToolApprovalConfig.SubAgentNames] entries return an error.
+// MCP map iteration order does not affect behavior.
+//
+// Tool-only allowlisting: AllowlistToolApprovalPolicy(AllowlistToolApprovalConfig{ToolNames: []string{"echo", "calculator"}}).
+func AllowlistToolApprovalPolicy(c AllowlistToolApprovalConfig) (interfaces.AgentToolApprovalPolicy, error) {
 	m := make(map[string]bool)
-	for _, n := range toolNames {
-		m[n] = true
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		if s != "" {
+			m[s] = true
+		}
 	}
-	return allowlistToolApprovalPolicy{m}
+	for _, n := range c.ToolNames {
+		add(n)
+	}
+	for _, n := range c.SubAgentNames {
+		name, err := subAgentToolName(n)
+		if err != nil {
+			return nil, fmt.Errorf("allowlist SubAgentNames entry %q: %w", n, err)
+		}
+		add(name)
+	}
+	for server, tools := range c.MCPTools {
+		for _, tid := range tools {
+			add(mcpToolName(server, tid))
+		}
+	}
+	return allowlistToolApprovalPolicy{m}, nil
 }
 
 type allowlistToolApprovalPolicy struct {

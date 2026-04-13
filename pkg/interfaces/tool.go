@@ -1,6 +1,10 @@
 package interfaces
 
-import "context"
+import (
+	"context"
+
+	"github.com/agenticenv/agent-sdk-go/internal/types"
+)
 
 //go:generate mockgen -destination=./mocks/mock_tool.go -package=mocks github.com/agenticenv/agent-sdk-go/pkg/interfaces Tool,ToolRegistry
 
@@ -29,12 +33,11 @@ type Tool interface {
 	Execute(ctx context.Context, args map[string]any) (any, error)
 }
 
-// ToolSpec is the schema sent to the LLM for tool selection. Convert from Tool via ToolToSpec.
-type ToolSpec struct {
-	Name        string     `json:"name"`
-	Description string     `json:"description"`
-	Parameters  JSONSchema `json:"parameters"`
-}
+// ToolSpec is the schema sent to the LLM for tool selection (canonical definition in [types.ToolSpec]).
+type ToolSpec = types.ToolSpec
+
+// JSONSchema is a loose JSON Schema object for tool parameters (canonical definition in [types.JSONSchema]).
+type JSONSchema = types.JSONSchema
 
 // ToolToSpec converts a Tool to its spec for the LLM.
 func ToolToSpec(t Tool) ToolSpec {

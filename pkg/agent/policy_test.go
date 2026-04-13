@@ -36,7 +36,10 @@ func TestAutoToolApprovalPolicy_RequiresApproval(t *testing.T) {
 }
 
 func TestAllowlistToolApprovalPolicy(t *testing.T) {
-	allowed := AllowlistToolApprovalPolicy("calculator", "echo")
+	allowed, err := AllowlistToolApprovalPolicy(AllowlistToolApprovalConfig{ToolNames: []string{"calculator", "echo"}})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	tests := []struct {
 		toolName       string
@@ -51,6 +54,55 @@ func TestAllowlistToolApprovalPolicy(t *testing.T) {
 	for _, tt := range tests {
 		tool := mockTool{name: tt.toolName}
 		got := allowed.RequiresApproval(tool)
+		if got != tt.expectApproval {
+			t.Errorf("tool %q: RequiresApproval = %v, want %v", tt.toolName, got, tt.expectApproval)
+		}
+	}
+}
+
+func TestAllowlistToolApprovalPolicy_invalidSubAgentName(t *testing.T) {
+	_, err := AllowlistToolApprovalPolicy(AllowlistToolApprovalConfig{
+		SubAgentNames: []string{"@@@"},
+	})
+	if err == nil {
+		t.Fatal("expected error for sub-agent name with no alphanumeric characters")
+	}
+}
+
+func TestAllowlistToolApprovalPolicy_configured(t *testing.T) {
+	mathAgent := &Agent{agentConfig: agentConfig{Name: "Math Specialist", ID: "id-math"}}
+	wantSub, err := subAgentToolName(mathAgent.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	p, err := AllowlistToolApprovalPolicy(AllowlistToolApprovalConfig{
+		ToolNames:     []string{"echo", "", "custom_exact"},
+		SubAgentNames: []string{"Math Specialist"},
+		MCPTools: map[string][]string{
+			"remote": {"search", ""},
+			"":       {"skip"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		toolName       string
+		expectApproval bool
+	}{
+		{"echo", false},
+		{"calculator", true},
+		{wantSub, false},
+		{"mcp_remote_search", false},
+		{"mcp_other_search", true},
+		{"custom_exact", false},
+	}
+
+	for _, tt := range tests {
+		tool := mockTool{name: tt.toolName}
+		got := p.RequiresApproval(tool)
 		if got != tt.expectApproval {
 			t.Errorf("tool %q: RequiresApproval = %v, want %v", tt.toolName, got, tt.expectApproval)
 		}

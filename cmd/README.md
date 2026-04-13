@@ -12,7 +12,7 @@ Interactive conversation mode. Type prompts, get responses. Type `exit`, `quit`,
    cp cmd/config.sample.yaml cmd/config.yaml
    ```
 
-2. **Edit `cmd/config.yaml`** with your Temporal host, LLM provider, API key, and model.
+2. **Edit `cmd/config.yaml`** with your Temporal host, LLM provider, API key, and model. Optional **MCP** servers live under `mcp.servers` in `config.sample.yaml`: set `enabled: true` on entries you want (stdio subprocess or `streamable_http` URL); leave others `enabled: false`.
 
 3. **Optional:** Use environment variables to override (keeps secrets out of the config file):
 
@@ -96,6 +96,12 @@ Config is loaded from `cmd/config.yaml` (default). If the file does not exist, d
 | `AGENT_LLM_BASEURL` | Optional; for OpenAI-compatible proxies |
 | `AGENT_LOGGER_LEVEL` | `error` (default), `warn`, `info`, `debug` |
 | `AGENT_LOGGER_OUTPUT` | Log file path; default `cmd/logs/agent.log` |
+
+### MCP (optional)
+
+Define `mcp.servers` in `config.yaml` (see `config.sample.yaml`). Each entry supports **`enabled`** (omit or `true` to use; `false` to skip), **`name`** (stable id for that MCP connection), **`transport`** (`stdio` or `streamable_http`), plus transport-specific fields (`command` / `args` / `env` for stdio; `url` / `bearer_token` / OAuth / `headers` for HTTP). Optional **`timeout_seconds`**, **`retry_attempts`**, **`allow_tools`** / **`block_tools`**.
+
+When at least one server is enabled, the CLI registers **`WithMCPConfig`** and **`AutoToolApprovalPolicy`** so MCP tools run without per-call approval in the REPL.
 
 ## Logging
 

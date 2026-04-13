@@ -1,0 +1,3 @@
+MCP filesystem test note
+
+This file exists so you can ask the agent to read it via MCP tools (e.g. mcp_local_read_text_file or whatever names the server advertises).

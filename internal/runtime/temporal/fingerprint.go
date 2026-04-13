@@ -13,7 +13,7 @@ import (
 const agentFingerprintVersion = 1
 
 // AgentFingerprintPayload is the JSON-serializable snapshot hashed by [ComputeAgentFingerprint].
-// pkg/agent and Temporal workers must supply the same fields so client and worker digests match.
+// Agent callers and Temporal workers must supply the same fields so client and worker digests match.
 type AgentFingerprintPayload struct {
 	Version int `json:"v"`
 
@@ -31,6 +31,11 @@ type AgentFingerprintPayload struct {
 	// PolicyFingerprint is an opaque string from pkg/agent (same on caller and worker Temporal config).
 	PolicyFingerprint string `json:"policy_fp"`
 
+	// MCPFingerprint is the pkg/agent MCP wiring digest over transports (no secrets), timeouts, filters,
+	// and extra MCP client names. Tool names already appear in ToolNames; this catches same tools
+	// pointing at a different endpoint or policy. Omitted when empty.
+	MCPFingerprint string `json:"mcp_fingerprint,omitempty"`
+
 	Sampling *sdkruntime.LLMSampling `json:"sampling,omitempty"`
 
 	SessionSize int `json:"session_size"`
@@ -41,8 +46,8 @@ type AgentFingerprintPayload struct {
 }
 
 // ComputeAgentFingerprint returns a stable SHA-256 hex digest of the payload (identity, prompts, tools,
-// sampling, limits, policy). Use the same toolPolicyFingerprint string from pkg/agent on both the
-// process that issues runs and the worker process.
+// sampling, limits, policy, optional MCP wiring). Use the same toolPolicyFingerprint and MCP fingerprint
+// inputs from pkg/agent on both the process that issues runs and the worker process.
 func ComputeAgentFingerprint(m AgentFingerprintPayload) string {
 	m.Version = agentFingerprintVersion
 	if m.ToolNames != nil {
@@ -64,6 +69,7 @@ func BuildAgentFingerprintPayload(
 	sampling *sdkruntime.LLMSampling,
 	sessionSize int,
 	limits sdkruntime.AgentLimits,
+	mcpFingerprint string,
 ) AgentFingerprintPayload {
 	names := append([]string(nil), toolNames...)
 	sort.Strings(names)
@@ -74,6 +80,7 @@ func BuildAgentFingerprintPayload(
 		SystemPrompt:      spec.SystemPrompt,
 		ToolNames:         names,
 		PolicyFingerprint: policyFingerprint,
+		MCPFingerprint:    mcpFingerprint,
 		Sampling:          cloneLLMSampling(sampling),
 		SessionSize:       sessionSize,
 		MaxIterations:     limits.MaxIterations,
@@ -145,6 +152,7 @@ func computeAgentFingerprintFromRuntimeConfig(c *TemporalRuntimeConfig) string {
 		c.AgentExecution.LLM.Sampling,
 		c.AgentExecution.Session.ConversationSize,
 		c.AgentExecution.Limits,
+		c.MCPFingerprint,
 	)
 	return ComputeAgentFingerprint(mat)
 }

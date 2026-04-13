@@ -65,7 +65,7 @@ func main() {
 		}),
 		agent.WithLLMClient(llmClient),
 		agent.WithToolRegistry(mathReg),
-		agent.WithToolApprovalPolicy(agent.RequireAllToolApprovalPolicy{}),
+		agent.WithToolApprovalPolicy(agent.AutoToolApprovalPolicy()),
 		agent.WithLogger(config.NewLoggerFromLogConfig(cfg)),
 	)
 	if err != nil {

@@ -4,7 +4,7 @@ package interfaces
 
 // AgentToolApprovalPolicy determines if a tool execution requires approval.
 // Implement for custom behavior. Built-in policies: agent.RequireAllToolApprovalPolicy (default),
-// agent.AutoToolApprovalPolicy(), agent.AllowlistToolApprovalPolicy(names...).
+// agent.AutoToolApprovalPolicy(), agent.AllowlistToolApprovalPolicy(agent.AllowlistToolApprovalConfig{...}) (may error on invalid sub-agent names).
 type AgentToolApprovalPolicy interface {
 	RequiresApproval(tool Tool) bool
 }

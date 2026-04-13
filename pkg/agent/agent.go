@@ -290,7 +290,10 @@ func (a *Agent) buildSubAgentRoutes() map[string]types.SubAgentRoute {
 		if tq == "" {
 			continue
 		}
-		name := SubAgentToolName(sub)
+		name, err := subAgentToolName(sub.Name)
+		if err != nil || name == "" {
+			continue
+		}
 		out[name] = types.SubAgentRoute{
 			Name:             sub.Name,
 			TaskQueue:        tq,

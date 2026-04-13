@@ -65,6 +65,14 @@ func (s *SlogLogger) Error(ctx context.Context, msg string, keyvals ...any) {
 
 // emit mirrors slog.Logger.log but uses a deeper caller skip so "source" is the
 // real caller when the handler has AddSource (see adjustCallerPC).
+// Slog returns the underlying *slog.Logger used by this logger.
+func (s *SlogLogger) Slog() *slog.Logger {
+	if s == nil {
+		return nil
+	}
+	return s.log
+}
+
 func (s *SlogLogger) emit(ctx context.Context, level slog.Level, msg string, args ...any) {
 	if !s.log.Enabled(ctx, level) {
 		return

@@ -1,6 +1,6 @@
 # Agent SDK for Go - Temporal-first
 
-**Build durable, production-grade AI agents in Go** — tool calling, human approvals, and sub-agent delegation.
+**Build durable, production-grade AI agents in Go** — tools, MCP, human approvals, and sub-agent delegation.
 
 [![CI](https://github.com/agenticenv/agent-sdk-go/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/agenticenv/agent-sdk-go/actions)
 [![Release](https://img.shields.io/github/v/release/agenticenv/agent-sdk-go?label=Release)](https://github.com/agenticenv/agent-sdk-go/releases)
@@ -14,7 +14,7 @@
 
 ## Overview
 
-**agent-sdk-go** is a Go SDK for production AI agents — tools, human-in-the-loop approvals, and multi-agent delegation — built on [Temporal](https://temporal.io) durable execution.
+**agent-sdk-go** is a Go SDK for production AI agents — tools, MCP, human-in-the-loop approvals, and multi-agent delegation — built on [Temporal](https://temporal.io) durable execution.
 
 Most agent frameworks live and die inside a single process: if your server restarts, the run is lost. Here, every agent run is a Temporal workflow end to end. Runs survive crashes and deploys, respect timeouts and retries, and are observable as real service operations. There is no execution path outside Temporal.
 
@@ -27,16 +27,17 @@ Most agent frameworks live and die inside a single process: if your server resta
 - **Reasoning** — Extended thinking / chain-of-thought where supported (Anthropic, Gemini).
 - **Token usage** — Track input, output, and reasoning token counts per run.
 - **Tools** — Register built-in or custom tools via `interfaces.Tool`.
+- **MCP** — Extend agent capabilities by connecting any MCP server as a tool source via `WithMCPConfig` or `WithMCPClients`.
 - **Human-in-the-loop** — Approval gates on tool calls and delegation across `Run`, `RunAsync`, and `Stream`.
 - **Sub-agents** — Delegate to specialist agents via `WithSubAgents`.
 - **Scale** — Add Temporal workers to scale agent execution horizontally.
 
 ## Temporal Runtime
 
-**Temporal** powers agents through three moving parts: a **Temporal client** (started by `pkg/agent`) that launches agent workflows, **workers** (typically `NewAgentWorker`) that poll task queues and execute workflow and activity code, and **workflow history** that makes each run durable. Workers are stateless — they replay and advance history, not hold state themselves.
+**Temporal** powers agents through three moving parts: a **Temporal client** that launches agent workflows, **workers** (typically `NewAgentWorker`) that poll task queues and execute workflow and activity code, and **workflow history** that makes each run durable. Workers are stateless — they replay and advance history, not hold state themselves.
 
 - **Workflows** — Durable, **replay-safe** orchestration: the agent “loop” (model rounds, tool routing, when to delegate). Workflow code must stay deterministic; long work happens in activities.
-- **Activities** — **LLM calls**, **tool** execution, **conversation** updates, approval steps—side effects and I/O. Retries, timeouts, and failure handling apply here.
+- **Activities** — **LLM calls**, **tool** execution (including **MCP tool** calls), **conversation** updates, approval steps—side effects and I/O. Retries, timeouts, and failure handling apply here.
 - **Child workflows** — **Sub-agent delegation** is modeled as **child workflows** so specialists can run on their own task queues with their own workers.
 - **Workers & task queues** — Processes **poll** a queue and run scheduled workflow and activity tasks; **scale horizontally** by adding workers. Each agent / sub-agent typically has its own **task queue** name.
 
@@ -249,9 +250,105 @@ result, _ := a.Run(ctx, "What's the weather in Tokyo?", "")
 
 [examples/agent_with_tools](examples/agent_with_tools)
 
+### MCP (Model Context Protocol)
+
+MCP servers extend your agent with external tools that work identically to built-in tools across `Run`, `Stream`, `RunAsync`, and approval gates. Each server needs a **unique** name in config (the `WithMCPConfig` map key or the first argument to `mcpclient.NewClient`); tools are registered under stable names so they do not collide when several servers expose the same logical tool id.
+
+At `NewAgent`, the SDK connects to each server, discovers its tools, applies any **`ToolFilter`** (`AllowTools`/`BlockTools`), and registers the results — failing fast if a server is unreachable.
+
+Use `mcp.MCPStdio` (local process) or `mcp.MCPStreamableHTTP` (remote) from `pkg/mcp` for transport. Streamable HTTP supports `Token`, `OAuthClientCreds`, custom `Headers`, and `SkipTLSVerify` for local HTTPS. You can register multiple servers per agent with different transports, timeouts, retries, and filters per server.
+
+Pass `WithMCPConfig` or `WithMCPClients` into `agent.NewAgent` alongside your other options.
+
+**Option 1 — `WithMCPConfig`**
+
+Declare each server as one entry in `agent.MCPServers`: set `Transport`, and optionally `ToolFilter`, `Timeout`, and `RetryAttempts`. The map key is the server name (must be unique).
+
+```go
+import (
+    "time"
+
+    "github.com/agenticenv/agent-sdk-go/pkg/agent"
+    "github.com/agenticenv/agent-sdk-go/pkg/mcp"
+)
+
+agent.WithMCPConfig(agent.MCPServers{
+    // Subprocess MCP (stdio): different command/args per local server
+    "local": {
+        Transport: mcp.MCPStdio{
+            Command: "node",
+            Args:    []string{"path/to/your-mcp-server.js", "--verbose"},
+        },
+        Timeout: 60 * time.Second,
+    },
+    // Remote streamable HTTP: different URL, bearer token, tool filter, and retries
+    "remote": {
+        Transport: mcp.MCPStreamableHTTP{
+            URL:   "https://mcp.example.com/mcp",
+            Token: "replace-with-bearer-or-use-OAuthClientCreds-or-Headers",
+        },
+        ToolFilter:    mcp.MCPToolFilter{AllowTools: []string{"search", "wiki"}},
+        Timeout:       30 * time.Second,
+        RetryAttempts: 3,
+    },
+})
+```
+
+**Option 2 — `WithMCPClients`**
+
+Build one client per server with `mcpclient.NewClient` (server name, transport, then options such as `WithTimeout`, `WithRetryAttempts`, `WithToolFilter`, `WithLogger`). Pass every client to `agent.WithMCPClients` in one call; each `NewClient` name must be unique.
+
+> Note: The packaged client is built on the official [Go MCP SDK](https://github.com/modelcontextprotocol/go-sdk) (`modelcontextprotocol/go-sdk`).
+
+```go
+import (
+    "time"
+
+    "github.com/agenticenv/agent-sdk-go/pkg/agent"
+    "github.com/agenticenv/agent-sdk-go/pkg/mcp"
+    mcpclient "github.com/agenticenv/agent-sdk-go/pkg/mcp/client"
+)
+
+localCl, err := mcpclient.NewClient("local",
+    mcp.MCPStdio{Command: "node", Args: []string{"path/to/your-mcp-server.js"}},
+    mcpclient.WithTimeout(60*time.Second),
+)
+if err != nil {
+    // handle
+}
+
+remoteCl, err := mcpclient.NewClient("remote",
+    mcp.MCPStreamableHTTP{
+        URL:   "https://mcp.example.com/mcp",
+        Token: "replace-with-bearer-or-use-OAuthClientCreds-or-Headers",
+    },
+    mcpclient.WithTimeout(30*time.Second),
+    mcpclient.WithRetryAttempts(3),
+    mcpclient.WithToolFilter(mcp.MCPToolFilter{AllowTools: []string{"search", "wiki"}}),
+)
+if err != nil {
+    // handle
+}
+
+a, err := agent.NewAgent(
+    agent.WithTemporalConfig(...),
+    agent.WithLLMClient(...),
+    agent.WithMCPClients(localCl, remoteCl),
+    agent.WithToolApprovalPolicy(agent.AutoToolApprovalPolicy()),
+)
+if err != nil {
+    // handle
+}
+defer a.Close()
+```
+
+You may use **Option 1** for some servers and **Option 2** for others on the same agent; keep server names unique across both.
+
+[examples/agent_with_mcp_config](examples/agent_with_mcp_config) and [examples/agent_with_mcp_client](examples/agent_with_mcp_client) show MCP from env (`stdio` or streamable HTTP, URL-only OK, optional bearer/OAuth); see [examples/env.sample](examples/env.sample) and [examples/README.md](examples/README.md).
+
 ### Sub-agents
 
-Build each specialist with `**NewAgent**` (own `**TaskQueue**`, LLM, tools, prompts). Register them on the main agent with `**WithSubAgents**`. Use `**WithName**` and `**WithDescription**` on specialists when you want clearer labels for the main agent’s model. Use `**WithMaxSubAgentDepth**` only if the default nesting limit is not enough. Run `**Run**`, `**Stream**`, or `**RunAsync**` on the main agent. Sub-agents always run without a conversation ID—they do not inherit the main agent session history. If you use `**DisableLocalWorker**`, pair each `**NewAgentWorker**` with the same options as the `**NewAgent**` that runs that agent.
+Build each specialist with `NewAgent` (its own `TaskQueue`, LLM, tools, and prompts). Register specialists on the main agent with `WithSubAgents`. Use `WithName` and `WithDescription` when you want clearer labels for routing. Use `WithMaxSubAgentDepth` only if the default nesting limit is not enough. Run `Run`, `Stream`, or `RunAsync` on the main agent. Sub-agents always run without a conversation ID—they do not inherit the main agent session history. If you use `DisableLocalWorker`, pair each `NewAgentWorker` with the same options as the `NewAgent` that runs that agent.
 
 For streaming scenarios, the main agent is the single subscription point. When using `Stream`, events from all delegated sub-agents fan in to the same main-agent stream, including sub-agent tool approvals and tool call/result events.
 
@@ -288,21 +385,45 @@ result, _ := mainAgent.Run(ctx, "What is 144 divided by 12?", "")
 
 [examples/agent_with_subagents](examples/agent_with_subagents)
 
-**Stream event fan-in:** Subscribe once on the main agent and you receive events from the whole delegation tree, including sub-agent tool calls and approvals. Use `**ev.AgentName`** on each `AgentEvent` to see which agent produced the event (content, tools, approvals, complete). The approval payload is `ev.Approval` (`ApprovalEvent`); the requesting agent is **not** duplicated there—use `ev.AgentName`.
+**Stream event fan-in:** Subscribe once on the main agent and you receive events from the whole delegation tree, including sub-agent tool calls and approvals. Use `ev.AgentName` on each `AgentEvent` to see which agent produced the event (content, tools, approvals, complete). The approval payload is `ev.Approval` (`ApprovalEvent`); the requesting agent is not duplicated there—use `ev.AgentName`.
 
-### Tool approval
+### Approvals
 
-By default tools require approval, including delegation to sub-agents registered with `**WithSubAgents`**—they follow the same `**WithToolApprovalPolicy`** as your other tools. Use `WithApprovalHandler` on the agent (required for Run when any tool needs approval). See [examples/agent_with_subagents](examples/agent_with_subagents).
+The model can trigger registry tools (`WithTools` / registry), MCP tools, and delegation to specialists (`WithSubAgents`). **User approval** can be required before any of those run. `WithToolApprovalPolicy` is the one setting that governs all of them. If you omit it, the default is **require-all**—each path goes through your approval handler. For `Run`, set `WithApprovalHandler` whenever approvals can occur. See [examples/agent_with_subagents](examples/agent_with_subagents).
 
-#### Tools vs agent policy
+#### Built-in approval policies
 
-- `**WithToolApprovalPolicy**` applies to **every** tool the agent exposes: registry / `WithTools` **and** sub-agent delegation. Default is require-all; `AutoToolApprovalPolicy()` skips all; `AllowlistToolApprovalPolicy("echo", "subagent_MathSpecialist", ...)` skips only those names.
-- Custom tools may implement `**interfaces.ToolApproval`**; with a normal `**NewAgent`** build, a default policy is always set, so `**WithToolApprovalPolicy` wins** for that agent (see `requiresApproval` in `config.go`).
+These three types are provided by the `agent` package. For anything else, implement `interfaces.AgentToolApprovalPolicy` (`RequiresApproval`) and pass that value to `WithToolApprovalPolicy`.
 
-#### Sub-agents and approval
+- **`RequireAllToolApprovalPolicy`** (default when you omit `WithToolApprovalPolicy`) — every registry tool call, MCP call, and delegation to a sub-agent goes through your approval handler before it runs.
+- **`AutoToolApprovalPolicy()`** — nothing requires approval; use only when you fully trust the agent and its tools.
+- **`AllowlistToolApprovalPolicy`** — only the tools, specialists, and MCP tool ids you list skip approval; everything else still requires approval. Build the policy from `agent.AllowlistToolApprovalConfig` (`ToolNames`, `SubAgentNames`, optional `MCPTools`), check the error, then pass the result to `WithToolApprovalPolicy`.
 
-- `**ApprovalRequest`** (Run / RunAsync) and stream `**ev.Approval`** (`**ApprovalEvent`**) include `**Kind**` (`tool` or `delegation`) and `**DelegateToName**` (target specialist when `Kind` is `delegation`). The agent that asked for approval is on `**ev.AgentName**` for Stream (and `req.AgentName` on `ApprovalRequest`).
-- **Parent (main agent):** one policy for its whole list—e.g. `RequireAll` → approving `subagent_MathSpecialist` is the same flow as approving `calculator` on that agent. `AutoToolApprovalPolicy()` → no approval for delegation or other tools on that agent.
+  ```go
+  approvalPol, err := agent.AllowlistToolApprovalPolicy(agent.AllowlistToolApprovalConfig{
+      ToolNames:     []string{"calculator"},
+      SubAgentNames: []string{"MathSpecialist"},
+      MCPTools:      map[string][]string{"remote": {"search"}}, // optional
+  })
+  if err != nil {
+      log.Fatal(err)
+  }
+
+  a, err := agent.NewAgent(
+      agent.WithToolApprovalPolicy(approvalPol),
+      // ... WithApprovalHandler, WithTemporalConfig, etc.
+  )
+  if err != nil {
+      log.Fatal(err)
+  }
+  ```
+
+- Custom tools may implement `interfaces.ToolApproval`; in a standard `NewAgent` configuration, the configured `WithToolApprovalPolicy` is the approval gate used by that agent.
+
+#### Sub-agents (approval behavior)
+
+- `ApprovalRequest` (Run / RunAsync) and stream `ev.Approval` (`ApprovalEvent`) include `Kind` (`tool` or `delegation`) and `DelegateToName` (target specialist when `Kind` is `delegation`). The agent that asked for approval is on `ev.AgentName` for Stream (and `req.AgentName` on `ApprovalRequest`).
+- **Parent (main agent):** one policy for its whole list—e.g. `RequireAll` → approving delegation to MathSpecialist is the same flow as approving `calculator` on that agent. `AutoToolApprovalPolicy()` → no approval for delegation or other tools on that agent.
 - **Specialist:** separate agent, **its own** `WithToolApprovalPolicy`. Calculator calls inside the specialist use **that** policy, not the parent’s.
 
 ```text
@@ -626,7 +747,7 @@ cp examples/env.sample examples/.env
 # Edit examples/.env: set LLM_APIKEY, LLM_MODEL
 ```
 
-See **[examples/README.md](examples/README.md)** for how to run examples and the CLI.
+See **[examples/README.md](examples/README.md)** for how to run examples, the CLI, and optional flows such as MCP streamable HTTP (including example-specific environment variables).
 
 ### CLI configuration
 
@@ -650,7 +771,8 @@ See **[cmd/README.md](cmd/README.md)** for CLI details and env vars.
 
 - **Run and approval limits** — Use `WithTimeout` and/or a context deadline on `Run` / `Stream`; use `WithApprovalTimeout` when tools require approval (activity retry counts inside workflows are fixed in the SDK, not user-tunable).
 - **Bound agent loops** — Set `WithMaxIterations` and, if you use sub-agents, `WithMaxSubAgentDepth`.
-- **Tool and delegation risk** — Choose `WithToolApprovalPolicy` per agent (main and specialists); use human review for dangerous tools and delegation where policy requires it.
+- **Tool and delegation risk** — Choose `WithToolApprovalPolicy` per agent (main and specialists); use human review for dangerous tools, MCP-exposed capabilities, and delegation where policy requires it.
+- **MCP** — Remote servers widen your tool surface; prefer TLS in production; avoid `SkipTLSVerify` outside local dev; protect bearer tokens, OAuth secrets, and header-based credentials.
 - **Split processes** — If you use `DisableLocalWorker` or `EnableRemoteWorkers()`, use a distributed conversation store (e.g. Redis) and exercise approval/streaming paths in integration tests.
 - **Secrets and data** — Keep LLM and Temporal credentials out of source control; treat tool arguments and model output as untrusted in your app.
 - **LLM safety** — Validate and sanitize prompts, tool args, and model output at your integration boundary.

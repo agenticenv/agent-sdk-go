@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	sdkruntime "github.com/agenticenv/agent-sdk-go/internal/runtime"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/google/uuid"
@@ -629,7 +628,7 @@ func (rt *TemporalRuntime) buildLLMRequest(messages []interfaces.Message, skipTo
 		ResponseFormat: rt.AgentSpec.ResponseFormat,
 		Messages:       messages,
 	}
-	applyLLMSampling(llmSamplingToTypes(rt.AgentExecution.LLM.Sampling), req)
+	applyLLMSampling(rt.AgentExecution.LLM.Sampling, req)
 	if skipTools {
 		req.Tools = []interfaces.ToolSpec{}
 	} else {
@@ -987,23 +986,6 @@ func subAgentQueryFromArgs(args map[string]any) string {
 // their own limits separately, but this bounds the child execution from the main agent's perspective.
 func (rt *TemporalRuntime) subAgentChildWorkflowTimeout() time.Duration {
 	return rt.AgentExecution.Limits.Timeout
-}
-
-func llmSamplingToTypes(s *sdkruntime.LLMSampling) *types.LLMSampling {
-	if s == nil {
-		return nil
-	}
-	out := &types.LLMSampling{
-		Temperature: s.Temperature,
-		MaxTokens:   s.MaxTokens,
-		TopP:        s.TopP,
-		TopK:        s.TopK,
-	}
-	if s.Reasoning != nil {
-		r := *s.Reasoning
-		out.Reasoning = &r
-	}
-	return out
 }
 
 func mergeLLMUsage(acc *interfaces.LLMUsage, add *interfaces.LLMUsage) *interfaces.LLMUsage {

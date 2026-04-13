@@ -211,7 +211,10 @@ func TestBuildWorkflowSubAgentRoutes_flat(t *testing.T) {
 	if got == nil {
 		t.Fatal("expected routes")
 	}
-	key := SubAgentToolName(child)
+	key, err := subAgentToolName(child.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
 	r, ok := got[key]
 	if !ok {
 		t.Fatalf("missing %q in %v", key, got)
@@ -226,7 +229,10 @@ func TestBuildWorkflowSubAgentRoutes_nested(t *testing.T) {
 	mid := &Agent{agentConfig: agentConfig{Name: "Mid", taskQueue: "q-mid", subAgents: []*Agent{leaf}}}
 	root := &Agent{agentConfig: agentConfig{Name: "Root", taskQueue: "q-root", subAgents: []*Agent{mid}}}
 	got := root.buildSubAgentRoutes()
-	midKey := SubAgentToolName(mid)
+	midKey, err := subAgentToolName(mid.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
 	rMid, ok := got[midKey]
 	if !ok {
 		t.Fatalf("missing mid %q", midKey)
@@ -234,7 +240,10 @@ func TestBuildWorkflowSubAgentRoutes_nested(t *testing.T) {
 	if rMid.ChildRoutes == nil {
 		t.Fatal("expected nested child routes")
 	}
-	leafKey := SubAgentToolName(leaf)
+	leafKey, err := subAgentToolName(leaf.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
 	rLeaf, ok := rMid.ChildRoutes[leafKey]
 	if !ok {
 		t.Fatalf("missing leaf %q", leafKey)

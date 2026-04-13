@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/agenticenv/agent-sdk-go/internal/types"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
+	mcpclient "github.com/agenticenv/agent-sdk-go/pkg/mcp/client"
 	"github.com/google/uuid"
 	"go.temporal.io/sdk/client"
 )
@@ -33,6 +35,21 @@ type TemporalConfig = temporal.TemporalConfig
 // One LLM client can serve multiple agents with different sampling settings.
 type LLMSampling = types.LLMSampling
 
+// MCPServers maps a stable server key (e.g. "github", "slack") to per-server MCP settings.
+// Registered tool names use prefix mcp_<serverKey>_<toolName> (see [MCPTool]).
+// nil or empty map means no MCP servers from configuration.
+type MCPServers map[string]MCPConfig
+
+// MCPConfig describes one MCP server: transport, optional tool filter, and client timeouts/retries.
+// Set [MCPConfig.Transport] and [MCPConfig.ToolFilter] using types from [github.com/agenticenv/agent-sdk-go/pkg/mcp] (MCPStdio, MCPStreamableHTTP, MCPToolFilter).
+// Zero [MCPConfig.Timeout] and [MCPConfig.RetryAttempts] are applied in [mcpclient.BuildConfig] when the default MCP client is created ([mcpclient.NewClient]).
+type MCPConfig struct {
+	Transport     types.MCPTransportConfig
+	ToolFilter    types.MCPToolFilter
+	Timeout       time.Duration
+	RetryAttempts int
+}
+
 // agentConfig holds shared configuration for Agent and AgentWorker.
 //
 // Option applicability:
@@ -41,7 +58,8 @@ type LLMSampling = types.LLMSampling
 //   - Both: WithName, WithDescription, WithSystemPrompt, WithTemporalConfig, WithTemporalClient,
 //     WithInstanceId, WithLLMClient, WithToolApprovalPolicy, WithTools, WithToolRegistry,
 //     WithMaxIterations, WithStream, WithLogger, WithLogLevel, WithConversation, WithConversationSize,
-//     WithResponseFormat, WithLLMSampling, WithSubAgents, WithMaxSubAgentDepth
+//     WithResponseFormat, WithLLMSampling, WithSubAgents, WithMaxSubAgentDepth,
+//     WithMCPConfig, WithMCPClients
 type agentConfig struct {
 	ID                 string
 	Name               string
@@ -77,11 +95,15 @@ type agentConfig struct {
 	enableRemoteWorkers bool // true: run remote event path for streaming/approvals. false (default): in-process only. Agent only.
 	remoteWorker        bool // true for AgentWorker: worker-side runtime (remote activities/updates).
 
-	// subAgents
-	// subAgents are direct children; each is exposed to the LLM via NewSubAgentTool (see toolsList).
-	subAgents []*Agent
-	// maxSubAgentDepth limits nesting depth from this agent (direct subs = 1). Default 2 when unset or <= 0.
+	// Sub-agents: direct children exposed to the LLM; subAgentTools is filled by buildSubAgentTools (graph + name checks), merged in toolsList with base and MCP tools. maxSubAgentDepth caps nesting from this agent (direct children = 1; default 2 when unset or <= 0).
+	subAgents        []*Agent
+	subAgentTools    []interfaces.Tool
 	maxSubAgentDepth int
+
+	// MCP: optional server configs and/or explicit clients; merged at build into mcpTools (see buildMCPTools).
+	mcpServers MCPServers
+	mcpClients []interfaces.MCPClient
+	mcpTools   []interfaces.Tool
 }
 
 // defaultTimeout is used when no deadline set, to avoid blocking forever when no workers run.
@@ -239,7 +261,7 @@ func WithResponseFormat(rf *interfaces.ResponseFormat) Option {
 
 // WithLLMSampling sets per-agent LLM sampling overrides. Applies to Agent and AgentWorker.
 // When not set, LLM clients use their provider defaults. nil fields / 0 = provider default.
-// Use Reasoning (see [interfaces.LLMReasoning]) for generic reasoning/thinking; each provider maps it.
+// Use Reasoning (see [types.LLMReasoning]) for generic reasoning/thinking; each provider maps it.
 func WithLLMSampling(s *LLMSampling) Option {
 	return func(c *agentConfig) { c.llmSampling = s }
 }
@@ -255,6 +277,28 @@ func WithSubAgents(subAgents ...*Agent) Option {
 // Default is 2 when unset or <= 0. Applies to Agent and AgentWorker.
 func WithMaxSubAgentDepth(depth int) Option {
 	return func(c *agentConfig) { c.maxSubAgentDepth = depth }
+}
+
+// WithMCPConfig registers MCP servers by stable key (used in tool names and default client naming).
+// Each [MCPConfig] must set [MCPConfig.Transport] using transport types from [github.com/agenticenv/agent-sdk-go/pkg/mcp];
+// the agent wires a default MCP client internally (no modelcontextprotocol/go-sdk usage in application code).
+// Tools are discovered and merged with [WithMCPClients]. Applies to Agent and AgentWorker.
+func WithMCPConfig(servers MCPServers) Option {
+	return func(c *agentConfig) { c.mcpServers = servers }
+}
+
+// WithMCPClients adds caller-supplied MCP clients (e.g. custom transport). Each client's [interfaces.MCPClient.Name]
+// must be non-empty and unique among all MCP clients, including those created from [WithMCPConfig].
+// Use [mcpclient.NewClient] with [mcpclient.WithToolFilter] for the same allow/block filtering as [MCPConfig.ToolFilter] ([mcpclient.BuildConfig] validates the filter; [github.com/agenticenv/agent-sdk-go/pkg/mcp.MCPToolFilter.Apply] runs in [mcpclient.Client.ListTools]).
+// Applies to Agent and AgentWorker.
+func WithMCPClients(clients ...interfaces.MCPClient) Option {
+	return func(c *agentConfig) {
+		if len(clients) == 0 {
+			c.mcpClients = nil
+			return
+		}
+		c.mcpClients = append([]interfaces.MCPClient(nil), clients...)
+	}
 }
 
 // buildAgentConfig applies options, validates, and sets defaults (logger, timeouts, iterations).
@@ -301,10 +345,19 @@ func buildAgentConfig(opts []Option) (*agentConfig, error) {
 	if c.maxSubAgentDepth <= 0 {
 		c.maxSubAgentDepth = defaultMaxSubAgentDepth
 	}
-	if err := c.validateSubAgents(); err != nil {
+	if c.logLevel == "" {
+		c.logLevel = "error"
+	}
+	if c.logger == nil {
+		c.logger = logger.DefaultLogger(c.logLevel)
+	}
+	if err := c.buildMCPTools(); err != nil {
 		return nil, err
 	}
-	if err := c.validateToolsAndSubAgentNames(); err != nil {
+	if err := c.buildSubAgentTools(); err != nil {
+		return nil, err
+	}
+	if err := c.validateToolNames(); err != nil {
 		return nil, err
 	}
 	if c.timeout == 0 {
@@ -323,13 +376,6 @@ func buildAgentConfig(opts []Option) (*agentConfig, error) {
 		if c.approvalTimeout > types.MaxApprovalTimeout {
 			return nil, fmt.Errorf("approvalTimeout (%v) exceeds max (%v)", c.approvalTimeout, types.MaxApprovalTimeout)
 		}
-	}
-
-	if c.logLevel == "" {
-		c.logLevel = "error"
-	}
-	if c.logger == nil {
-		c.logger = logger.DefaultLogger(c.logLevel)
 	}
 
 	if c.maxIterations <= 0 {
@@ -354,10 +400,13 @@ func buildAgentConfig(opts []Option) (*agentConfig, error) {
 		slog.Duration("approvalTimeout", c.approvalTimeout),
 		slog.String("logLevel", c.logLevel),
 		slog.Int("toolCount", len(c.toolsList())),
+		slog.Int("subAgentToolCount", len(c.subAgentTools)),
+		slog.Int("mcpToolCount", len(c.mcpTools)),
 		slog.Bool("hasConversation", c.conversation != nil))
 	return c, nil
 }
 
+// toolsList returns WithTools or registry tools, merged MCP tools ([mcpTools]), then [subAgentTools] from [buildSubAgentTools].
 func (c *agentConfig) toolsList() []interfaces.Tool {
 	var base []interfaces.Tool
 	if c.toolRegistry != nil {
@@ -365,22 +414,26 @@ func (c *agentConfig) toolsList() []interfaces.Tool {
 	} else {
 		base = c.tools
 	}
-	if len(c.subAgents) == 0 {
-		return base
+	if len(c.mcpTools) > 0 {
+		merged := make([]interfaces.Tool, len(base)+len(c.mcpTools))
+		copy(merged, base)
+		copy(merged[len(base):], c.mcpTools)
+		base = merged
 	}
-	out := make([]interfaces.Tool, len(base), len(base)+len(c.subAgents))
-	copy(out, base)
-	for _, sa := range c.subAgents {
-		if st := NewSubAgentTool(sa); st != nil {
-			out = append(out, st)
-		}
+	if len(c.subAgentTools) > 0 {
+		merged := make([]interfaces.Tool, len(base)+len(c.subAgentTools))
+		copy(merged, base)
+		copy(merged[len(base):], c.subAgentTools)
+		base = merged
 	}
-	return out
+	return base
 }
 
-// validateSubAgents checks for nil sub-agents, duplicate roots, cycles, and max nesting depth.
-func (c *agentConfig) validateSubAgents() error {
+// buildSubAgentTools sets subAgentTools from [agentConfig.subAgents] using [NewSubAgentTool],
+// and validates roots (non-nil, no duplicate agent pointer, no duplicate derived tool name) and the nested graph (cycles, max depth).
+func (c *agentConfig) buildSubAgentTools() error {
 	if len(c.subAgents) == 0 {
+		c.subAgentTools = nil
 		return nil
 	}
 	maxDepth := c.maxSubAgentDepth
@@ -388,15 +441,29 @@ func (c *agentConfig) validateSubAgents() error {
 		maxDepth = defaultMaxSubAgentDepth
 	}
 	seen := make(map[*Agent]struct{}, len(c.subAgents))
-	for _, s := range c.subAgents {
-		if s == nil {
+	seenNames := make(map[string]struct{}, len(c.subAgents))
+	out := make([]interfaces.Tool, 0, len(c.subAgents))
+	for _, sa := range c.subAgents {
+		if sa == nil {
 			return fmt.Errorf("sub-agent must not be nil")
 		}
-		if _, dup := seen[s]; dup {
-			return fmt.Errorf("duplicate sub-agent %q in WithSubAgents", s.Name)
+		if _, dup := seen[sa]; dup {
+			return fmt.Errorf("duplicate sub-agent %q in WithSubAgents", sa.Name)
 		}
-		seen[s] = struct{}{}
+		seen[sa] = struct{}{}
+		n, err := subAgentToolName(sa.Name)
+		if err != nil {
+			return fmt.Errorf("WithSubAgents: %w", err)
+		}
+		if _, dup := seenNames[n]; dup {
+			return fmt.Errorf("duplicate sub-agent tool name %q", n)
+		}
+		seenNames[n] = struct{}{}
+		if st := NewSubAgentTool(sa); st != nil {
+			out = append(out, st)
+		}
 	}
+	c.subAgentTools = out
 	for _, s := range c.subAgents {
 		path := map[*Agent]struct{}{s: {}}
 		if err := dfsSubAgentDepth(s, path, 1, maxDepth); err != nil {
@@ -426,8 +493,8 @@ func dfsSubAgentDepth(a *Agent, path map[*Agent]struct{}, depth, maxDepth int) e
 	return nil
 }
 
-// validateToolsAndSubAgentNames ensures tool names are unique across WithTools/registry and sub-agent tools.
-func (c *agentConfig) validateToolsAndSubAgentNames() error {
+// validateToolNames ensures tool names are unique across WithTools/registry, MCP tools, and [subAgentTools].
+func (c *agentConfig) validateToolNames() error {
 	var base []interfaces.Tool
 	if c.toolRegistry != nil {
 		base = c.toolRegistry.Tools()
@@ -442,11 +509,21 @@ func (c *agentConfig) validateToolsAndSubAgentNames() error {
 		}
 		names[n] = struct{}{}
 	}
-	for _, sa := range c.subAgents {
-		if sa == nil {
-			continue
+	for _, t := range c.mcpTools {
+		if t == nil {
+			return fmt.Errorf("mcp tool must not be nil")
 		}
-		n := SubAgentToolName(sa)
+		n := t.Name()
+		if _, ok := names[n]; ok {
+			return fmt.Errorf("duplicate tool name %q: MCP tool conflicts with an existing tool", n)
+		}
+		names[n] = struct{}{}
+	}
+	for _, t := range c.subAgentTools {
+		if t == nil {
+			return fmt.Errorf("sub-agent tool must not be nil")
+		}
+		n := t.Name()
 		if _, ok := names[n]; ok {
 			return fmt.Errorf("sub-agent tool name %q conflicts with an existing tool", n)
 		}
@@ -508,8 +585,9 @@ func (c *agentConfig) runtimeAgentExecution() runtime.AgentExecution {
 	return d
 }
 
-// agentConfigFingerprint hashes identity, prompts, tools, sampling, limits, and approval policy
-// for SubAgentRoute.AgentFingerprint (delegation); same inputs as temporal.NewTemporalRuntime agent fingerprint.
+// agentConfigFingerprint hashes identity, prompts, tools, sampling, limits, approval policy,
+// and MCP wiring digest (transports, timeouts, filters, extra MCP client names) for SubAgentRoute.AgentFingerprint;
+// same inputs as temporal.NewTemporalRuntime agent fingerprint.
 func (c *agentConfig) agentConfigFingerprint() string {
 	mat := temporal.BuildAgentFingerprintPayload(
 		c.runtimeAgentSpec(),
@@ -522,6 +600,7 @@ func (c *agentConfig) agentConfigFingerprint() string {
 			Timeout:         c.timeout,
 			ApprovalTimeout: c.approvalTimeout,
 		},
+		mcpConfigFingerprint(c.mcpServers, mcpExtraClientNames(c.mcpClients)),
 	)
 	return temporal.ComputeAgentFingerprint(mat)
 }
@@ -539,7 +618,7 @@ func llmSamplingRuntimeView(s *LLMSampling) *runtime.LLMSampling {
 	}
 }
 
-func cloneLLMReasoning(r *interfaces.LLMReasoning) *interfaces.LLMReasoning {
+func cloneLLMReasoning(r *types.LLMReasoning) *types.LLMReasoning {
 	if r == nil {
 		return nil
 	}
@@ -591,4 +670,77 @@ func (c *agentConfig) hasApprovalTools() bool {
 		}
 	}
 	return false
+}
+
+// validateMCPClients checks for nil clients, empty names, and duplicate [interfaces.MCPClient.Name] values.
+func validateMCPClients(clients []interfaces.MCPClient) error {
+	seen := make(map[string]struct{}, len(clients))
+	for _, cl := range clients {
+		if cl == nil {
+			return fmt.Errorf("mcp client must not be nil")
+		}
+		n := strings.TrimSpace(cl.Name())
+		if n == "" {
+			return fmt.Errorf("mcp client name must not be empty")
+		}
+		if _, dup := seen[n]; dup {
+			return fmt.Errorf("duplicate mcp client name %q", n)
+		}
+		seen[n] = struct{}{}
+	}
+	return nil
+}
+
+// buildMCPTools merges [agentConfig.mcpServers] (default SDK client per key) with [agentConfig.mcpClients],
+// validates names, lists tools from each client (tool allow/block filtering runs inside [mcpclient.Client.ListTools] when configured), and appends [MCPTool] to [agentConfig.mcpTools].
+func (c *agentConfig) buildMCPTools() error {
+	c.mcpTools = []interfaces.Tool{}
+	if len(c.mcpServers) == 0 && len(c.mcpClients) == 0 {
+		return nil
+	}
+
+	keys := make([]string, 0, len(c.mcpServers))
+	for k := range c.mcpServers {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	clients := make([]interfaces.MCPClient, 0, len(keys)+len(c.mcpClients))
+	for _, k := range keys {
+		cfg := c.mcpServers[k]
+		if cfg.Transport == nil {
+			return fmt.Errorf("mcp %q: Transport is required", k)
+		}
+		mcpOpts := []mcpclient.Option{
+			mcpclient.WithLogger(c.logger),
+			mcpclient.WithTimeout(cfg.Timeout),
+			mcpclient.WithRetryAttempts(cfg.RetryAttempts),
+			mcpclient.WithToolFilter(cfg.ToolFilter),
+		}
+		cl, err := mcpclient.NewClient(k, cfg.Transport, mcpOpts...)
+		if err != nil {
+			return fmt.Errorf("mcp %q: new client: %w", k, err)
+		}
+		clients = append(clients, cl)
+	}
+	clients = append(clients, c.mcpClients...)
+
+	if err := validateMCPClients(clients); err != nil {
+		return err
+	}
+
+	ctx := context.Background()
+	var tools []interfaces.Tool
+	for _, cl := range clients {
+		sk := strings.TrimSpace(cl.Name())
+		specs, err := cl.ListTools(ctx)
+		if err != nil {
+			return fmt.Errorf("mcp %q: list tools: %w", sk, err)
+		}
+		for _, sp := range specs {
+			tools = append(tools, NewMCPTool(sk, sp, cl))
+		}
+	}
+	c.mcpTools = tools
+	return nil
 }
