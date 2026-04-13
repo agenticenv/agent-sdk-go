@@ -46,13 +46,13 @@ type MCPServerYAML struct {
 	Env     map[string]string `mapstructure:"env"`
 
 	// streamable_http
-	URL             string            `mapstructure:"url"`
-	BearerToken     string            `mapstructure:"bearer_token"`
-	OAuthClientID   string            `mapstructure:"oauth_client_id"`
-	OAuthSecret     string            `mapstructure:"oauth_client_secret"`
-	OAuthTokenURL   string            `mapstructure:"oauth_token_url"`
-	SkipTLSVerify   bool              `mapstructure:"skip_tls_verify"`
-	Headers         map[string]string `mapstructure:"headers"`
+	URL           string            `mapstructure:"url"`
+	BearerToken   string            `mapstructure:"bearer_token"`
+	OAuthClientID string            `mapstructure:"oauth_client_id"`
+	OAuthSecret   string            `mapstructure:"oauth_client_secret"`
+	OAuthTokenURL string            `mapstructure:"oauth_token_url"`
+	SkipTLSVerify bool              `mapstructure:"skip_tls_verify"`
+	Headers       map[string]string `mapstructure:"headers"`
 
 	TimeoutSeconds int      `mapstructure:"timeout_seconds"`
 	RetryAttempts  int      `mapstructure:"retry_attempts"`

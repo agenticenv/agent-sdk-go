@@ -65,6 +65,7 @@ func WithToolFilter(f mcp.MCPToolFilter) Option {
 // BuildConfig builds [ClientConfig] from options. Defaults when not set:
 //   - LogLevel: "error"
 //   - Logger: stderr slog logger at LogLevel
+//
 // It returns an error if [ClientConfig.ToolFilter] fails [mcp.MCPToolFilter.Validate].
 func BuildConfig(opts ...Option) (*ClientConfig, error) {
 	c := &ClientConfig{}

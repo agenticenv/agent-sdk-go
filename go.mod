@@ -1,6 +1,6 @@
 module github.com/agenticenv/agent-sdk-go
 
-go 1.25.0
+go 1.24.0
 
 replace github.com/agenticenv/agent-sdk-go/pkg/tools => ./pkg/tools
 
@@ -11,14 +11,14 @@ require (
 	github.com/golang/mock v1.6.0
 	github.com/google/uuid v1.6.0
 	github.com/joho/godotenv v1.5.1
-	github.com/modelcontextprotocol/go-sdk v1.5.0
+	github.com/modelcontextprotocol/go-sdk v1.4.0
 	github.com/openai/openai-go/v3 v3.26.0
 	github.com/redis/go-redis/v9 v9.18.0
 	github.com/spf13/viper v1.21.0
 	github.com/stretchr/testify v1.11.1
 	go.temporal.io/api v1.62.2
 	go.temporal.io/sdk v1.41.0
-	golang.org/x/oauth2 v0.36.0
+	golang.org/x/oauth2 v0.34.0
 	google.golang.org/genai v1.51.0
 )
 

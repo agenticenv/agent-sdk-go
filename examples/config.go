@@ -89,15 +89,15 @@ func init() {
 // LoadFromEnv loads config from environment variables. .env is loaded on package init if present.
 func LoadFromEnv() *Config {
 	cfg := &Config{
-		Host:                 getEnv("TEMPORAL_HOST", "localhost"),
-		Port:                 getEnvInt("TEMPORAL_PORT", 7233),
-		Namespace:            getEnv("TEMPORAL_NAMESPACE", "default"),
-		TaskQueue:            getEnv("TEMPORAL_TASKQUEUE", "agent-sdk-go"),
-		LogLevel:             getEnv("LOG_LEVEL", "error"),
-		Provider:             interfaces.LLMProvider(getEnv("LLM_PROVIDER", "openai")),
-		APIKey:               getEnv("LLM_APIKEY", ""),
-		Model:                getEnv("LLM_MODEL", "gpt-4o"),
-		BaseURL: getEnv("LLM_BASEURL", ""),
+		Host:      getEnv("TEMPORAL_HOST", "localhost"),
+		Port:      getEnvInt("TEMPORAL_PORT", 7233),
+		Namespace: getEnv("TEMPORAL_NAMESPACE", "default"),
+		TaskQueue: getEnv("TEMPORAL_TASKQUEUE", "agent-sdk-go"),
+		LogLevel:  getEnv("LOG_LEVEL", "error"),
+		Provider:  interfaces.LLMProvider(getEnv("LLM_PROVIDER", "openai")),
+		APIKey:    getEnv("LLM_APIKEY", ""),
+		Model:     getEnv("LLM_MODEL", "gpt-4o"),
+		BaseURL:   getEnv("LLM_BASEURL", ""),
 		MCP: MCPSettings{
 			Transport:         strings.TrimSpace(strings.ToLower(getEnv("MCP_TRANSPORT", ""))),
 			StreamableHTTPURL: strings.TrimSpace(getEnv("MCP_STREAMABLE_HTTP_URL", "")),

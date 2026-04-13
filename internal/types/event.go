@@ -35,9 +35,9 @@ type AgentEvent struct {
 	Error     error                  `json:"error,omitempty"`
 	Metadata  map[string]interface{} `json:"metadata,omitempty"`
 	// Usage is set on AgentEventComplete for the root agent: aggregated token usage for the run.
-	Usage *LLMUsage `json:"usage,omitempty"`
-	Timestamp  time.Time            `json:"timestamp"`
-	WorkflowID string               `json:"workflow_id,omitempty"` // optional run identifier for correlation (implementation-defined)
+	Usage      *LLMUsage `json:"usage,omitempty"`
+	Timestamp  time.Time `json:"timestamp"`
+	WorkflowID string    `json:"workflow_id,omitempty"` // optional run identifier for correlation (implementation-defined)
 }
 
 // ToolApprovalKind classifies what the user is approving (same event type for Stream).

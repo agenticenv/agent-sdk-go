@@ -8,9 +8,9 @@ Before contributing, ensure you have:
 
 | Requirement | Version / Notes |
 |-------------|-----------------|
-| **Go** | 1.24 or higher (see `go.mod` for the exact toolchain) |
+| **Go** | **Minimum `go 1.24.0`** (see the `go` line in `go.mod`; use that version or newer). |
 | **Temporal server** | Required for running examples and integration-style tests |
-| **golangci-lint** | Required for `make lint` — install: `go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest` |
+| **golangci-lint** | Required for `make lint` — install with the **same Go as `go.mod`**: `go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest` |
 | **gofmt** | `make lint` runs `gofmt -s` check first; run `make fmt` to apply `gofmt -s -w` project-wide |
 | **misspell** | `make spell` or `make lint` — typos via `misspell` (similar to Go Report Card) |
 
@@ -103,6 +103,8 @@ make lint
 ```
 
 This runs `go vet` and `golangci-lint`. All contributions must pass lint with zero errors.
+
+**golangci-lint vs Go version:** If you see `the Go language version used to build golangci-lint is lower than the targeted Go version`, reinstall the linter with your current Go: `go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest`. The binary must be built with Go **≥** the `go` line in `go.mod`.
 
 ### 5. Generate coverage
 

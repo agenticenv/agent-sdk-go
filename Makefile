@@ -60,7 +60,7 @@ spell:
 	@echo "==> misspell"
 	go run github.com/client9/misspell/cmd/misspell@latest -error .
 
-# Run linters (gofmt -s, misspell, go vet + golangci-lint; requires golangci-lint: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest)
+# Run linters (gofmt -s, misspell, go vet + golangci-lint). golangci-lint must be built with Go >= go.mod (see CONTRIBUTING.md).
 lint: fmt-check spell
 	@echo "==> Checking lints (go vet + golangci-lint)..."
 	go vet ./...
