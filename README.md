@@ -5,12 +5,12 @@
 [![CI](https://github.com/agenticenv/agent-sdk-go/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/agenticenv/agent-sdk-go/actions)
 [![Release](https://img.shields.io/github/v/release/agenticenv/agent-sdk-go?label=Release)](https://github.com/agenticenv/agent-sdk-go/releases)
 [![Go Reference](https://pkg.go.dev/badge/github.com/agenticenv/agent-sdk-go.svg)](https://pkg.go.dev/github.com/agenticenv/agent-sdk-go)
-[![Go Report Card](https://goreportcard.com/badge/github.com/agenticenv/agent-sdk-go?v=0.1.1)](https://goreportcard.com/report/github.com/agenticenv/agent-sdk-go)
+[![Go Report Card](https://goreportcard.com/badge/github.com/agenticenv/agent-sdk-go?v=0.1.2)](https://goreportcard.com/report/github.com/agenticenv/agent-sdk-go)
 [![License](https://img.shields.io/github/license/agenticenv/agent-sdk-go?label=License&cacheSeconds=0)](LICENSE)
 
 > **Note:** Independent community library — **not** affiliated with Temporal Technologies.
 >
-> **Versioning:** [Semantic versioning](https://semver.org/); published lines are **git tags** (e.g. `v0.1.1`). See the **[latest release](https://github.com/agenticenv/agent-sdk-go/releases/latest)** — the README does not pin a patch number so it stays accurate after each tag.
+> **Versioning:** [Semantic versioning](https://semver.org/); published lines are **git tags** (e.g. `v0.1.2`). See the **[latest release](https://github.com/agenticenv/agent-sdk-go/releases/latest)** — the README does not pin a patch number so it stays accurate after each tag.
 
 ## Overview
 
