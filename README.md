@@ -7,6 +7,7 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/agenticenv/agent-sdk-go.svg)](https://pkg.go.dev/github.com/agenticenv/agent-sdk-go)
 [![Go Report Card](https://goreportcard.com/badge/github.com/agenticenv/agent-sdk-go?v=0.1.2)](https://goreportcard.com/report/github.com/agenticenv/agent-sdk-go)
 [![License](https://img.shields.io/github/license/agenticenv/agent-sdk-go?label=License&cacheSeconds=0)](LICENSE)
+[![Mentioned in Awesome Go](https://awesome.re/mentioned-badge.svg)](https://github.com/avelino/awesome-go)
 
 > **Note:** Independent community library — **not** affiliated with Temporal Technologies.
 >
