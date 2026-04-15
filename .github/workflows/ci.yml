@@ -31,5 +31,15 @@ jobs:
       - name: Test
         run: make test
 
+      - name: Code Coverage
+        run: make code_coverage
+
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          slug: agenticenv/agent-sdk-go
+          files: ./coverage.out
+
       - name: Build
         run: make build

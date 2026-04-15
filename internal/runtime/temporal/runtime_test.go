@@ -15,16 +15,112 @@ import (
 	"github.com/agenticenv/agent-sdk-go/internal/types"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
+	"github.com/nexus-rpc/sdk-go/nexus"
 	"github.com/stretchr/testify/mock"
 	enumspb "go.temporal.io/api/enums/v1"
 	taskqueuepb "go.temporal.io/api/taskqueue/v1"
 	workflowservice "go.temporal.io/api/workflowservice/v1"
+	"go.temporal.io/sdk/activity"
 	temporalmocks "go.temporal.io/sdk/mocks"
+	"go.temporal.io/sdk/worker"
+	"go.temporal.io/sdk/workflow"
 )
+
+// noopTemporalWorker is a minimal [worker.Worker] for exercising Start/Stop/Close without a real Temporal server.
+type noopTemporalWorker struct {
+	stopped bool
+}
+
+func (noopTemporalWorker) RegisterWorkflow(interface{}) {}
+func (noopTemporalWorker) RegisterWorkflowWithOptions(interface{}, workflow.RegisterOptions) {
+}
+func (noopTemporalWorker) RegisterDynamicWorkflow(interface{}, workflow.DynamicRegisterOptions) {
+}
+func (noopTemporalWorker) RegisterActivity(interface{})                                      {}
+func (noopTemporalWorker) RegisterActivityWithOptions(interface{}, activity.RegisterOptions) {}
+func (noopTemporalWorker) RegisterDynamicActivity(interface{}, activity.DynamicRegisterOptions) {
+}
+func (noopTemporalWorker) RegisterNexusService(*nexus.Service) {}
+
+func (noopTemporalWorker) Start() error                 { return nil }
+func (noopTemporalWorker) Run(<-chan interface{}) error { return nil }
+func (n *noopTemporalWorker) Stop()                     { n.stopped = true }
+
+var _ worker.Worker = (*noopTemporalWorker)(nil)
 
 func TestGetEventTaskQueue(t *testing.T) {
 	if got := getEventTaskQueue("my-queue"); got != "my-queue-events" {
 		t.Errorf("getEventTaskQueue(%q) = %q, want my-queue-events", "my-queue", got)
+	}
+}
+
+func TestAgentNameFromExecuteRequest(t *testing.T) {
+	if agentNameFromExecuteRequest(nil) != "" {
+		t.Fatal("nil req")
+	}
+	if agentNameFromExecuteRequest(&sdkruntime.ExecuteRequest{}) != "" {
+		t.Fatal("nil AgentSpec")
+	}
+	if got := agentNameFromExecuteRequest(&sdkruntime.ExecuteRequest{
+		AgentSpec: &sdkruntime.AgentSpec{Name: "n"},
+	}); got != "n" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestSyntheticStreamCompleteEvent(t *testing.T) {
+	ev := syntheticStreamCompleteEvent(nil, "root")
+	if ev == nil || ev.Type != types.AgentEventComplete || ev.AgentName != "root" {
+		t.Fatalf("nil resp: %+v", ev)
+	}
+
+	ev2 := syntheticStreamCompleteEvent(&types.AgentResponse{
+		Content:   "body",
+		AgentName: "from-resp",
+		Usage:     &types.LLMUsage{TotalTokens: 9},
+	}, "ignored")
+	if ev2.Content != "body" || ev2.AgentName != "from-resp" || ev2.Usage.TotalTokens != 9 {
+		t.Fatalf("with AgentName: %+v", ev2)
+	}
+
+	ev3 := syntheticStreamCompleteEvent(&types.AgentResponse{Content: "c", AgentName: ""}, "fallback")
+	if ev3.AgentName != "fallback" {
+		t.Fatalf("fallback name: got %q", ev3.AgentName)
+	}
+
+	ev4 := syntheticStreamCompleteEvent(&types.AgentResponse{Content: "only"}, "")
+	if ev4.AgentName != "" {
+		t.Fatalf("empty rootName with empty resp.AgentName: got %q", ev4.AgentName)
+	}
+}
+
+func TestResolveEventPipeline(t *testing.T) {
+	l := logger.NoopLogger()
+	rt := &TemporalRuntime{
+		TemporalRuntimeConfig: TemporalRuntimeConfig{
+			logger:    l,
+			taskQueue: "tq",
+		},
+	}
+	ewf, etq, err := rt.resolveEventPipeline(context.Background(), "My Agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if etq != "tq-events" {
+		t.Fatalf("event task queue = %q", etq)
+	}
+	if !strings.HasPrefix(ewf, "agent-event-My-Agent-") {
+		t.Fatalf("event workflow id = %q", ewf)
+	}
+	ewf2, etq2, err := rt.resolveEventPipeline(context.Background(), "My Agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ewf2 != ewf || etq2 != etq {
+		t.Fatalf("second call same agent should match: %q/%q vs %q/%q", ewf, etq, ewf2, etq2)
+	}
+	if rt.activeEventWorkflowID == "" {
+		t.Fatal("activeEventWorkflowID should be set")
 	}
 }
 
@@ -470,4 +566,161 @@ func TestTemporalRuntime_ExecuteStream_WorkflowGetError(t *testing.T) {
 	if !sawErr {
 		t.Fatal("expected error event on stream")
 	}
+}
+
+func TestTemporalRuntime_Start_Idempotent(t *testing.T) {
+	tc := temporalmocks.NewClient(t)
+	rt, err := NewTemporalRuntime(
+		WithTemporalClient(tc, "tq"),
+		WithAgentSpec(sdkruntime.AgentSpec{Name: "agent-a"}),
+		WithAgentExecution(sdkruntime.AgentExecution{LLM: sdkruntime.AgentLLM{Client: stubLLM{}}}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.agentWorker = &noopTemporalWorker{}
+
+	ctx := context.Background()
+	if err := rt.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := rt.Start(ctx); err != nil {
+		t.Fatalf("Start second call: %v", err)
+	}
+}
+
+func TestTemporalRuntime_Stop_RemoteOwnedClient(t *testing.T) {
+	tc := temporalmocks.NewClient(t)
+	tc.On("Close").Once()
+
+	rt, err := NewTemporalRuntime(
+		WithTemporalClient(tc, "tq"),
+		WithRemoteWorker(true),
+		WithAgentSpec(sdkruntime.AgentSpec{Name: "agent-a"}),
+		WithAgentExecution(sdkruntime.AgentExecution{LLM: sdkruntime.AgentLLM{Client: stubLLM{}}}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.ownsTemporalClient = true
+	aw := &noopTemporalWorker{}
+	rt.agentWorker = aw
+
+	rt.Stop()
+	if !aw.stopped {
+		t.Fatal("expected agent worker Stop when remoteWorker is set")
+	}
+	tc.AssertExpectations(t)
+}
+
+func TestTemporalRuntime_Stop_RemoteOwnedClientNoAgentWorker(t *testing.T) {
+	tc := temporalmocks.NewClient(t)
+	tc.On("Close").Once()
+
+	rt, err := NewTemporalRuntime(
+		WithTemporalClient(tc, "tq"),
+		WithRemoteWorker(true),
+		WithAgentSpec(sdkruntime.AgentSpec{Name: "agent-a"}),
+		WithAgentExecution(sdkruntime.AgentExecution{LLM: sdkruntime.AgentLLM{Client: stubLLM{}}}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.ownsTemporalClient = true
+	rt.agentWorker = nil
+
+	rt.Stop()
+	tc.AssertExpectations(t)
+}
+
+func TestTemporalRuntime_Stop_LocalEmbed(t *testing.T) {
+	tc := temporalmocks.NewClient(t)
+	rt, err := NewTemporalRuntime(
+		WithTemporalClient(tc, "tq"),
+		WithRemoteWorker(false),
+		WithAgentSpec(sdkruntime.AgentSpec{Name: "agent-a"}),
+		WithAgentExecution(sdkruntime.AgentExecution{LLM: sdkruntime.AgentLLM{Client: stubLLM{}}}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.Stop()
+}
+
+func TestTemporalRuntime_Close_Minimal(t *testing.T) {
+	tc := temporalmocks.NewClient(t)
+	rt, err := NewTemporalRuntime(
+		WithTemporalClient(tc, "tq"),
+		WithAgentSpec(sdkruntime.AgentSpec{Name: "agent-a"}),
+		WithAgentExecution(sdkruntime.AgentExecution{LLM: sdkruntime.AgentLLM{Client: stubLLM{}}}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.Close()
+}
+
+func TestTemporalRuntime_Close_OwnsTemporalClient(t *testing.T) {
+	tc := temporalmocks.NewClient(t)
+	tc.On("Close").Once()
+
+	rt, err := NewTemporalRuntime(
+		WithTemporalClient(tc, "tq"),
+		WithAgentSpec(sdkruntime.AgentSpec{Name: "agent-a"}),
+		WithAgentExecution(sdkruntime.AgentExecution{LLM: sdkruntime.AgentLLM{Client: stubLLM{}}}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.ownsTemporalClient = true
+	rt.Close()
+	tc.AssertExpectations(t)
+}
+
+func TestTemporalRuntime_Close_StopsWorkers(t *testing.T) {
+	tc := temporalmocks.NewClient(t)
+	rt, err := NewTemporalRuntime(
+		WithTemporalClient(tc, "tq"),
+		WithAgentSpec(sdkruntime.AgentSpec{Name: "agent-a"}),
+		WithAgentExecution(sdkruntime.AgentExecution{LLM: sdkruntime.AgentLLM{Client: stubLLM{}}}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ew := &noopTemporalWorker{}
+	aw := &noopTemporalWorker{}
+	rt.eventWorker = ew
+	rt.agentWorker = aw
+
+	rt.Close()
+	if !ew.stopped || !aw.stopped {
+		t.Fatalf("event stopped=%v agent stopped=%v", ew.stopped, aw.stopped)
+	}
+}
+
+func TestTemporalRuntime_Close_ActiveWorkflows(t *testing.T) {
+	tc := temporalmocks.NewClient(t)
+	wfRun := temporalmocks.NewWorkflowRun(t)
+
+	tc.On("TerminateWorkflow", mock.Anything, "run-w1", "", "agent closed").Return(nil).Once()
+	tc.On("SignalWorkflow", mock.Anything, "evt-w1", "", eventWorkflowCompleteSignal, nil).Return(nil).Once()
+	tc.On("GetWorkflow", mock.Anything, "evt-w1", "").Return(wfRun).Once()
+	wfRun.On("Get", mock.Anything, nil).Return(nil).Once()
+
+	rt, err := NewTemporalRuntime(
+		WithTemporalClient(tc, "tq"),
+		WithAgentSpec(sdkruntime.AgentSpec{Name: "agent-a"}),
+		WithAgentExecution(sdkruntime.AgentExecution{LLM: sdkruntime.AgentLLM{Client: stubLLM{}}}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.runMu.Lock()
+	rt.activeRunWorkflowID = "run-w1"
+	rt.activeEventWorkflowID = "evt-w1"
+	rt.runMu.Unlock()
+
+	rt.Close()
+	tc.AssertExpectations(t)
+	wfRun.AssertExpectations(t)
 }

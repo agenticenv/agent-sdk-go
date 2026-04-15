@@ -34,7 +34,9 @@ check: fmt test lint secrets-scan
 # Run tests with coverage
 test-coverage:
 	@echo "==> Running tests with coverage..."
-	go test ./pkg/... -count=1 -coverprofile=coverage.out
+	go test ./... -count=1 -coverprofile=coverage.out
+	@echo "==> Total coverage:"
+	@go tool cover -func=coverage.out | grep '^total:'
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "==> Coverage report: coverage.html"
 

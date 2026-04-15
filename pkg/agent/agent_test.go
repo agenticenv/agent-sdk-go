@@ -3,11 +3,13 @@ package agent
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/golang/mock/gomock"
 
+	"github.com/agenticenv/agent-sdk-go/internal/eventbus"
 	"github.com/agenticenv/agent-sdk-go/internal/runtime"
 	rtmocks "github.com/agenticenv/agent-sdk-go/internal/runtime/mocks"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
@@ -259,4 +261,72 @@ func TestBuildWorkflowSubAgentRoutes_skipsEmptyTaskQueue(t *testing.T) {
 	if got := parent.buildSubAgentRoutes(); len(got) != 0 {
 		t.Fatalf("want empty, got %v", got)
 	}
+}
+
+func TestBuildAgent_DisableLocalWorkerWithStreamRequiresEnableRemoteWorkers(t *testing.T) {
+	_, err := buildAgent([]Option{
+		WithName("x"),
+		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		WithLLMClient(stubLLM{}),
+		DisableLocalWorker(),
+		WithStream(true),
+	})
+	if err == nil || !strings.Contains(err.Error(), "EnableRemoteWorkers") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestAgent_Run_RequiresApprovalHandlerWhenToolsNeedApproval(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	mockRT := rtmocks.NewMockRuntime(ctrl)
+
+	a := &Agent{
+		agentConfig: agentConfig{
+			Name:   "A",
+			logger: logger.DefaultLogger("error"),
+			tools: []interfaces.Tool{
+				mockToolWithApproval{mockTool: mockTool{name: "need"}, needApproval: true},
+			},
+		},
+		runtime: mockRT,
+	}
+	_, err := a.Run(context.Background(), "hi", "")
+	if err == nil || !strings.Contains(err.Error(), "WithApprovalHandler") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestAgent_OnApproval(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	mockRT := rtmocks.NewMockRuntime(ctrl)
+	mockRT.EXPECT().Approve(gomock.Any(), "tok", types.ApprovalStatusApproved).Return(nil)
+
+	a := testAgentWithRuntime(mockRT)
+	if err := a.OnApproval(context.Background(), "tok", types.ApprovalStatusApproved); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWireInMemoryEventChannelToSubAgents(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	bus := eventbus.NewInmem(logger.DefaultLogger("error"))
+
+	parentRT := rtmocks.NewMockEventBusRuntime(ctrl)
+	parentRT.EXPECT().SetEventBus(bus)
+
+	childRT := rtmocks.NewMockEventBusRuntime(ctrl)
+	childRT.EXPECT().SetEventBus(bus)
+
+	child := &Agent{
+		agentConfig: agentConfig{Name: "Child", taskQueue: "q-c"},
+		runtime:     childRT,
+	}
+	parent := &Agent{
+		agentConfig: agentConfig{Name: "Parent", taskQueue: "q-p", subAgents: []*Agent{child}},
+		runtime:     parentRT,
+	}
+	wireInMemoryEventChannelToSubAgents(bus, parent)
 }

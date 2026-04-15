@@ -1,0 +1,17 @@
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 1%
+    patch:
+      default:
+        target: auto
+
+# Paths excluded from coverage reports (generated code, samples, tests).
+# All gomock output lives under .../mocks/ (internal/runtime/mocks, pkg/interfaces/mocks); no other mock dirs in repo.
+ignore:
+  - "**/mocks/**"
+  - "examples/**"
+  - "cmd/**"
+  - "**/*_test.go"

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
@@ -18,6 +19,34 @@ func (m mockTool) Parameters() interfaces.JSONSchema { return interfaces.JSONSch
 func (m mockTool) Execute(ctx context.Context, args map[string]any) (any, error) {
 	return nil, nil
 }
+
+func TestToolPolicyFingerprint(t *testing.T) {
+	if toolPolicyFingerprint(nil) != "nil" {
+		t.Fatal("nil policy")
+	}
+	if toolPolicyFingerprint(RequireAllToolApprovalPolicy{}) != "require_all" {
+		t.Fatal("require_all value")
+	}
+	p := AutoToolApprovalPolicy()
+	if toolPolicyFingerprint(p) != "auto" {
+		t.Fatal("auto")
+	}
+	al, err := AllowlistToolApprovalPolicy(AllowlistToolApprovalConfig{ToolNames: []string{"z", "a"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := toolPolicyFingerprint(al)
+	if !strings.HasPrefix(fp, "allowlist:") || !strings.Contains(fp, "a") || !strings.Contains(fp, "z") {
+		t.Fatalf("got %q", fp)
+	}
+	if got := toolPolicyFingerprint(unknownPolicyForFingerprintTest{}); !strings.Contains(got, "unknown") {
+		t.Fatalf("got %q", got)
+	}
+}
+
+type unknownPolicyForFingerprintTest struct{}
+
+func (unknownPolicyForFingerprintTest) RequiresApproval(interfaces.Tool) bool { return false }
 
 func TestRequireAllToolApprovalPolicy_RequiresApproval(t *testing.T) {
 	p := RequireAllToolApprovalPolicy{}
