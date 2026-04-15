@@ -736,6 +736,10 @@ Project policies: **[SECURITY.md](SECURITY.md)** for vulnerability reporting and
 
 Quick commands: `make test` | `make lint` | `make fmt` | `make spell` | `make tidy` | `make test-coverage` (`make lint` runs `gofmt -s`, `misspell`, then `go vet` + `golangci-lint`)
 
+## Code Coverage
+
+Coverage reports (PR and default branch) are on **[Codecov](https://app.codecov.io/gh/agenticenv/agent-sdk-go)**. Locally, run `make test-coverage` to produce `coverage.out` and `coverage.html`.
+
 ---
 
 ## Setup and run examples
