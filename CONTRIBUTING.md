@@ -88,7 +88,7 @@ Keep your branch short and descriptive. Sync with `main` before opening a PR: `g
 make test
 ```
 
-**CI runs automatically** on pull requests and pushes to `main`. Lint and test must pass before merge — fix any CI failures in your PR.
+**CI runs automatically** on pull requests and on pushes to branches other than `main`. Pushes or merges to `main` do not trigger CI automatically; use **workflow_dispatch** in GitHub Actions when you need an on-demand run. Lint and test must pass before merge — fix any CI failures in your PR.
 
 Or run tests for a specific package:
 
