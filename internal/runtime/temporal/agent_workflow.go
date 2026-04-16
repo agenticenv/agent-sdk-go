@@ -24,6 +24,9 @@ var (
 
 	agentToolApprovalActivityMaxAttempts int32 = 1
 
+	agentToolAuthorizeActivityTaskTimeout time.Duration = 30 * time.Minute
+	agentToolAuthorizeActivityMaxAttempts int32         = 1
+
 	agentToolExecuteActivityTaskTimeout time.Duration = 30 * time.Minute
 	agentToolExecuteActivityMaxAttempts int32         = 3
 
@@ -45,6 +48,7 @@ var (
 const (
 	msgToolRejected            = "Tool execution was rejected by the user."
 	msgToolApprovalUnavailable = "Tool approval could not be completed because the event stream is unavailable; continuing without running the tool."
+	msgToolUnauthorized        = "Tool execution was denied by authorization policy."
 )
 
 // SendAgentEventResult is returned by SendAgentEventUpdateActivity. Fatal errors are returned as activity error;
@@ -167,6 +171,18 @@ type AgentToolApprovalInput struct {
 	AgentFingerprint string         `json:"agent_fingerprint,omitempty"`
 }
 
+type AgentToolAuthorizeInput struct {
+	ToolName         string         `json:"tool_name"`
+	Args             map[string]any `json:"args"`
+	ToolCallID       string         `json:"tool_call_id"`
+	AgentFingerprint string         `json:"agent_fingerprint,omitempty"`
+}
+
+type AgentToolAuthorizeResult struct {
+	Allowed bool   `json:"allowed"`
+	Reason  string `json:"reason,omitempty"`
+}
+
 // SendAgentEventActivityInput is the payload for SendAgentEventUpdateActivity (workflow + activity).
 type SendAgentEventActivityInput struct {
 	EventWorkflowID string            `json:"event_workflow_id,omitempty"`
@@ -230,6 +246,11 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 		ActivityID:          "AgentToolApprovalActivity_" + activityIDSuffix,
 		StartToCloseTimeout: approvalTaskTimeout,
 		RetryPolicy:         retryPolicy(agentToolApprovalActivityMaxAttempts),
+	})
+	authorizeCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		ActivityID:          "AgentToolAuthorizeActivity_" + activityIDSuffix,
+		StartToCloseTimeout: agentToolAuthorizeActivityTaskTimeout,
+		RetryPolicy:         retryPolicy(agentToolAuthorizeActivityMaxAttempts),
 	})
 	execCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		ActivityID:          "AgentToolExecuteActivity_" + activityIDSuffix,
@@ -408,6 +429,45 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 		messages = append(messages, assistantMsg)
 
 		for _, tc := range llmResult.ToolCalls {
+			var authResult AgentToolAuthorizeResult
+			authInput := AgentToolAuthorizeInput{
+				ToolCallID:       tc.ToolCallID,
+				ToolName:         tc.ToolName,
+				Args:             tc.Args,
+				AgentFingerprint: input.AgentFingerprint,
+			}
+			if err := workflow.ExecuteActivity(authorizeCtx, rt.AgentToolAuthorizeActivity, authInput).Get(authorizeCtx, &authResult); err != nil {
+				return nil, err
+			}
+			if !authResult.Allowed {
+				logger.Info("workflow: tool authorization denied", "scope", "workflow", "toolName", tc.ToolName, "toolCallID", tc.ToolCallID)
+				content := msgToolUnauthorized
+				if strings.TrimSpace(authResult.Reason) != "" {
+					content = fmt.Sprintf("%s Reason: %s", content, authResult.Reason)
+				}
+				if emitErr := emitEvent(&types.AgentEvent{
+					Type: types.AgentEventToolResult,
+					ToolCall: &types.ToolCallEvent{
+						ToolCallID: tc.ToolCallID,
+						ToolName:   tc.ToolName,
+						Args:       tc.Args,
+						Result:     content,
+						Status:     types.ToolCallStatusDenied,
+					},
+					Timestamp: workflow.Now(ctx),
+				}); emitErr != nil {
+					return nil, emitErr
+				}
+
+				toolResults = append(toolResults, interfaces.Message{
+					Role:       interfaces.MessageRoleTool,
+					Content:    content,
+					ToolName:   tc.ToolName,
+					ToolCallID: tc.ToolCallID,
+				})
+				continue
+			}
+
 			approvalStatus := types.ApprovalStatusApproved
 			if tc.NeedsApproval {
 				logger.Info("workflow: tool requires approval", "scope", "workflow", "toolName", tc.ToolName, "argCount", len(tc.Args))
@@ -666,14 +726,8 @@ func (rt *TemporalRuntime) llmResponseToResult(resp *interfaces.LLMResponse, too
 		if tc == nil {
 			continue
 		}
-		var tool interfaces.Tool
-		for _, t := range tools {
-			if t.Name() == tc.ToolName {
-				tool = t
-				break
-			}
-		}
-		if tool == nil {
+		tool, ok := findToolByName(tools, tc.ToolName)
+		if !ok {
 			return nil, fmt.Errorf("unknown tool: %s", tc.ToolName)
 		}
 		needsApproval := rt.requiresApproval(tool)
@@ -860,20 +914,64 @@ func (rt *TemporalRuntime) AgentToolExecuteActivity(ctx context.Context, input A
 	logger := activity.GetLogger(ctx)
 	logger.Debug("activity: tool execute started", "scope", "activity", "tool", toolName, "argCount", len(args))
 	tools := rt.AgentExecution.Tools.Tools
-	var content string
+	tool, ok := findToolByName(tools, toolName)
+	if !ok {
+		logger.Warn("activity: unknown tool", "scope", "activity", "tool", toolName)
+		return "", fmt.Errorf("unknown tool: %s", toolName)
+	}
+	result, err := tool.Execute(ctx, args)
+	if err != nil {
+		return "", err
+	}
+	content := fmt.Sprintf("%v", result)
+	logger.Debug("activity: tool execute completed", "scope", "activity", "tool", toolName)
+	return content, nil
+}
+
+// AgentToolAuthorizeActivity checks optional programmatic authorization before approval/execute.
+func (rt *TemporalRuntime) AgentToolAuthorizeActivity(ctx context.Context, input AgentToolAuthorizeInput) (AgentToolAuthorizeResult, error) {
+	if err := rt.verifyAgentFingerprint(input.AgentFingerprint); err != nil {
+		return AgentToolAuthorizeResult{}, err
+	}
+	toolName := input.ToolName
+	args := input.Args
+	logger := activity.GetLogger(ctx)
+	logger.Debug("activity: tool authorize started", "scope", "activity", "tool", toolName, "argCount", len(args))
+	tools := rt.AgentExecution.Tools.Tools
+	tool, ok := findToolByName(tools, toolName)
+	if !ok {
+		logger.Warn("activity: unknown tool in authorization", "scope", "activity", "tool", toolName)
+		return AgentToolAuthorizeResult{}, fmt.Errorf("unknown tool: %s", toolName)
+	}
+	authorizer, ok := tool.(interfaces.ToolAuthorizer)
+	if !ok {
+		logger.Debug("activity: tool has no authorizer; allow by default", "scope", "activity", "tool", toolName)
+		return AgentToolAuthorizeResult{Allowed: true}, nil
+	}
+	decision, err := authorizer.Authorize(ctx, args)
+	if err != nil {
+		logger.Warn("activity: tool authorization failed", "scope", "activity", "tool", toolName, "error", err)
+		return AgentToolAuthorizeResult{}, err
+	}
+	if decision.Allow {
+		logger.Debug("activity: tool authorization allowed", "scope", "activity", "tool", toolName)
+		return AgentToolAuthorizeResult{Allowed: true}, nil
+	}
+	reason := strings.TrimSpace(decision.Reason)
+	logger.Info("activity: tool authorization denied", "scope", "activity", "tool", toolName, "reason", reason)
+	return AgentToolAuthorizeResult{
+		Allowed: false,
+		Reason:  reason,
+	}, nil
+}
+
+func findToolByName(tools []interfaces.Tool, toolName string) (interfaces.Tool, bool) {
 	for _, t := range tools {
 		if t.Name() == toolName {
-			result, err := t.Execute(ctx, args)
-			if err != nil {
-				return "", err
-			}
-			content = fmt.Sprintf("%v", result)
-			logger.Debug("activity: tool execute completed", "scope", "activity", "tool", toolName)
-			return content, nil
+			return t, true
 		}
 	}
-	logger.Warn("activity: unknown tool", "scope", "activity", "tool", toolName)
-	return "", fmt.Errorf("unknown tool: %s", toolName)
+	return nil, false
 }
 
 func (rt *TemporalRuntime) delegateToSubAgent(ctx workflow.Context, input AgentWorkflowInput, tc ToolCallRequest, route types.SubAgentRoute) string {

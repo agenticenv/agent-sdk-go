@@ -45,6 +45,7 @@ const (
 	ToolCallStatusPending   ToolCallStatus = types.ToolCallStatusPending
 	ToolCallStatusRunning   ToolCallStatus = types.ToolCallStatusRunning
 	ToolCallStatusCompleted ToolCallStatus = types.ToolCallStatusCompleted
+	ToolCallStatusDenied    ToolCallStatus = types.ToolCallStatusDenied
 	ToolCallStatusFailed    ToolCallStatus = types.ToolCallStatusFailed
 )
 

@@ -32,6 +32,7 @@ The examples use `TEMPORAL_HOST`, `TEMPORAL_PORT`, `TEMPORAL_NAMESPACE` from `.e
 | `agent_with_tools_approval` | Tools + `WithApprovalHandler` — user approves or rejects each tool run (Run only) |
 | `agent_with_run_async` | `RunAsync` — `resultCh` + `approvalCh`; use `req.Respond` (no `WithApprovalHandler`) |
 | `agent_with_custom_tools` | Custom tools via `WithTools` — implementing `interfaces.Tool` |
+| `agent_with_tool_authorizer` | Custom tool authorization via `interfaces.ToolAuthorizer` — denied calls surface as `tool_result` with `denied` status |
 | `multiple_agents` | Multiple agents with `WithInstanceId` — sequential or concurrent |
 | `agent_with_subagents` | Main agent + math specialist — `WithSubAgents`, separate task queues |
 | `agent_with_json_response` | Structured LLM output — `WithResponseFormat` + `interfaces.JSONSchema` (JSON with schema; no tools) |
@@ -128,6 +129,7 @@ go run ./agent_with_subagents "What is 987 times 654?"
 go run ./agent_with_tools_approval "What is 15 + 27?"
 go run ./agent_with_run_async "What is 15 + 27?"
 go run ./agent_with_custom_tools "Reverse 'hello world'"
+go run ./agent_with_tool_authorizer "Get the protected note for roadmap."
 go run ./multiple_agents "What is 7 times 8?"
 go run ./multiple_agents concurrent "What is 7 times 8?"
 

@@ -119,6 +119,9 @@ func TestAgentWorkflow_OneToolThenFinal(t *testing.T) {
 		}
 		return "echo ok", nil
 	})
+	env.OnActivity(rt.AgentToolAuthorizeActivity, mock.Anything, mock.Anything).Return(func(ctx context.Context, in AgentToolAuthorizeInput) (AgentToolAuthorizeResult, error) {
+		return AgentToolAuthorizeResult{Allowed: true}, nil
+	})
 
 	env.ExecuteWorkflow(rt.AgentWorkflow, AgentWorkflowInput{
 		UserPrompt: "run",
@@ -128,6 +131,42 @@ func TestAgentWorkflow_OneToolThenFinal(t *testing.T) {
 	var out types.AgentResponse
 	require.NoError(t, env.GetWorkflowResult(&out))
 	require.Equal(t, "after tool", out.Content)
+	require.Equal(t, 2, llmCalls)
+}
+
+func TestAgentWorkflow_ToolAuthorizationDenied_SkipsExecute(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	rt := testRuntimeForWorkflow(t)
+
+	var llmCalls int
+	env.RegisterWorkflow(rt.AgentWorkflow)
+	env.OnActivity(rt.AgentLLMActivity, mock.Anything, mock.Anything).Return(func(ctx context.Context, in AgentLLMInput) (*AgentLLMResult, error) {
+		llmCalls++
+		if llmCalls == 1 {
+			return &AgentLLMResult{
+				Content: "using tool",
+				ToolCalls: []ToolCallRequest{{
+					ToolCallID: "tc-auth-deny",
+					ToolName:   "echo",
+					Args:       map[string]any{"x": 1},
+				}},
+			}, nil
+		}
+		return &AgentLLMResult{Content: "after deny", ToolCalls: nil}, nil
+	})
+	env.OnActivity(rt.AgentToolAuthorizeActivity, mock.Anything, mock.Anything).Return(func(ctx context.Context, in AgentToolAuthorizeInput) (AgentToolAuthorizeResult, error) {
+		return AgentToolAuthorizeResult{Allowed: false, Reason: "missing scope"}, nil
+	})
+
+	env.ExecuteWorkflow(rt.AgentWorkflow, AgentWorkflowInput{
+		UserPrompt: "run",
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	var out types.AgentResponse
+	require.NoError(t, env.GetWorkflowResult(&out))
+	require.Equal(t, "after deny", out.Content)
 	require.Equal(t, 2, llmCalls)
 }
 

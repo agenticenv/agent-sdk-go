@@ -6,13 +6,27 @@ import (
 	"github.com/agenticenv/agent-sdk-go/internal/types"
 )
 
-//go:generate mockgen -destination=./mocks/mock_tool.go -package=mocks github.com/agenticenv/agent-sdk-go/pkg/interfaces Tool,ToolRegistry
+//go:generate mockgen -destination=./mocks/mock_tool.go -package=mocks github.com/agenticenv/agent-sdk-go/pkg/interfaces Tool,ToolRegistry,ToolApproval,ToolAuthorizer
 
-// ToolApproval is an optional interface for tools that require user approval before execution.
-// When implemented, the agent honors ApprovalRequired() when no agent-level policy is set.
+// ToolApproval is an optional interface for tools that require interactive human approval before execution.
+// When implemented, the agent honors ApprovalRequired() when no agent-level approval policy is set.
 // WithToolApprovalPolicy overrides this tool-level default when set.
 type ToolApproval interface {
 	ApprovalRequired() bool
+}
+
+// ToolAuthorizer is an optional interface for tools that enforce programmatic authorization.
+// When implemented, the agent checks Authorize before approval/Execute in the tool call flow.
+// Return a decision with Allow=true/false and optional deny metadata.
+type ToolAuthorizer interface {
+	Authorize(ctx context.Context, args map[string]any) (ToolAuthorizationDecision, error)
+}
+
+// ToolAuthorizationDecision is the structured authorization outcome for one tool call.
+// Reason is optional and primarily useful when Allow is false.
+type ToolAuthorizationDecision struct {
+	Allow  bool   `json:"allow"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // Tool is a callable capability the agent can offer to the LLM. Register tools via agent.WithTools.
