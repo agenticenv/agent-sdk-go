@@ -179,13 +179,11 @@ llmClient, err := gemini.NewClient(
 
 ### Supported LLMs
 
-
 | Provider      | Package             | Notes                     |
 | ------------- | ------------------- | ------------------------- |
 | **OpenAI**    | `pkg/llm/openai`    | GPT-4o, GPT-4o-mini, etc. |
 | **Anthropic** | `pkg/llm/anthropic` | Claude models             |
 | **Gemini**    | `pkg/llm/gemini`    | gemini-2.5-flash, etc.    |
-
 
 Other providers: implement [`interfaces.LLMClient`](pkg/interfaces/llm.go) (`Generate`, `GenerateStream`, metadata). Copy patterns from `pkg/llm/`.
 
@@ -232,6 +230,11 @@ Examples: [examples/simple_agent](examples/simple_agent) (prints usage after `Ru
 ### Tools
 
 Register tools and pass to the agent. Use `agent.WithToolApprovalPolicy(agent.AutoToolApprovalPolicy())` to skip approval (or omit for default approval flow).
+
+Custom tools may also implement:
+
+- `interfaces.ToolApproval` — tool-level hint for **interactive human approval**. Use this when a person should decide whether the tool runs, and no agent-level approval policy is set.
+- `interfaces.ToolAuthorizer` — tool-level **programmatic authorization**. Use this when code should decide whether the tool runs before approval/execute (for example: scopes, tenancy, environment flags, or feature access). Return `Allow=false` to deny the tool call without executing it.
 
 ```go
 reg := tools.NewRegistry()
@@ -625,12 +628,10 @@ Pass `agent.WithConversation(conv)` to persist message history for multi-turn co
 
 Choose implementation by deployment:
 
-
 | Deployment                                                           | Use                                                       |
 | -------------------------------------------------------------------- | --------------------------------------------------------- |
 | **Single process** (agent and worker in same process)                | `inmem.NewInMemoryConversation`                           |
 | **Remote workers** (`DisableLocalWorker` or `EnableRemoteWorkers()`) | `redis.NewRedisConversation` or another distributed store |
-
 
 To add a new conversation store (e.g., Postgres, MongoDB), implement the `interfaces.Conversation` interface in `[pkg/interfaces/conversation.go](pkg/interfaces/conversation.go)`. The interface requires `AddMessage`, `ListMessages`, `Clear`, and `IsDistributed`. See `pkg/conversation/inmem` and `pkg/conversation/redis` for reference.
 

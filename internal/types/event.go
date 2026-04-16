@@ -70,6 +70,7 @@ const (
 	ToolCallStatusPending   ToolCallStatus = "pending"
 	ToolCallStatusRunning   ToolCallStatus = "running"
 	ToolCallStatusCompleted ToolCallStatus = "completed"
+	ToolCallStatusDenied    ToolCallStatus = "denied"
 	ToolCallStatusFailed    ToolCallStatus = "failed"
 )
 
