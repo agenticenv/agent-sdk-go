@@ -1,13 +1,16 @@
-# CI: lint, test, build — PRs, push to main, manual dispatch
+# CI: lint, test, coverage, build
+# - Push to branches (not main): full checks + coverage (no Codecov upload)
+# - PR to main: same + Codecov upload
+# - Push / merge to main: no workflow (already validated on the PR)
 # (Secret scanning: run `make secrets-scan` locally.)
-# Contributors get feedback before merge; main stays verified
 name: CI
 
 on:
   pull_request:
     branches: [main]
   push:
-    branches: [main]
+    branches-ignore:
+      - main
   workflow_dispatch:
 
 jobs:
@@ -31,10 +34,11 @@ jobs:
       - name: Test
         run: make test
 
-      - name: Code Coverage
+      - name: Code coverage
         run: make test-coverage
 
-      - name: Upload coverage reports to Codecov
+      - name: Upload coverage to Codecov
+        if: github.event_name == 'pull_request'
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
