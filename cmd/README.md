@@ -1,6 +1,6 @@
 # CLI
 
-The `agentctl` CLI uses **agent-sdk-go** and therefore needs a **running Temporal server** — same as the library examples.
+The `agentctl` CLI uses **agent-sdk-go**, which runs agents on the **Temporal** runtime. A **running Temporal server** is required. See **[Temporal setup](../temporal-setup.md)** for Docker, Temporal CLI, ports, Cloud, and self-hosted options.
 
 Interactive conversation mode. Type prompts, get responses. Type `exit`, `quit`, or `bye` to end.
 
@@ -26,22 +26,7 @@ Interactive conversation mode. Type prompts, get responses. Type `exit`, `quit`,
 - **config.sample.yaml** — template (committed to repo)
 - **config.yaml** — your config (gitignored; do not commit)
 
-## Prerequisites
-
-**Temporal server** must be running. Start a local dev server with Docker:
-
-```bash
-docker run --rm -p 7233:7233 -p 8233:8233 temporalio/temporal:latest server start-dev --ip 0.0.0.0
-```
-
-- **Temporal service:** localhost:7233
-- **Web UI:** http://localhost:8233
-
-Or use [Temporal CLI](https://docs.temporal.io/cli/setup-cli): `temporal server start-dev`.
-
-For production or self-hosted (Docker Compose, Kubernetes): [Temporal Cloud](https://docs.temporal.io/production-deployment) | [Self-hosted deployment](https://docs.temporal.io/self-hosted-guide/deployment)
-
-The CLI uses `temporal.host`, `temporal.port`, `temporal.namespace` from `config.yaml` (default: localhost, 7233, default). Override with `AGENT_TEMPORAL_HOST`, `AGENT_TEMPORAL_PORT`, `AGENT_TEMPORAL_NAMESPACE` if Temporal runs elsewhere.
+The CLI uses `temporal.host`, `temporal.port`, and `temporal.namespace` from `config.yaml` (default: localhost, 7233, default). Override with `AGENT_TEMPORAL_HOST`, `AGENT_TEMPORAL_PORT`, and `AGENT_TEMPORAL_NAMESPACE` if Temporal runs elsewhere.
 
 ## Run
 

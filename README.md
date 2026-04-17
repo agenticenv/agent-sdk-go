@@ -78,7 +78,9 @@ Demo applications that use **agent-sdk-go** end-to-end. More may be added over t
 
 How to **use** the SDK—agents, LLMs, Temporal connection, examples.
 
-Prerequisites: a running [Temporal](https://docs.temporal.io/self-hosted-guide) environment (required — agents do not run without it), **Go 1.24+** (see `go.mod`), and credentials for whatever LLM you plug in.
+### Prerequisites
+
+**agent-sdk-go** runs agents on the **[Temporal](https://temporal.io)** runtime (durable workflows and activities), so a **running Temporal server** is required. See **[Temporal setup](temporal-setup.md)**. Also **Go 1.24+** (see `go.mod`) and credentials for your LLM provider.
 
 **Module:** `github.com/agenticenv/agent-sdk-go`
 
@@ -733,7 +735,7 @@ A Temporal connection is **required** — one of `WithTemporalConfig` or `WithTe
 
 ## Development
 
-Contributors: see **[CONTRIBUTING.md](CONTRIBUTING.md)** for prerequisites (Go version, Temporal setup), development workflow, and guidelines.
+Contributors: see **[CONTRIBUTING.md](CONTRIBUTING.md)** for prerequisites (Go, Temporal setup, workflow, and guidelines).
 Project policies: **[SECURITY.md](SECURITY.md)** for vulnerability reporting and **[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)** for community standards.
 
 Quick commands: `make test` | `make lint` | `make fmt` | `make spell` | `make tidy` | `make test-coverage` (`make lint` runs `gofmt -s`, `misspell`, then `go vet` + `golangci-lint`)
@@ -745,6 +747,8 @@ Coverage reports (PR and default branch) are on **[Codecov](https://app.codecov.
 ---
 
 ## Setup and run examples
+
+> Note: Meet **[Getting Started — Prerequisites](#prerequisites)** (Go, LLM, Temporal). For installing or running a Temporal server (Docker, CLI, Cloud, self-hosted), use **[Temporal setup](temporal-setup.md)**. Then:
 
 ```bash
 git clone <repo-url>

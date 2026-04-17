@@ -1,6 +1,6 @@
 # Contributing to agent-sdk-go
 
-Thank you for your interest in contributing. **agent-sdk-go** is a community Go SDK for AI agents that **run on [Temporal](https://temporal.io)** (workflows + activities); you need a Temporal server to run examples. This document explains how to set up your environment and what we expect from contributors.
+Thank you for your interest in contributing. **agent-sdk-go** is a community Go SDK for AI agents that **run on the [Temporal](https://temporal.io)** runtime (workflows and activities). You need a **running Temporal server** for examples and the CLI; see **[temporal-setup.md](temporal-setup.md)**. This document explains how to set up your environment and what we expect from contributors.
 
 ## Prerequisites
 
@@ -9,40 +9,14 @@ Before contributing, ensure you have:
 | Requirement | Version / Notes |
 |-------------|-----------------|
 | **Go** | **Minimum `go 1.24.0`** (see the `go` line in `go.mod`; use that version or newer). |
-| **Temporal server** | Required for running examples and integration-style tests |
+| **Temporal server** | Required for examples, CLI, and tests — see [Temporal setup](temporal-setup.md) |
 | **golangci-lint** | Required for `make lint` — install with the **same Go as `go.mod`**: `go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest` |
 | **gofmt** | `make lint` runs `gofmt -s` check first; run `make fmt` to apply `gofmt -s -w` project-wide |
 | **misspell** | `make spell` or `make lint` — typos via `misspell` (similar to Go Report Card) |
 
-## Temporal Service Setup
+## Temporal setup
 
-Contributors must have Temporal running locally to run examples and validate agent behavior.
-
-### Option 1: Docker (recommended)
-
-```bash
-docker run --rm -p 7233:7233 -p 8233:8233 temporalio/temporal:latest server start-dev --ip 0.0.0.0
-```
-
-- **Temporal gRPC:** localhost:7233  
-- **Web UI:** http://localhost:8233  
-
-Keep this container running in a terminal while developing.
-
-### Option 2: Temporal CLI
-
-```bash
-temporal server start-dev
-```
-
-Install the CLI: [Temporal CLI setup](https://docs.temporal.io/cli/setup-cli)
-
-### More options
-
-- **Temporal Cloud:** [Production deployment](https://docs.temporal.io/production-deployment)  
-- **Self-hosted:** [Self-hosted deployment guide](https://docs.temporal.io/self-hosted-guide/deployment)  
-
-Examples use `TEMPORAL_HOST`, `TEMPORAL_PORT`, and `TEMPORAL_NAMESPACE` from `.env` (defaults: localhost, 7233, default).
+Run Temporal locally (or point at Cloud/self-hosted) before examples and tests. Full steps: **[temporal-setup.md](temporal-setup.md)**.
 
 ## Development Workflow
 

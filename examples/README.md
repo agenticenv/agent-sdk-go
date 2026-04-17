@@ -1,23 +1,12 @@
 # Examples
 
-These programs exercise **agent-sdk-go** (`github.com/agenticenv/agent-sdk-go`). The SDK is **Temporal-only**: there is no way to run these examples without a Temporal cluster—agents execute as Temporal workflows, so a running Temporal service is mandatory for every example below.
+These programs exercise **agent-sdk-go** (`github.com/agenticenv/agent-sdk-go`). Agents run as Temporal workflows, so a running Temporal service is mandatory for every example below.
 
-## Prerequisites
+**Prerequisite:** These examples use **agent-sdk-go** on the **Temporal** runtime. A **running Temporal server** is required before you run them. See **[Temporal setup](../temporal-setup.md)** for Docker, Temporal CLI, ports, Cloud, and self-hosted options.
 
-**Temporal server** must be running. Start a local dev server with Docker:
+## Default connection
 
-```bash
-docker run --rm -p 7233:7233 -p 8233:8233 temporalio/temporal:latest server start-dev --ip 0.0.0.0
-```
-
-- **Temporal service:** localhost:7233
-- **Web UI:** http://localhost:8233
-
-Or use [Temporal CLI](https://docs.temporal.io/cli/setup-cli): `temporal server start-dev`.
-
-For production or self-hosted (Docker Compose, Kubernetes): [Temporal Cloud](https://docs.temporal.io/production-deployment) | [Self-hosted deployment](https://docs.temporal.io/self-hosted-guide/deployment)
-
-The examples use `TEMPORAL_HOST`, `TEMPORAL_PORT`, `TEMPORAL_NAMESPACE` from `.env` (default: localhost, 7233, default). Adjust if your Temporal runs elsewhere.
+The examples use `TEMPORAL_HOST`, `TEMPORAL_PORT`, and `TEMPORAL_NAMESPACE` from `.env` (default: localhost, 7233, default). Adjust if your Temporal runs elsewhere.
 
 ## Examples overview
 
