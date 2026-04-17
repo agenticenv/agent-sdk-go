@@ -60,7 +60,7 @@ func main() {
 
 	a, err := agent.NewAgent(opts...)
 	if err != nil {
-		log.Fatalf("failed to create agent: %v", err)
+		log.Fatal(config.FormatNewAgentError("failed to create agent", err))
 	}
 	defer a.Close()
 

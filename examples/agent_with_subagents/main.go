@@ -69,7 +69,7 @@ func main() {
 		agent.WithLogger(config.NewLoggerFromLogConfig(cfg)),
 	)
 	if err != nil {
-		log.Fatalf("math specialist agent: %v", err)
+		log.Fatal(config.FormatNewAgentError("math specialist agent", err))
 	}
 	defer mathSpecialist.Close()
 
@@ -95,7 +95,7 @@ func main() {
 		agent.WithLogger(config.NewLoggerFromLogConfig(cfg)),
 	)
 	if err != nil {
-		log.Fatalf("main agent: %v", err)
+		log.Fatal(config.FormatNewAgentError("main agent", err))
 	}
 	defer mainAgent.Close()
 

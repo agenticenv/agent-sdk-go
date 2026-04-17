@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"strings"
 
+	"github.com/agenticenv/agent-sdk-go/internal/types"
 	"github.com/agenticenv/agent-sdk-go/pkg/agent"
 	"github.com/agenticenv/agent-sdk-go/pkg/conversation/inmem"
 	"github.com/agenticenv/agent-sdk-go/pkg/tools"
@@ -107,7 +109,7 @@ func main() {
 
 	a, err := agent.NewAgent(opts...)
 	if err != nil {
-		log.Fatalf("failed to create agent: %v", err)
+		log.Fatal(formatNewAgentCreateErr(err))
 	}
 	defer a.Close()
 
@@ -237,4 +239,15 @@ func isExitCommand(s string) bool {
 		return true
 	}
 	return false
+}
+
+func formatNewAgentCreateErr(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := fmt.Sprintf("failed to create agent: %v", err)
+	if errors.Is(err, types.ErrTemporalDialTimeout) || errors.Is(err, types.ErrTemporalNamespaceCheckTimeout) {
+		msg += "\n\nFor a local Temporal dev server, see temporal-setup.md at the repository root."
+	}
+	return msg
 }

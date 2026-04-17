@@ -2,12 +2,14 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/agenticenv/agent-sdk-go/internal/types"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/llm"
 	"github.com/agenticenv/agent-sdk-go/pkg/llm/anthropic"
@@ -304,4 +306,20 @@ func NewLLMClientFromConfig(cfg *Config) (interfaces.LLMClient, error) {
 		}
 		return openai.NewClient(opts...)
 	}
+}
+
+const repoTemporalSetupDoc = "temporal-setup.md"
+
+// FormatNewAgentError formats errors from [agent.NewAgent] or [agent.NewAgentWorker] for log output
+// when running examples from a clone of this repository. It appends a pointer to temporal-setup.md
+// when the failure is a Temporal connection or namespace timeout from this SDK.
+func FormatNewAgentError(prefix string, err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := fmt.Sprintf("%s: %v", prefix, err)
+	if errors.Is(err, types.ErrTemporalDialTimeout) || errors.Is(err, types.ErrTemporalNamespaceCheckTimeout) {
+		msg += "\n\nFor a local Temporal dev server, see " + repoTemporalSetupDoc + " at the repository root."
+	}
+	return msg
 }

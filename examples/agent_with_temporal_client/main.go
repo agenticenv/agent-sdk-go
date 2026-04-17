@@ -50,7 +50,7 @@ func main() {
 		agent.WithLogger(config.NewLoggerFromLogConfig(cfg)),
 	)
 	if err != nil {
-		log.Fatalf("failed to create agent: %v", err)
+		log.Fatal(config.FormatNewAgentError("failed to create agent", err))
 	}
 	defer a.Close()
 

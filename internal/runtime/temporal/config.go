@@ -8,6 +8,7 @@ import (
 	"time"
 
 	sdkruntime "github.com/agenticenv/agent-sdk-go/internal/runtime"
+	"github.com/agenticenv/agent-sdk-go/internal/types"
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
 	"go.temporal.io/sdk/client"
 )
@@ -185,11 +186,12 @@ func newTemporalClient(config *TemporalConfig, sdkLog logger.Logger) (client.Cli
 		select {
 		case <-timeoutExceeded:
 			if !clientReady {
-				return nil, fmt.Errorf("temporal connection failed after %v timeout", connectionTimeout)
-			} else {
-				c.Close()
-				return nil, fmt.Errorf("temporal namespace check failed after %v timeout", connectionTimeout)
+				return nil, fmt.Errorf("%w: could not reach Temporal at %s (namespace %q) within %v",
+					types.ErrTemporalDialTimeout, clientOptions.HostPort, config.Namespace, connectionTimeout)
 			}
+			c.Close()
+			return nil, fmt.Errorf("%w: namespace %q at %s could not be verified within %v",
+				types.ErrTemporalNamespaceCheckTimeout, config.Namespace, clientOptions.HostPort, connectionTimeout)
 		case <-ticker.C:
 			if !clientReady {
 				c, err = client.Dial(clientOptions)

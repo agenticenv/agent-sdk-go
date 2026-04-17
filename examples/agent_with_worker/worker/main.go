@@ -25,7 +25,7 @@ func main() {
 
 	w, err := agent.NewAgentWorker(workerOpts...)
 	if err != nil {
-		log.Fatalf("failed to create agent worker: %v", err)
+		log.Fatal(config.FormatNewAgentError("failed to create agent worker", err))
 	}
 
 	sigChan := make(chan os.Signal, 1)

@@ -38,7 +38,7 @@ func main() {
 		agent.WithLogger(config.NewLoggerFromLogConfig(cfg)),
 	)
 	if err != nil {
-		log.Fatalf("failed to create agent 1: %v", err)
+		log.Fatal(config.FormatNewAgentError("failed to create agent 1", err))
 	}
 	defer agent1.Close()
 
@@ -51,7 +51,7 @@ func main() {
 		agent.WithLogger(config.NewLoggerFromLogConfig(cfg)),
 	)
 	if err != nil {
-		log.Fatalf("failed to create agent 2: %v", err)
+		log.Fatal(config.FormatNewAgentError("failed to create agent 2", err))
 	}
 	defer agent2.Close()
 
