@@ -382,6 +382,7 @@ func TestTemporalRuntime_Run_Success(t *testing.T) {
 
 	rt, err := NewTemporalRuntime(
 		WithTemporalClient(tc, "tq"),
+		WithDisableLocalWorker(true),
 		WithAgentSpec(sdkruntime.AgentSpec{Name: "agent-a"}),
 		WithAgentExecution(sdkruntime.AgentExecution{LLM: sdkruntime.AgentLLM{Client: stubLLM{}}}),
 	)
@@ -405,6 +406,7 @@ func TestTemporalRuntime_Run_NoWorkers(t *testing.T) {
 
 	rt, err := NewTemporalRuntime(
 		WithTemporalClient(tc, "tq"),
+		WithDisableLocalWorker(true),
 		WithAgentSpec(sdkruntime.AgentSpec{Name: "agent-a"}),
 		WithAgentExecution(sdkruntime.AgentExecution{LLM: sdkruntime.AgentLLM{Client: stubLLM{}}}),
 	)
@@ -433,6 +435,7 @@ func TestTemporalRuntime_Run_ExecuteWorkflowError(t *testing.T) {
 
 	rt, err := NewTemporalRuntime(
 		WithTemporalClient(tc, "tq"),
+		WithDisableLocalWorker(true),
 		WithAgentSpec(sdkruntime.AgentSpec{Name: "agent-a"}),
 		WithAgentExecution(sdkruntime.AgentExecution{LLM: sdkruntime.AgentLLM{Client: stubLLM{}}}),
 	)
@@ -457,6 +460,7 @@ func TestTemporalRuntime_Run_WorkflowGetError(t *testing.T) {
 
 	rt, err := NewTemporalRuntime(
 		WithTemporalClient(tc, "tq"),
+		WithDisableLocalWorker(true),
 		WithAgentSpec(sdkruntime.AgentSpec{Name: "agent-a"}),
 		WithAgentExecution(sdkruntime.AgentExecution{LLM: sdkruntime.AgentLLM{Client: stubLLM{}}}),
 	)
@@ -494,6 +498,7 @@ func TestTemporalRuntime_ExecuteStream_Success(t *testing.T) {
 
 	rt, err := NewTemporalRuntime(
 		WithTemporalClient(tc, "tq"),
+		WithDisableLocalWorker(true),
 		WithAgentSpec(sdkruntime.AgentSpec{Name: "root"}),
 		WithAgentExecution(sdkruntime.AgentExecution{LLM: sdkruntime.AgentLLM{Client: stubLLM{}}}),
 	)
@@ -544,6 +549,7 @@ func TestTemporalRuntime_ExecuteStream_WorkflowGetError(t *testing.T) {
 
 	rt, err := NewTemporalRuntime(
 		WithTemporalClient(tc, "tq"),
+		WithDisableLocalWorker(true),
 		WithAgentSpec(sdkruntime.AgentSpec{Name: "root"}),
 		WithAgentExecution(sdkruntime.AgentExecution{LLM: sdkruntime.AgentLLM{Client: stubLLM{}}}),
 	)

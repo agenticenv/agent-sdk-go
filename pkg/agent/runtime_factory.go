@@ -28,6 +28,8 @@ func (cfg *agentConfig) buildTemporalRuntime(remoteWorker bool) (runtime.Runtime
 		temporal.WithAgentExecution(cfg.runtimeAgentExecution()),
 		temporal.WithPolicyFingerprint(toolPolicyFingerprint(cfg.toolApprovalPolicy)),
 		temporal.WithMCPFingerprint(mcpConfigFingerprint(cfg.mcpServers, mcpExtraClientNames(cfg.mcpClients))),
+		temporal.WithAgentMode(string(cfg.agentMode)),
+		temporal.WithDisableLocalWorker(cfg.disableLocalWorker),
 		temporal.WithRemoteWorker(remoteWorker),
 	}
 	if cfg.temporalConfig != nil {

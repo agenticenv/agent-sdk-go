@@ -39,6 +39,11 @@ type TemporalRuntimeConfig struct {
 	AgentExecution    sdkruntime.AgentExecution
 	PolicyFingerprint string // from pkg/agent toolPolicyFingerprint; must match caller temporal.ComputeAgentFingerprint inputs
 	MCPFingerprint    string // from pkg/agent mcpConfigFingerprint; must match caller temporal.ComputeAgentFingerprint inputs
+	// AgentMode is the string form of [types.AgentMode] (e.g. "interactive", "autonomous"); must match pkg/agent WithAgentMode.
+	AgentMode string
+	// DisableLocalWorker mirrors pkg/agent [DisableLocalWorker]: when false, the client embeds a worker
+	// so Execute/ExecuteStream skip DescribeTaskQueue poller checks. ([NewAgentWorker] never calls those methods.)
+	DisableLocalWorker bool
 }
 
 // Option configures a TemporalRuntime.
@@ -113,6 +118,22 @@ func WithPolicyFingerprint(fp string) Option {
 func WithMCPFingerprint(fp string) Option {
 	return func(c *TemporalRuntimeConfig) {
 		c.MCPFingerprint = fp
+	}
+}
+
+// WithAgentMode sets the agent mode string used with [ComputeAgentFingerprint].
+// Must match pkg/agent [WithAgentMode] for the same agent (caller process and worker process).
+func WithAgentMode(mode string) Option {
+	return func(c *TemporalRuntimeConfig) {
+		c.AgentMode = mode
+	}
+}
+
+// WithDisableLocalWorker mirrors pkg/agent [DisableLocalWorker]. When false, the client embeds a worker
+// and the runtime skips DescribeTaskQueue poller checks before starting workflows.
+func WithDisableLocalWorker(disable bool) Option {
+	return func(c *TemporalRuntimeConfig) {
+		c.DisableLocalWorker = disable
 	}
 }
 

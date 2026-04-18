@@ -262,12 +262,16 @@ func (rt *TemporalRuntime) Execute(ctx context.Context, req *runtime.ExecuteRequ
 		defer func() { _ = closeEvent() }()
 	}
 
-	hasWorkers := rt.hasWorkers(runCtx, rt.taskQueue)
-	if !hasWorkers {
-		rt.logger.Warn(runCtx, "no workers on task queue", slog.String("scope", "runtime"), slog.String("taskQueue", rt.taskQueue))
-		return nil, fmt.Errorf("no workers available on task queue %s", rt.taskQueue)
+	if !rt.skipHasWorkersPrecheck() {
+		hasWorkers := rt.hasWorkers(runCtx, rt.taskQueue)
+		if !hasWorkers {
+			rt.logger.Warn(runCtx, "no workers on task queue", slog.String("scope", "runtime"), slog.String("taskQueue", rt.taskQueue))
+			return nil, fmt.Errorf("no workers available on task queue %s", rt.taskQueue)
+		}
+		rt.logger.Debug(runCtx, "task queue has workers", slog.String("scope", "runtime"), slog.String("taskQueue", rt.taskQueue))
+	} else {
+		rt.logger.Debug(runCtx, "skipping task queue poller check", slog.String("scope", "runtime"), slog.String("taskQueue", rt.taskQueue), slog.String("reason", rt.hasWorkersPrecheckSkipReason()))
 	}
-	rt.logger.Debug(runCtx, "task queue has workers", slog.String("scope", "runtime"), slog.String("taskQueue", rt.taskQueue))
 
 	rt.logger.Debug(runCtx, "runtime workflow execute",
 		slog.String("scope", "runtime"),
@@ -422,10 +426,15 @@ func (rt *TemporalRuntime) ExecuteStream(ctx context.Context, req *runtime.Execu
 		}
 	}()
 
-	hasWorkers := rt.hasWorkers(ctx, rt.taskQueue)
-	if !hasWorkers {
-		rt.logger.Warn(runCtx, "no workers on task queue", slog.String("scope", "runtime"), slog.String("taskQueue", rt.taskQueue))
-		return nil, fmt.Errorf("no workers available on task queue %s", rt.taskQueue)
+	if !rt.skipHasWorkersPrecheck() {
+		hasWorkers := rt.hasWorkers(ctx, rt.taskQueue)
+		if !hasWorkers {
+			rt.logger.Warn(runCtx, "no workers on task queue", slog.String("scope", "runtime"), slog.String("taskQueue", rt.taskQueue))
+			return nil, fmt.Errorf("no workers available on task queue %s", rt.taskQueue)
+		}
+		rt.logger.Debug(runCtx, "task queue has workers (stream)", slog.String("scope", "runtime"), slog.String("taskQueue", rt.taskQueue))
+	} else {
+		rt.logger.Debug(runCtx, "skipping task queue poller check", slog.String("scope", "runtime"), slog.String("taskQueue", rt.taskQueue), slog.String("reason", rt.hasWorkersPrecheckSkipReason()))
 	}
 
 	rt.logger.Debug(runCtx, "runtime workflow execute (stream)", slog.String("scope", "runtime"), slog.String("workflowID", workflowID))
@@ -561,6 +570,29 @@ func (rt *TemporalRuntime) resolveEventPipeline(ctx context.Context, agentName s
 	}
 	rt.runMu.Unlock()
 	return eventWorkflowID, eventTaskQueue, nil
+}
+
+// skipHasWorkersPrecheck is true when Execute/ExecuteStream should not poll DescribeTaskQueue for pollers
+// before starting the workflow. Only these paths call Execute/ExecuteStream (client [Agent]; remoteWorker is always false).
+// Skip when mode is autonomous, or when an embedded worker polls in-process ([DisableLocalWorker] false).
+func (rt *TemporalRuntime) skipHasWorkersPrecheck() bool {
+	if rt.AgentMode == string(types.AgentModeAutonomous) {
+		return true
+	}
+	if !rt.DisableLocalWorker {
+		return true
+	}
+	return false
+}
+
+func (rt *TemporalRuntime) hasWorkersPrecheckSkipReason() string {
+	if rt.AgentMode == string(types.AgentModeAutonomous) {
+		return "autonomous_mode"
+	}
+	if !rt.DisableLocalWorker {
+		return "embedded_local_worker"
+	}
+	return ""
 }
 
 // hasWorkers returns true if there are pollers on the given task queue.
