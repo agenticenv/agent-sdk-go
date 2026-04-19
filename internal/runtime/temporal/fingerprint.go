@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	sdkruntime "github.com/agenticenv/agent-sdk-go/internal/runtime"
+	"github.com/agenticenv/agent-sdk-go/internal/types"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 )
 
@@ -35,6 +36,9 @@ type AgentFingerprintPayload struct {
 	// and extra MCP client names. Tool names already appear in ToolNames; this catches same tools
 	// pointing at a different endpoint or policy. Omitted when empty.
 	MCPFingerprint string `json:"mcp_fingerprint,omitempty"`
+
+	// AgentMode is the execution mode (e.g. interactive vs autonomous); must match pkg/agent WithAgentMode on caller and worker.
+	AgentMode string `json:"agent_mode"`
 
 	Sampling *sdkruntime.LLMSampling `json:"sampling,omitempty"`
 
@@ -70,9 +74,14 @@ func BuildAgentFingerprintPayload(
 	sessionSize int,
 	limits sdkruntime.AgentLimits,
 	mcpFingerprint string,
+	agentMode string,
 ) AgentFingerprintPayload {
 	names := append([]string(nil), toolNames...)
 	sort.Strings(names)
+	mode := agentMode
+	if mode == "" {
+		mode = string(types.AgentModeInteractive)
+	}
 
 	m := AgentFingerprintPayload{
 		Name:              spec.Name,
@@ -81,6 +90,7 @@ func BuildAgentFingerprintPayload(
 		ToolNames:         names,
 		PolicyFingerprint: policyFingerprint,
 		MCPFingerprint:    mcpFingerprint,
+		AgentMode:         mode,
 		Sampling:          cloneLLMSampling(sampling),
 		SessionSize:       sessionSize,
 		MaxIterations:     limits.MaxIterations,
@@ -153,6 +163,7 @@ func computeAgentFingerprintFromRuntimeConfig(c *TemporalRuntimeConfig) string {
 		c.AgentExecution.Session.ConversationSize,
 		c.AgentExecution.Limits,
 		c.MCPFingerprint,
+		c.AgentMode,
 	)
 	return ComputeAgentFingerprint(mat)
 }

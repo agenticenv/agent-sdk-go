@@ -58,6 +58,12 @@ graph TD
 
 Details: [Temporal connection](#temporal-connection), [Sub-agents](#sub-agents), [Agent and worker in separate processes](#agent-and-worker-in-separate-processes).
 
+### Durable agents: survive crashes, restarts, and deploys
+
+Because every agent run is a Temporal workflow, **the process can crash and restart without losing a single step** — tool calls already made are not replayed, approvals already given are not re-requested, and the agent resumes exactly where it left off. `DisableLocalWorker` and `NewAgentWorker` let you split the client and execution across OS processes or machines while the cluster holds all state.
+
+**[examples/durable_agent](examples/durable_agent)** walks through this split across two terminals, including crash and retry scenarios. Step-by-step exercises: **[examples/durable_agent/README.md](examples/durable_agent/README.md)**.
+
 ### Streaming and approvals
 
 Stream events and approval events cross two boundaries: **Temporal** (durable workflow) and **your** hosts and subscribers. The guarantees differ on each side. These constraints matter most in interactive, user-facing scenarios — autonomous backend agents are largely unaffected since they do not depend on live event delivery.
@@ -517,6 +523,7 @@ result, err := a.Run(context.Background(), "Hello", "")
 
 - ctx deadline always wins. If ctx has 2 min but agent has `WithTimeout(10 min)`, the run ends at 2 min.
 - approvalTimeout (per-approval limit) comes from agent config. If ctx has 1 hour and you use neither option, approval still expires at ~4.5 min (default). Set `WithTimeout` or `WithApprovalTimeout` for longer approvals.
+- **Agent mode default timeout:** If neither `ctx` nor `WithTimeout` is set, the default timeout follows `WithAgentMode`: **`AgentModeInteractive`** → **5 minutes**; **`AgentModeAutonomous`** → **60 minutes**.
 
 ### Custom tools
 
@@ -620,7 +627,12 @@ a, _ := agent.NewAgent(
 result, _ := a.Run(ctx, "Hello", "")
 ```
 
-[examples/agent_with_worker](examples/agent_with_worker)
+[examples/agent_with_worker](examples/agent_with_worker) · [examples/durable_agent](examples/durable_agent)
+
+> **Interactive vs autonomous:** By default the agent uses `AgentModeInteractive`
+> (5-minute timeout, worker check enabled). For long-running background agents, set
+> `agent.WithAgentMode(agent.AgentModeAutonomous)` to skip the worker check and use a
+> 60-minute default timeout. See [`WithAgentMode`](#configuration) for full detail.
 
 ### Conversation (message history)
 
@@ -728,6 +740,9 @@ A Temporal connection is **required** — one of `WithTemporalConfig` or `WithTe
     - **`Effort`** — `"none"` … `"xhigh"`; **OpenAI** → `reasoning_effort` when non-empty; **Gemini** → `ThinkingLevel` when `low` / `medium` / `high` / `minimal`; **Anthropic** ignores (use **`BudgetTokens`** for extended thinking).
     - **`BudgetTokens`** — **Anthropic** extended-thinking budget (non-zero; SDK clamps below 1024 to 1024); **Gemini** `thinkingBudget` (if set, **`Effort`** is not sent as `ThinkingLevel`—Gemini allows only one of budget or level); **OpenAI** ignores.
 - **WithApprovalTimeout**: Max wait per tool approval; must be less than agent timeout. Defaults to timeout−30s when tools require approval. Capped at 31 days.
+- **WithAgentMode**: Sets the agent mode. Default timeout when neither `ctx` nor `WithTimeout` is set follows the mode (**5 minutes** / **60 minutes**). Worker-check and queueing behaviour below are **mostly relevant to the Temporal runtime** (this SDK’s execution backend).
+  - **`AgentModeInteractive` (default)** — Optimised for chat, REPL, and web apps where a human is waiting. When `DisableLocalWorker` is set, the agent checks for available external workers before submitting work — if no worker is ready within the check window, it returns a clear error immediately rather than leaving the user with a hanging prompt. Default timeout is **5 minutes**.
+  - **`AgentModeAutonomous`** — Optimised for background jobs, pipelines, and long-running tasks where no human is watching. The worker check is skipped entirely — if no worker is available, Temporal queues the workflow and waits for one naturally. Default timeout is **60 minutes**.
 
 **Env config:** [examples/README.md](examples/README.md) for examples; [cmd/README.md](cmd/README.md) for CLI.
 

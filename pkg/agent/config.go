@@ -35,6 +35,14 @@ type TemporalConfig = temporal.TemporalConfig
 // One LLM client can serve multiple agents with different sampling settings.
 type LLMSampling = types.LLMSampling
 
+// AgentMode selects interactive (default) or autonomous agent behavior. Aliases [types.AgentMode].
+type AgentMode = types.AgentMode
+
+const (
+	AgentModeInteractive = types.AgentModeInteractive
+	AgentModeAutonomous  = types.AgentModeAutonomous
+)
+
 // MCPServers maps a stable server key (e.g. "github", "slack") to per-server MCP settings.
 // Registered tool names use prefix mcp_<serverKey>_<toolName> (see [MCPTool]).
 // nil or empty map means no MCP servers from configuration.
@@ -59,7 +67,7 @@ type MCPConfig struct {
 //     WithInstanceId, WithLLMClient, WithToolApprovalPolicy, WithTools, WithToolRegistry,
 //     WithMaxIterations, WithStream, WithLogger, WithLogLevel, WithConversation, WithConversationSize,
 //     WithResponseFormat, WithLLMSampling, WithSubAgents, WithMaxSubAgentDepth,
-//     WithMCPConfig, WithMCPClients
+//     WithMCPConfig, WithMCPClients, WithAgentMode
 type agentConfig struct {
 	ID                 string
 	Name               string
@@ -104,10 +112,16 @@ type agentConfig struct {
 	mcpServers MCPServers
 	mcpClients []interfaces.MCPClient
 	mcpTools   []interfaces.Tool
+
+	agentMode AgentMode
 }
 
-// defaultTimeout is used when no deadline set, to avoid blocking forever when no workers run.
-const defaultTimeout = 5 * time.Minute
+// Default Run/Stream deadlines when [WithTimeout] is unset: shorter for interactive sessions,
+// longer for autonomous runs. Avoids blocking forever when no workers are available.
+const (
+	defaultTimeoutInteractive = 5 * time.Minute
+	defaultTimeoutAutonomous  = 60 * time.Minute
+)
 
 const defaultMaxIterations int = 5
 
@@ -154,6 +168,12 @@ func WithTemporalClient(tc client.Client, taskQueue string) Option {
 // WithInstanceId sets the instance identifier. Applies to Agent and AgentWorker.
 func WithInstanceId(id string) Option {
 	return func(c *agentConfig) { c.instanceId = id }
+}
+
+// WithAgentMode sets interactive vs autonomous mode. Applies to Agent and AgentWorker.
+// Default is [AgentModeInteractive]. Included in the Temporal agent fingerprint so caller and worker must agree.
+func WithAgentMode(mode AgentMode) Option {
+	return func(c *agentConfig) { c.agentMode = mode }
 }
 
 // WithLLMClient sets the LLM client. Applies to Agent and AgentWorker.
@@ -210,6 +230,7 @@ func WithApprovalHandler(fn types.ApprovalHandler) Option {
 }
 
 // WithTimeout sets a maximum wait for Run and Stream. Agent only. Ignored by AgentWorker.
+// When unset, the default is 5m for [AgentModeInteractive] and 60m for [AgentModeAutonomous].
 func WithTimeout(d time.Duration) Option {
 	return func(c *agentConfig) { c.timeout = d }
 }
@@ -342,6 +363,14 @@ func buildAgentConfig(opts []Option) (*agentConfig, error) {
 	if c.conversationSize <= 0 {
 		c.conversationSize = 20
 	}
+	if c.agentMode == "" {
+		c.agentMode = AgentModeInteractive
+	}
+	switch c.agentMode {
+	case AgentModeInteractive, AgentModeAutonomous:
+	default:
+		return nil, fmt.Errorf("invalid agent mode %q: use %q or %q", c.agentMode, AgentModeInteractive, AgentModeAutonomous)
+	}
 	if c.maxSubAgentDepth <= 0 {
 		c.maxSubAgentDepth = defaultMaxSubAgentDepth
 	}
@@ -361,7 +390,12 @@ func buildAgentConfig(opts []Option) (*agentConfig, error) {
 		return nil, err
 	}
 	if c.timeout == 0 {
-		c.timeout = defaultTimeout
+		switch c.agentMode {
+		case AgentModeAutonomous:
+			c.timeout = defaultTimeoutAutonomous
+		default:
+			c.timeout = defaultTimeoutInteractive
+		}
 	}
 
 	// Validate approvalTimeout when any tool requires approval (approvalTimeout must be < timeout)
@@ -395,6 +429,7 @@ func buildAgentConfig(opts []Option) (*agentConfig, error) {
 		slog.Bool("disableLocalWorker", c.disableLocalWorker),
 		slog.Bool("enableRemoteWorkers", c.enableRemoteWorkers),
 		slog.Bool("remoteWorker", c.remoteWorker),
+		slog.String("agentMode", string(c.agentMode)),
 		slog.Bool("hasApprovalHandler", c.approvalHandler != nil),
 		slog.Duration("timeout", c.timeout),
 		slog.Duration("approvalTimeout", c.approvalTimeout),
@@ -601,6 +636,7 @@ func (c *agentConfig) agentConfigFingerprint() string {
 			ApprovalTimeout: c.approvalTimeout,
 		},
 		mcpConfigFingerprint(c.mcpServers, mcpExtraClientNames(c.mcpClients)),
+		string(c.agentMode),
 	)
 	return temporal.ComputeAgentFingerprint(mat)
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/agenticenv/agent-sdk-go/internal/types"
@@ -21,6 +22,9 @@ import (
 var (
 	agentLLMActivityTaskTimeout time.Duration = 30 * time.Minute
 	agentLLMActivityMaxAttempts int32         = 3
+	// Heartbeat for long LLM stream / tool execute: fail stuck attempts soon after worker loss (<< StartToClose).
+	agentLongActivityHeartbeatTimeout  time.Duration = 30 * time.Second
+	agentLongActivityHeartbeatInterval time.Duration = 10 * time.Second
 
 	agentToolApprovalActivityMaxAttempts int32 = 1
 
@@ -231,6 +235,7 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 	streamActCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		ActivityID:          "AgentLLMStreamActivity_" + activityIDSuffix,
 		StartToCloseTimeout: agentLLMActivityTaskTimeout,
+		HeartbeatTimeout:    agentLongActivityHeartbeatTimeout,
 		RetryPolicy:         retryPolicy(agentLLMActivityMaxAttempts),
 	})
 
@@ -255,6 +260,7 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 	execCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		ActivityID:          "AgentToolExecuteActivity_" + activityIDSuffix,
 		StartToCloseTimeout: agentToolExecuteActivityTaskTimeout,
+		HeartbeatTimeout:    agentLongActivityHeartbeatTimeout,
 		RetryPolicy:         retryPolicy(agentToolExecuteActivityMaxAttempts),
 	})
 	sendEventCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
@@ -590,12 +596,39 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 	}, nil
 }
 
+// startLongActivityHeartbeats records activity heartbeats until stop is called. Used for long-running
+// activities so Temporal can fail the attempt soon after a worker process stops (heartbeat gap > HeartbeatTimeout).
+func startLongActivityHeartbeats(ctx context.Context) (stop func()) {
+	stopCh := make(chan struct{})
+	var once sync.Once
+	go func() {
+		ticker := time.NewTicker(agentLongActivityHeartbeatInterval)
+		defer ticker.Stop()
+		activity.RecordHeartbeat(ctx, nil)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-stopCh:
+				return
+			case <-ticker.C:
+				activity.RecordHeartbeat(ctx, nil)
+			}
+		}
+	}()
+	return func() {
+		once.Do(func() { close(stopCh) })
+	}
+}
+
 // AgentLLMStreamActivity streams LLM response tokens and emits content_delta/thinking_delta events.
 // When input.ConversationID is set, fetches messages from conversation and prepends to workflow messages.
 func (rt *TemporalRuntime) AgentLLMStreamActivity(ctx context.Context, input AgentLLMStreamInput) (*AgentLLMResult, error) {
 	if err := rt.verifyAgentFingerprint(input.AgentFingerprint); err != nil {
 		return nil, err
 	}
+	stopHB := startLongActivityHeartbeats(ctx)
+	defer stopHB()
 	logger := activity.GetLogger(ctx)
 	info := activity.GetInfo(ctx)
 	agentWorkflowID := info.WorkflowExecution.ID
@@ -909,6 +942,8 @@ func (rt *TemporalRuntime) AgentToolExecuteActivity(ctx context.Context, input A
 	if err := rt.verifyAgentFingerprint(input.AgentFingerprint); err != nil {
 		return "", err
 	}
+	stopHB := startLongActivityHeartbeats(ctx)
+	defer stopHB()
 	toolName := input.ToolName
 	args := input.Args
 	logger := activity.GetLogger(ctx)
