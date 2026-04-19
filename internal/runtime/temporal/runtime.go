@@ -503,6 +503,13 @@ func (rt *TemporalRuntime) ExecuteStream(ctx context.Context, req *runtime.Execu
 				return
 			case wfErr := <-wfErrCh:
 				rt.logger.Error(runCtx, "runtime stream run failed", slog.String("scope", "runtime"), slog.String("workflowID", workflowID), slog.Any("error", wfErr))
+				if errors.Is(wfErr, context.DeadlineExceeded) || errors.Is(wfErr, context.Canceled) {
+					termCtx, termCancel := context.WithTimeout(context.Background(), 15*time.Second)
+					if rt.temporalClient != nil {
+						_ = rt.temporalClient.TerminateWorkflow(termCtx, workflowID, "", "run timeout")
+					}
+					termCancel()
+				}
 				outCh <- &types.AgentEvent{
 					Type:      types.AgentEventError,
 					Content:   wfErr.Error(),

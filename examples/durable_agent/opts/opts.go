@@ -1,0 +1,38 @@
+package opts
+
+import (
+	"time"
+
+	"github.com/agenticenv/agent-sdk-go/pkg/agent"
+	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
+	"github.com/agenticenv/agent-sdk-go/pkg/logger"
+)
+
+// Common returns agent options shared by both the agent client and worker.
+// Name, description, system prompt, and Temporal config are identical since
+// they represent the same agent.
+func Common(
+	host string,
+	port int,
+	namespace string,
+	taskQueue string,
+	llmClient interfaces.LLMClient,
+	l logger.Logger,
+) []agent.Option {
+	return []agent.Option{
+		// Display name may include spaces; Temporal run/event workflow IDs sanitize it for ID-safe segments.
+		agent.WithName("Remote worker"),
+		agent.WithDescription("Agent with remote worker - client and worker run in separate processes"),
+		agent.WithSystemPrompt("You are a helpful assistant."),
+		agent.WithTemporalConfig(&agent.TemporalConfig{
+			Host:      host,
+			Port:      port,
+			Namespace: namespace,
+			TaskQueue: taskQueue,
+		}),
+		// Must match agent/main.go extras (DisableLocalWorker/EnableRemoteWorkers): fingerprint includes Limits.Timeout.
+		agent.WithTimeout(3 * time.Minute),
+		agent.WithLLMClient(llmClient),
+		agent.WithLogger(l),
+	}
+}

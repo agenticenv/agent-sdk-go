@@ -26,7 +26,8 @@ The examples use `TEMPORAL_HOST`, `TEMPORAL_PORT`, and `TEMPORAL_NAMESPACE` from
 | `agent_with_subagents` | Main agent + math specialist — `WithSubAgents`, separate task queues |
 | `agent_with_json_response` | Structured LLM output — `WithResponseFormat` + `interfaces.JSONSchema` (JSON with schema; no tools) |
 | `agent_with_reasoning` | Generic `interfaces.LLMReasoning` via `WithLLMSampling` — `Stream` to observe `thinking_delta` (e.g. Anthropic) |
-| `agent_with_worker` | Agent and worker in separate processes — `DisableLocalWorker` + `NewAgentWorker` |
+| `agent_with_worker` | Agent and worker in separate processes — `DisableLocalWorker` + `NewAgentWorker`; agent uses **`Stream`** |
+| `durable_agent` | Same split-process layout — agent uses **`Stream`** (`WithStream`); durability scenarios: [`durable_agent/README.md`](durable_agent/README.md) |
 | `agent_with_mcp_config` | MCP via `WithMCPConfig` — transport from env: `mcp.MCPStdio` (command, JSON args/env) or `mcp.MCPStreamableHTTP` (URL, optional bearer/OAuth); see `examples/env.sample` |
 | `agent_with_mcp_client` | Same transports via `mcpclient.NewClient` + `WithMCPClients`; same env vars as `agent_with_mcp_config` |
 
@@ -122,9 +123,15 @@ go run ./agent_with_tool_authorizer "Get the protected note for roadmap."
 go run ./multiple_agents "What is 7 times 8?"
 go run ./multiple_agents concurrent "What is 7 times 8?"
 
-# Agent and worker in separate processes: start worker first, then agent
-go run ./agent_with_worker/worker &   # start worker in background
-go run ./agent_with_worker/agent "Hello from remote agent!"
+# Agent and worker in separate processes: two terminals — worker in terminal 1,
+# agent in terminal 2 (after the worker is up).
+go run ./agent_with_worker/worker    # terminal 1: worker
+go run ./agent_with_worker/agent "Hello from remote agent!"   # terminal 2: agent
+
+# durable_agent: same two-terminal flow; streaming REPL. Scenarios:
+# durable_agent/README.md
+go run ./durable_agent/worker       # terminal 1
+go run ./durable_agent/agent "Hello from remote agent!"   # terminal 2
 ```
 
 ### MCP (`WithMCPConfig` vs `WithMCPClients`)
