@@ -18,6 +18,7 @@ import (
 	"github.com/agenticenv/agent-sdk-go/pkg/llm/anthropic"
 	"github.com/agenticenv/agent-sdk-go/pkg/llm/deepseek"
 	"github.com/agenticenv/agent-sdk-go/pkg/llm/gemini"
+	"github.com/agenticenv/agent-sdk-go/pkg/llm/ollama"
 	"github.com/agenticenv/agent-sdk-go/pkg/llm/openai"
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
 	"github.com/agenticenv/agent-sdk-go/pkg/mcp"
@@ -549,8 +550,9 @@ func NewLoggerFromLogConfig(cfg *Config) logger.Logger {
 }
 
 // NewLLMClientFromConfig creates an LLM client from config using the new llm.Option-based API.
-// BaseURL applies to the OpenAI and DeepSeek providers; set LLM_BASEURL for a non-default
-// OpenAI-compatible endpoint. DeepSeek defaults to its own endpoint when LLM_BASEURL is unset.
+// BaseURL applies to the OpenAI, DeepSeek, and Ollama providers; set LLM_BASEURL for a
+// non-default OpenAI-compatible endpoint. DeepSeek and Ollama default to their own endpoints
+// when LLM_BASEURL is unset (Ollama to http://localhost:11434/v1, requiring no API key).
 func NewLLMClientFromConfig(cfg *Config) (interfaces.LLMClient, error) {
 	opts := []llm.Option{
 		llm.WithAPIKey(cfg.APIKey),
@@ -572,6 +574,12 @@ func NewLLMClientFromConfig(cfg *Config) (interfaces.LLMClient, error) {
 			opts = append(opts, llm.WithBaseURL(cfg.BaseURL))
 		}
 		return deepseek.NewClient(opts...)
+	case interfaces.LLMProviderOllama:
+		// Ollama needs no API key; its client defaults BaseURL to http://localhost:11434/v1.
+		if cfg.BaseURL != "" {
+			opts = append(opts, llm.WithBaseURL(cfg.BaseURL))
+		}
+		return ollama.NewClient(opts...)
 	default:
 		if cfg.BaseURL != "" {
 			opts = append(opts, llm.WithBaseURL(cfg.BaseURL))

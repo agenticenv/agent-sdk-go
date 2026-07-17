@@ -14,6 +14,7 @@ import (
 	"github.com/agenticenv/agent-sdk-go/pkg/llm/anthropic"
 	"github.com/agenticenv/agent-sdk-go/pkg/llm/deepseek"
 	"github.com/agenticenv/agent-sdk-go/pkg/llm/gemini"
+	"github.com/agenticenv/agent-sdk-go/pkg/llm/ollama"
 	"github.com/agenticenv/agent-sdk-go/pkg/llm/openai"
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
 	"github.com/agenticenv/agent-sdk-go/pkg/mcp"
@@ -328,6 +329,12 @@ func NewLLMClient(cfg *Config, lgr logger.Logger) (interfaces.LLMClient, error) 
 			opts = append(opts, llm.WithBaseURL(cfg.LLM.BaseURL))
 		}
 		return deepseek.NewClient(opts...)
+	case interfaces.LLMProviderOllama:
+		// Ollama needs no API key; its client defaults BaseURL to http://localhost:11434/v1.
+		if cfg.LLM.BaseURL != "" {
+			opts = append(opts, llm.WithBaseURL(cfg.LLM.BaseURL))
+		}
+		return ollama.NewClient(opts...)
 	default:
 		if cfg.LLM.BaseURL != "" {
 			opts = append(opts, llm.WithBaseURL(cfg.LLM.BaseURL))

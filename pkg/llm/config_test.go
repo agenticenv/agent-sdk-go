@@ -16,6 +16,22 @@ func TestBuildConfig_RequiresAPIKey(t *testing.T) {
 	}
 }
 
+func TestBuildConfigKeyless_AllowsEmptyAPIKey(t *testing.T) {
+	c, err := BuildConfigKeyless(WithModel("llama3.2"))
+	if err != nil {
+		t.Fatalf("BuildConfigKeyless: expected success with no APIKey, got %v", err)
+	}
+	if c.APIKey != "" {
+		t.Fatalf("APIKey = %q, want empty", c.APIKey)
+	}
+	if c.LogLevel != "error" {
+		t.Fatalf("LogLevel = %q, want default", c.LogLevel)
+	}
+	if c.Logger == nil {
+		t.Fatal("expected default logger")
+	}
+}
+
 func TestBuildConfig_DefaultsLogLevelAndLogger(t *testing.T) {
 	c, err := BuildConfig(WithAPIKey("k"))
 	if err != nil {

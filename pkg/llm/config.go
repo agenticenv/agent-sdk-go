@@ -48,12 +48,14 @@ func WithPromptCaching(enabled bool) Option {
 // DefaultMaxTokens is used when MaxTokens is 0 and the provider requires it (e.g. Anthropic).
 const DefaultMaxTokens = 1024
 
-// BuildConfig builds LLMConfig from options. Defaults when not set:
+// BuildConfigKeyless builds LLMConfig from options without requiring an APIKey.
+// It is for keyless/local providers (e.g. Ollama) whose transport ignores auth.
+// Defaults when not set:
 //   - LogLevel: "error"
 //   - Logger: stderr slog logger at LogLevel
 //
 // Sampling (Temperature, MaxTokens, TopP, TopK) is per-agent—use agent.WithTemperature etc.
-func BuildConfig(opts ...Option) (*LLMConfig, error) {
+func BuildConfigKeyless(opts ...Option) (*LLMConfig, error) {
 	c := &LLMConfig{}
 	for _, opt := range opts {
 		opt(c)
@@ -63,6 +65,20 @@ func BuildConfig(opts ...Option) (*LLMConfig, error) {
 	}
 	if c.Logger == nil {
 		c.Logger = logger.DefaultLogger(c.LogLevel)
+	}
+	return c, nil
+}
+
+// BuildConfig builds LLMConfig from options, requiring a non-empty APIKey.
+// For keyless/local providers use BuildConfigKeyless. Defaults when not set:
+//   - LogLevel: "error"
+//   - Logger: stderr slog logger at LogLevel
+//
+// Sampling (Temperature, MaxTokens, TopP, TopK) is per-agent—use agent.WithTemperature etc.
+func BuildConfig(opts ...Option) (*LLMConfig, error) {
+	c, err := BuildConfigKeyless(opts...)
+	if err != nil {
+		return nil, err
 	}
 	if c.APIKey == "" {
 		return nil, errors.New("APIKey is required")

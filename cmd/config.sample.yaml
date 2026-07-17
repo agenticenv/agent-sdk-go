@@ -22,12 +22,12 @@ temporal:
   namespace: default     # Temporal namespace
   taskQueue: agent-sdk-go   # Task queue for agent workflows
 
-# LLM provider (OpenAI, Anthropic, Gemini, or DeepSeek)
+# LLM provider (OpenAI, Anthropic, Gemini, DeepSeek, or Ollama)
 llm:
-  provider: openai      # openai | anthropic | gemini | deepseek
-  apiKey: ""            # Set here or via AGENT_LLM_APIKEY (preferred for secrets)
-  model: gpt-4o         # Model name, e.g. gpt-4o, claude-haiku-4-5, gemini-2.5-flash, deepseek-chat
-  baseURL: https://api.openai.com/v1   # Optional; OpenAI-compatible proxies. For deepseek, leave unset to use https://api.deepseek.com
+  provider: openai      # openai | anthropic | gemini | deepseek | ollama
+  apiKey: ""            # Set here or via AGENT_LLM_APIKEY (preferred for secrets). Not needed for ollama (local); set to an ollama.com key (or OLLAMA_API_KEY) for Ollama Cloud.
+  model: gpt-4o         # Model name, e.g. gpt-4o, claude-haiku-4-5, gemini-2.5-flash, deepseek-chat, llama3.2, qwen3-coder:480b-cloud
+  baseURL: https://api.openai.com/v1   # Optional; OpenAI-compatible proxies. Leave unset for deepseek (https://api.deepseek.com) or ollama (http://localhost:11434/v1, or https://ollama.com/v1 automatically when apiKey is set).
 
 # Logger: file by default (JSON + caller). Prompts/responses use fmt in main, not this logger.
 logger:

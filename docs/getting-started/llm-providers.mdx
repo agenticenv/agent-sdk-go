@@ -1,6 +1,6 @@
 ---
 title: "LLM Providers"
-description: "Configure OpenAI, Anthropic, Gemini, or DeepSeek — or bring your own LLM client"
+description: "Configure OpenAI, Anthropic, Gemini, DeepSeek, or Ollama — or bring your own LLM client"
 ---
 
 Every agent requires an [`interfaces.LLMClient`](https://pkg.go.dev/github.com/agenticenv/agent-sdk-go/pkg/interfaces#LLMClient). Pass it to [`NewAgent`](/getting-started/quickstart) with [`WithLLMClient`](/getting-started/configuration).
@@ -19,6 +19,7 @@ import "github.com/agenticenv/agent-sdk-go/pkg/llm"
 | Anthropic | `pkg/llm/anthropic` | `anthropic` |
 | Gemini | `pkg/llm/gemini` | `gemini` |
 | DeepSeek | `pkg/llm/deepseek` | `deepseek` |
+| Ollama | `pkg/llm/ollama` | `ollama` |
 
 They all implement the same interface:
 
@@ -124,6 +125,41 @@ Common models: `deepseek-chat` and `deepseek-reasoner`. Reasoning is not configu
 DeepSeek supports only plain JSON mode, not schema-constrained output. A [response format](/features/response-format) with `Type: ResponseFormatJSON` maps to DeepSeek's `json_object`; any `Schema` is ignored (not enforced by the API), so prompt the model for the shape you want, and include the word "json" in the conversation.
 </Note>
 
+## Ollama
+
+Ollama runs open models locally and exposes an OpenAI-compatible API, so no API key is needed. The base URL defaults to `http://localhost:11434/v1`; pass `WithBaseURL` to reach a remote host.
+
+```go
+import (
+    "github.com/agenticenv/agent-sdk-go/pkg/llm"
+    "github.com/agenticenv/agent-sdk-go/pkg/llm/ollama"
+)
+
+llmClient, err := ollama.NewClient(
+    llm.WithModel("llama3.2"), // any locally pulled model
+    // llm.WithBaseURL("http://remote-host:11434/v1"), // optional
+)
+```
+
+Common models: any model you have pulled with `ollama pull`, e.g. `llama3.2`, `qwen2.5`, `mistral`. Start the daemon with `ollama serve`. Reasoning models such as `deepseek-r1` and `qwen3` surface their trace via the streaming `LLMStreamChunk.ThinkingDelta` and, for non-streaming responses, `LLMResponse.Metadata["reasoning_content"]`.
+
+### Ollama Cloud
+
+[Ollama Cloud](https://ollama.com) hosts larger models behind an API key, for machines that can't run them locally. Supplying an API key — via `llm.WithAPIKey` or the `OLLAMA_API_KEY` environment variable — automatically switches the default base URL to Ollama Cloud's endpoint (`https://ollama.com/v1`); no other code change is needed. `llm.WithBaseURL` still overrides either default, e.g. for a self-hosted daemon behind an auth proxy.
+
+```go
+llmClient, err := ollama.NewClient(
+    llm.WithAPIKey(os.Getenv("OLLAMA_API_KEY")), // omit to fall back to the OLLAMA_API_KEY env var
+    llm.WithModel("qwen3-coder:480b-cloud"),      // cloud models are suffixed "-cloud"
+)
+```
+
+Generate a key at [ollama.com/settings/keys](https://ollama.com/settings/keys).
+
+<Note>
+Not every Ollama model supports tool-calling or JSON mode, so tool use and response formats behave differently depending on which model you pull or select on Cloud. As with DeepSeek, a [response format](/features/response-format) with `Type: ResponseFormatJSON` maps to `json_object`; any `Schema` is ignored, so prompt the model for the shape you want.
+</Note>
+
 ## Shared LLM options
 
 All built-in clients accept functional options from `pkg/llm`:
@@ -151,13 +187,13 @@ a, err := agent.NewAgent(
 
 Field support varies by provider:
 
-| Field | OpenAI | Anthropic | Gemini | DeepSeek |
-|---|---|---|---|---|
-| `Temperature` | ✓ | ✓ | ✓ | ✓ |
-| `MaxTokens` | ✓ | ✓ | ✓ | ✓ |
-| `TopP` | ✓ | — | ✓ | ✓ |
-| `TopK` | — | ✓ | — | — |
-| `Reasoning` | Partial | ✓ | ✓ | — |
+| Field | OpenAI | Anthropic | Gemini | DeepSeek | Ollama |
+|---|---|---|---|---|---|
+| `Temperature` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `MaxTokens` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `TopP` | ✓ | — | ✓ | ✓ | ✓ |
+| `TopK` | — | ✓ | — | — | — |
+| `Reasoning` | Partial | ✓ | ✓ | — | — |
 
 See [Reasoning](/features/reasoning) for extended thinking configuration per provider.
 
