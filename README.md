@@ -7,7 +7,7 @@
 [![Mentioned in Awesome Go](https://awesome.re/mentioned-badge.svg)](https://github.com/avelino/awesome-go)
 
 **Open-source Go SDK for building production-grade AI agents** — extensible and pluggable by design.
-Run in-process with zero setup, or on [Temporal](https://temporal.io) for durable, crash-resilient production execution.
+Run in-process with zero setup, or on [Temporal](https://temporal.io) for durable, crash-resilient execution.
 
 📖 [Documentation](https://docs.agenticenv.ai)  ·  [Quickstart](https://docs.agenticenv.ai/getting-started/quickstart)  ·  [Examples](https://docs.agenticenv.ai/examples/running-examples) 
 
