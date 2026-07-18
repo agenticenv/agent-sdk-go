@@ -6,8 +6,9 @@
 [![License](https://img.shields.io/github/license/agenticenv/agent-sdk-go?label=License&cacheSeconds=0)](LICENSE)
 [![Mentioned in Awesome Go](https://awesome.re/mentioned-badge.svg)](https://github.com/avelino/awesome-go)
 
-**Open-source Go SDK for building production-grade AI agents** — extensible and pluggable by design.
-Run in-process with zero setup, or on [Temporal](https://temporal.io) for durable, crash-resilient execution.
+**AI agents that keep running even when your process doesn't — powered by [Temporal](https://temporal.io).**
+
+**Open-source Go SDK** — run in-process with zero setup, or on Temporal for crash-resilient, distributed execution that survives restarts and deploys.  Extensible and pluggable by design.
 
 📖 [Documentation](https://docs.agenticenv.ai)  ·  [Quickstart](https://docs.agenticenv.ai/getting-started/quickstart)  ·  [Examples](https://docs.agenticenv.ai/examples/running-examples) 
 
