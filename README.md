@@ -8,7 +8,7 @@
 
 **AI agents that keep running even when your process doesn't — powered by [Temporal](https://temporal.io).**
 
-**Open-source Go SDK for building AI agents** — run in-process with zero setup, or on Temporal for crash-resilient, distributed execution that survives restarts and deploys.  Extensible and pluggable by design.
+**Open-source Go SDK for building AI agents** — run in-process with zero setup, or on Temporal for crash-resilient, distributed execution that survives restarts and deploys. Every core component is a pluggable interface, so nothing is locked in.
 
 📖 [Documentation](https://docs.agenticenv.ai)  ·  [Quickstart](https://docs.agenticenv.ai/getting-started/quickstart)  ·  [Examples](https://docs.agenticenv.ai/examples/running-examples) 
 
