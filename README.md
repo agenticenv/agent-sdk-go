@@ -1,14 +1,14 @@
 # Agent SDK for Go
 
-[![CI](https://github.com/agenticenv/agent-sdk-go/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/agenticenv/agent-sdk-go/actions)
-[![Release](https://img.shields.io/github/v/release/agenticenv/agent-sdk-go?label=Release)](https://github.com/agenticenv/agent-sdk-go/releases)
-[![Go Reference](https://pkg.go.dev/badge/github.com/agenticenv/agent-sdk-go.svg)](https://pkg.go.dev/github.com/agenticenv/agent-sdk-go)
-[![License](https://img.shields.io/github/license/agenticenv/agent-sdk-go?label=License&cacheSeconds=0)](LICENSE)
-[![Mentioned in Awesome Go](https://awesome.re/mentioned-badge.svg)](https://github.com/avelino/awesome-go)
+[CI](https://github.com/agenticenv/agent-sdk-go/actions)
+[Release](https://github.com/agenticenv/agent-sdk-go/releases)
+[Go Reference](https://pkg.go.dev/github.com/agenticenv/agent-sdk-go)
+[License](LICENSE)
+[Mentioned in Awesome Go](https://github.com/avelino/awesome-go)
 
 **AI agents that keep running even when your process doesn't — powered by [Temporal](https://temporal.io).**
 
-**Open-source Go SDK** — run in-process with zero setup, or on Temporal for crash-resilient, distributed execution that survives restarts and deploys.  Extensible and pluggable by design.
+**Open-source Go SDK for building AI agents** — run in-process with zero setup, or on Temporal for crash-resilient, distributed execution that survives restarts and deploys.  Extensible and pluggable by design.
 
 📖 [Documentation](https://docs.agenticenv.ai)  ·  [Quickstart](https://docs.agenticenv.ai/getting-started/quickstart)  ·  [Examples](https://docs.agenticenv.ai/examples/running-examples) 
 
