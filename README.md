@@ -80,7 +80,8 @@ export AGENT_LLM_APIKEY=sk-your-key AGENT_LLM_PROVIDER=openai AGENT_LLM_MODEL=gp
 agctl
 ```
 
-Download a binary from [Releases](https://github.com/agenticenv/agent-sdk-go/releases), or build from source — `agctl` is its own Go module in [`cli/`](cli/). See the [CLI docs](https://docs.agenticenv.ai/getting-started/cli) and [cli/README.md](cli/README.md) for install and config details.
+Download a binary from [Releases](https://github.com/agenticenv/agent-sdk-go/releases), or build from source — `agctl` is its own Go module in [`cli/`](cli/). 
+See the [CLI docs](https://docs.agenticenv.ai/getting-started/cli) and [cli/README.md](cli/README.md) for install and config details.
 
 ## Features
 
