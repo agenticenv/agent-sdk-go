@@ -71,18 +71,6 @@ result, _ := a.Run(context.Background(), "Hello", nil)
 fmt.Println(result.Content)
 ```
 
-## CLI
-
-**`agctl`** is an interactive REPL for the SDK — no Go code required. Same config-driven setup, in-process or Temporal.
-
-```bash
-export AGENT_LLM_APIKEY=sk-your-key AGENT_LLM_PROVIDER=openai AGENT_LLM_MODEL=gpt-4o
-agctl
-```
-
-Download a binary from [Releases](https://github.com/agenticenv/agent-sdk-go/releases), or build from source — `agctl` is its own Go module in [`cli/`](cli/).
-See the [CLI docs](https://docs.agenticenv.ai/getting-started/cli) and [cli/README.md](cli/README.md) for install and config details.
-
 ## Features
 
 - **LLM providers** — OpenAI, Anthropic, Gemini, DeepSeek, Ollama (local) + custom via `interfaces.LLMClient`
@@ -100,13 +88,20 @@ See the [CLI docs](https://docs.agenticenv.ai/getting-started/cli) and [cli/READ
 - **Durable execution** — crash-resilient runs via Temporal; horizontal worker scaling
 - **Observability** — OpenTelemetry traces, metrics, and structured logs
 
+## CLI
 
+**`agctl`** is an interactive REPL for the SDK — no Go code required. Same config-driven setup, in-process or Temporal.
+
+```bash
+export AGENT_LLM_APIKEY=sk-your-key AGENT_LLM_PROVIDER=openai AGENT_LLM_MODEL=gpt-4o
+agctl
+```
+
+Download a binary from [Releases](https://github.com/agenticenv/agent-sdk-go/releases), or build from source — `agctl` is its own Go module in [`cli/`](cli/). See the [CLI docs](https://docs.agenticenv.ai/getting-started/cli) and [cli/README.md](cli/README.md) for install and config details.
 
 ## Reference Apps
 
 - **[Agent Chat](https://github.com/agenticenv/agent-chat)** — web chat demo with durable conversations; reference for wiring the SDK into an HTTP-backed app.
-
-
 
 ## Examples
 
