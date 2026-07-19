@@ -6,10 +6,10 @@ version: 2
 project_name: agent-sdk-go
 
 builds:
-  # agctl is a separate Go module in ./cmd (its go.mod replaces the SDK with ../),
+  # agctl is a separate Go module in ./cli (its go.mod replaces the SDK with ../),
   # so the build runs inside that directory.
   - id: agctl
-    dir: ./cmd
+    dir: ./cli
     main: .
     binary: agctl
     ldflags:

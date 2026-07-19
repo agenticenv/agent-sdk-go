@@ -22,8 +22,8 @@ Pre-built binaries for Linux, macOS, and Windows (amd64 and arm64) are on [GitHu
 ### Option 2 — Build from source
 
 ```bash
-# agctl is its own module in cmd/ (build with Task)
-cd cmd
+# agctl is its own module in cli/ (build with Task)
+cd cli
 task build
 ./bin/agctl
 
@@ -37,7 +37,7 @@ agctl -config config.yaml
 From a cloned repository:
 
 ```bash
-cd cmd
+cd cli
 go run .
 ```
 
@@ -47,7 +47,7 @@ Compiles and runs on each invocation — useful during development.
 
 ```bash
 # 1. Copy the sample config
-cp cmd/config.sample.yaml config.yaml
+cp cli/config.sample.yaml config.yaml
 # Edit config.yaml — set llm.apiKey or use AGENT_LLM_APIKEY
 
 # 2. Run the CLI
@@ -62,8 +62,8 @@ Type prompts at the `>` prompt. Enter `exit`, `quit`, or `bye` to end the sessio
 
 | File | Purpose |
 |---|---|
-| `cmd/config.sample.yaml` | Template — safe to commit |
-| `cmd/config.yaml` | Your config — gitignored, copy from sample |
+| `cli/config.sample.yaml` | Template — safe to commit |
+| `cli/config.yaml` | Your config — gitignored, copy from sample |
 
 Run with a custom path:
 
@@ -151,7 +151,7 @@ mcp:
 
 Each entry supports: `enabled`, `name`, `transport` (`stdio` or `streamable_http`), `command`/`args` (stdio) or `url`/`bearer_token` (HTTP), and optional `timeout_seconds`, `retry_attempts`, `allow_tools`, `block_tools`.
 
-See `cmd/config.sample.yaml` for HTTP transport, OAuth, and tool filter examples.
+See `cli/config.sample.yaml` for HTTP transport, OAuth, and tool filter examples.
 
 ## Token usage summary
 
@@ -171,7 +171,7 @@ Use this to measure cost across a full interactive session. `cached_prompt` refl
 
 | | SDK (library) | CLI (`agctl`) |
 |---|---|---|
-| **Install** | `go get github.com/agenticenv/agent-sdk-go@latest` | Download release binary or `cd cmd && task build` |
+| **Install** | `go get github.com/agenticenv/agent-sdk-go@latest` | Download release binary or `cd cli && task build` |
 | **Use** | Import `pkg/agent` in your Go application | Interactive REPL from the terminal |
 | **Config** | Go code — `NewAgent(...)` options | YAML file + env vars |
 
@@ -181,7 +181,7 @@ Both are published from the same repository. Pin the SDK version in your `go.mod
 
 `agctl` prints **only user prompts and agent responses** on the console. Internal SDK logs go to a file.
 
-- Default: `cmd/logs/agctl.log` (gitignored)
+- Default: `cli/logs/agctl.log` (gitignored)
 - Override: `logger.output` in config or `AGENT_LOGGER_OUTPUT`
 
 ## Related

@@ -1,6 +1,6 @@
 # Taskfile for the agctl CLI (its own Go module).
 # Install Task: https://taskfile.dev/installation/
-# Run from the cmd/ directory: `task` (lists tasks), `task build`, `task run -- -config config.yaml`.
+# Run from the cli/ directory: `task` (lists tasks), `task build`, `task run -- -config config.yaml`.
 version: "3"
 
 silent: true
@@ -21,7 +21,7 @@ tasks:
   build:
     # Local builds leave main.version at its default ("dev"); release builds are
     # stamped with the git tag by GoReleaser (see ../.goreleaser.yaml).
-    desc: Build the agctl binary into cmd/bin (version = dev)
+    desc: Build the agctl binary into cli/bin (version = dev)
     cmds:
       - mkdir -p {{.BIN_DIR}}
       - go build -o {{.BINARY}} .
@@ -40,19 +40,19 @@ tasks:
       - go run . {{.CLI_ARGS}}
 
   test:
-    desc: Run the cmd module tests
+    desc: Run the cli module tests
     cmds:
       - go test ./... -count=1
 
   lint:
-    desc: Lint the cmd module (gofmt check, vet, golangci-lint)
+    desc: Lint the cli module (gofmt check, vet, golangci-lint)
     cmds:
       - test -z "$(gofmt -s -l .)" || (echo 'not gofmt -s formatted (run task fmt)' && exit 1)
       - go vet ./...
       - golangci-lint run ./...
 
   check:
-    desc: All cmd checks (lint + test + build) — mirrors the CI agctl job
+    desc: All cli checks (lint + test + build) — mirrors the CI agctl job
     cmds:
       - task: lint
       - task: test

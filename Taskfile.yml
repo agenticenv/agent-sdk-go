@@ -5,10 +5,10 @@ silent: true
 dotenv: ['examples/.env']
 
 includes:
-  # agctl CLI — its own module in ./cmd; namespaced as `task cmd:build`, `task cmd:check`, etc.
-  cmd:
-    taskfile: cmd/Taskfile.yml
-    dir: cmd
+  # agctl CLI — its own module in ./cli; namespaced as `task cli:build`, `task cli:check`, etc.
+  cli:
+    taskfile: cli/Taskfile.yml
+    dir: cli
   examples:
     taskfile: taskfiles/examples.yml
     flatten: true
@@ -35,8 +35,8 @@ tasks:
 
   # ── SDK library: build / test / lint (migrated from the Makefile) ──
 
-  # Compile all SDK library packages. The agctl CLI is a separate module in ./cmd —
-  # build/install it with `task cmd:build` (or `task cmd:install`).
+  # Compile all SDK library packages. The agctl CLI is a separate module in ./cli —
+  # build/install it with `task cli:build` (or `task cli:install`).
   build:
     desc: Compile all SDK library packages
     cmds:
@@ -118,7 +118,7 @@ tasks:
     desc: Remove built binaries and coverage artifacts
     cmds:
       - echo "==> Cleaning..."
-      - rm -rf cmd/bin
+      - rm -rf cli/bin
       - rm -f coverage.out coverage.html
       - echo "==> Clean complete"
 
@@ -148,7 +148,7 @@ tasks:
           .venv/bin/pytest test_agent.py -v
       - echo "==> Eval-harness complete"
 
-  # Run before push: SDK lint/test/build + secrets scan + agctl (cmd) checks — all CI gates locally.
+  # Run before push: SDK lint/test/build + secrets scan + agctl (cli) checks — all CI gates locally.
   # Coverage is CI-only (`task test-coverage` when you want the report). If fmt-check fails, run `task fmt`.
   check:
     desc: All CI gates locally (SDK lint/test/build + secrets scan + agctl checks)
@@ -157,5 +157,5 @@ tasks:
       - task: test
       - task: build
       - task: secrets-scan
-      - task: cmd:check
+      - task: cli:check
       - echo "==> All checks passed (ready to push)"

@@ -216,7 +216,7 @@ type LLMConfig struct {
 
 type LoggerConfig struct {
 	Level     string `mapstructure:"level"`
-	Output    string `mapstructure:"output"`     // stdout | stderr | file path; default resolves to cmd/logs/agctl.log
+	Output    string `mapstructure:"output"`     // stdout | stderr | file path; default resolves to cli/logs/agctl.log
 	Format    string `mapstructure:"format"`     // text | json (file/stdout/stderr)
 	AddSource bool   `mapstructure:"add_source"` // include file:line in each log line (slog source)
 	TeeStderr bool   `mapstructure:"tee_stderr"` // when output is a file, also copy to stderr (usually off so the REPL stays clean)
@@ -398,7 +398,7 @@ func getLogOutput(cfg *LoggerConfig) string {
 		output = strings.TrimSpace(cfg.Output)
 	}
 	if output == "" || output == "logs/agctl.log" {
-		// Default: resolve to <module root>/logs/agctl.log so logs stay inside cmd/ regardless of cwd
+		// Default: resolve to <module root>/logs/agctl.log so logs stay inside cli/ regardless of cwd
 		if root := findProjectRoot(); root != "" {
 			output = filepath.Join(root, "logs", "agctl.log")
 		} else {

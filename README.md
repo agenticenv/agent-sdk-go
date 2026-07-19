@@ -71,7 +71,16 @@ result, _ := a.Run(context.Background(), "Hello", nil)
 fmt.Println(result.Content)
 ```
 
+## CLI
 
+**`agctl`** is an interactive REPL for the SDK — no Go code required. Same config-driven setup, in-process or Temporal.
+
+```bash
+export AGENT_LLM_APIKEY=sk-your-key AGENT_LLM_PROVIDER=openai AGENT_LLM_MODEL=gpt-4o
+agctl
+```
+
+Download a binary from [Releases](https://github.com/agenticenv/agent-sdk-go/releases), or build from source (`agctl` is its own Go module in [`cli/`](cli/)). See the [CLI docs](https://docs.agenticenv.ai/getting-started/cli) and [cli/README.md](cli/README.md) for install, config, and MCP setup.
 
 ## Features
 

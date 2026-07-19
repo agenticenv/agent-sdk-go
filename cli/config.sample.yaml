@@ -1,6 +1,6 @@
 # agent-sdk-go CLI configuration sample
 #
-# 1. Copy this file to config.yaml (run from the cmd/ directory):
+# 1. Copy this file to config.yaml (run from the cli/ directory):
 #    cp config.sample.yaml config.yaml
 #
 # 2. Edit config.yaml with your values (API keys, Temporal host, etc.)
