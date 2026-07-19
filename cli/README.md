@@ -87,7 +87,7 @@ Config is loaded from `config.yaml` in the current directory (default; run from 
 
 Define `mcp.servers` in `config.yaml` (see `config.sample.yaml`). Each entry supports **`enabled`** (omit or `true` to use; `false` to skip), **`name`** (stable id for that MCP connection), **`transport`** (`stdio` or `streamable_http`), plus transport-specific fields (`command` / `args` / `env` for stdio; `url` / `bearer_token` / OAuth / `headers` for HTTP). Optional **`timeout_seconds`**, **`retry_attempts`**, **`allow_tools`** / **`block_tools`**.
 
-When at least one server is enabled, the CLI registers **`WithMCPConfig`** and **`AutoToolApprovalPolicy`** so MCP tools run without per-call approval in the REPL.
+When at least one server is enabled, the CLI registers **`WithMCPConfig`** and **`AutoToolApprovalPolicy`** so MCP tools run without per-call approval in the interactive session.
 
 ## Logging
 
