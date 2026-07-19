@@ -1,10 +1,10 @@
 # Agent SDK for Go
 
-[CI](https://github.com/agenticenv/agent-sdk-go/actions)
-[Release](https://github.com/agenticenv/agent-sdk-go/releases)
-[Go Reference](https://pkg.go.dev/github.com/agenticenv/agent-sdk-go)
-[License](LICENSE)
-[Mentioned in Awesome Go](https://github.com/avelino/awesome-go)
+[![CI](https://github.com/agenticenv/agent-sdk-go/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/agenticenv/agent-sdk-go/actions)
+[![Release](https://img.shields.io/github/v/release/agenticenv/agent-sdk-go?label=Release)](https://github.com/agenticenv/agent-sdk-go/releases)
+[![Go Reference](https://pkg.go.dev/badge/github.com/agenticenv/agent-sdk-go.svg)](https://pkg.go.dev/github.com/agenticenv/agent-sdk-go)
+[![License](https://img.shields.io/github/license/agenticenv/agent-sdk-go?label=License)](LICENSE)
+[![Mentioned in Awesome Go](https://awesome.re/mentioned-badge.svg)](https://github.com/avelino/awesome-go)
 
 **AI agents that keep running even when your process doesn't — powered by [Temporal](https://temporal.io).**
 
