@@ -90,11 +90,16 @@ fmt.Println(result.Content)
 
 ## CLI
 
-**`agctl`** is an interactive REPL for the SDK — no Go code required. Same config-driven setup, in-process or Temporal.
+**`agctl`** is an interactive chat session for the SDK — no Go code required. Same config-driven setup, in-process or Temporal.
 
 ```bash
+# 1. Configure your LLM (or use a config.yaml)
 export AGENT_LLM_APIKEY=sk-your-key AGENT_LLM_PROVIDER=openai AGENT_LLM_MODEL=gpt-4o
+
+# 2. Start the interactive session and chat
 agctl
+# Conversation mode. Type 'exit', 'quit', or 'bye' to end the conversation.
+# You: What can you help me with?
 ```
 
 Download a binary from [Releases](https://github.com/agenticenv/agent-sdk-go/releases), or build from source — `agctl` is its own Go module in [`cli/`](cli/). See the [CLI docs](https://docs.agenticenv.ai/getting-started/cli) and [cli/README.md](cli/README.md) for install and config details.

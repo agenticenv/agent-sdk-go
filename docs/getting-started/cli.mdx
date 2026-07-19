@@ -3,7 +3,7 @@ title: "CLI"
 description: "Run agents interactively from the terminal using agctl with a YAML config file"
 ---
 
-**`agctl`** is the interactive REPL for Agent SDK for Go. Type prompts and receive agent responses. It uses the same SDK as your application code and supports both in-process and Temporal runtimes via a YAML config file.
+**`agctl`** is the interactive chat session (conversation mode) for Agent SDK for Go. Type prompts and receive agent responses. It uses the same SDK as your application code and supports both in-process and Temporal runtimes via a YAML config file.
 
 <Note>
 **`agctl` is not the Go library.** Install the SDK with `go get github.com/agenticenv/agent-sdk-go`. Install `agctl` separately — download a release binary or build from source.
@@ -137,7 +137,7 @@ agctl -config config.yaml
 
 ## MCP servers (optional)
 
-Add `mcp.servers` entries to `config.yaml` to connect MCP tool servers. When at least one server is enabled, the CLI registers [`WithMCPConfig`](/features/mcp) and [`AutoToolApprovalPolicy`](/features/approvals) so MCP tools run without per-call approval in the REPL.
+Add `mcp.servers` entries to `config.yaml` to connect MCP tool servers. When at least one server is enabled, the CLI registers [`WithMCPConfig`](/features/mcp) and [`AutoToolApprovalPolicy`](/features/approvals) so MCP tools run without per-call approval in the interactive session.
 
 ```yaml
 mcp:
@@ -172,7 +172,7 @@ Use this to measure cost across a full interactive session. `cached_prompt` refl
 | | SDK (library) | CLI (`agctl`) |
 |---|---|---|
 | **Install** | `go get github.com/agenticenv/agent-sdk-go@latest` | Download release binary or `cd cli && task build` |
-| **Use** | Import `pkg/agent` in your Go application | Interactive REPL from the terminal |
+| **Use** | Import `pkg/agent` in your Go application | Interactive chat session from the terminal |
 | **Config** | Go code — `NewAgent(...)` options | YAML file + env vars |
 
 Both are published from the same repository. Pin the SDK version in your `go.mod`; pin the CLI by downloading the matching release tag.
