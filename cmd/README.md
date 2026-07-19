@@ -1,18 +1,18 @@
 # CLI
 
-The `agentctl` CLI uses **agent-sdk-go**, which runs agents on the **Temporal** runtime. A **running Temporal server** is required. See **[Temporal setup](../temporal-setup.md)** for Docker, Temporal CLI, ports, Cloud, and self-hosted options.
+`agctl` is the interactive CLI for **agent-sdk-go**. It is its **own Go module** (`cmd/go.mod`) so the SDK library stays free of CLI-only dependencies. Its `go.mod` uses `replace github.com/agenticenv/agent-sdk-go => ../` to build against the SDK in this repo, so **run every command from the `cmd/` directory** (or use the installed binary).
 
 Interactive conversation mode. Type prompts, get responses. Type `exit`, `quit`, or `bye` to end.
 
 ## Configuration
 
-1. **Copy the sample config** and add your values:
+1. **Copy the sample config** and add your values (from `cmd/`):
 
    ```bash
-   cp cmd/config.sample.yaml cmd/config.yaml
+   cp config.sample.yaml config.yaml
    ```
 
-2. **Edit `cmd/config.yaml`** with your Temporal host, LLM provider, API key, and model. Optional **MCP** servers live under `mcp.servers` in `config.sample.yaml`: set `enabled: true` on entries you want (stdio subprocess or `streamable_http` URL); leave others `enabled: false`.
+2. **Edit `config.yaml`** with your Temporal host, LLM provider, API key, and model. Optional **MCP** servers live under `mcp.servers` in `config.sample.yaml`: set `enabled: true` on entries you want (stdio subprocess or `streamable_http` URL); leave others `enabled: false`.
 
 3. **Optional:** Use environment variables to override (keeps secrets out of the config file):
 
@@ -20,7 +20,7 @@ Interactive conversation mode. Type prompts, get responses. Type `exit`, `quit`,
    export AGENT_LLM_APIKEY=sk-your-key
    export AGENT_LLM_PROVIDER=openai
    export AGENT_LLM_MODEL=gpt-4o
-   go run ./cmd
+   go run .
    ```
 
 - **config.sample.yaml** — template (committed to repo)
@@ -32,47 +32,45 @@ The CLI uses `temporal.host`, `temporal.port`, and `temporal.namespace` from `co
 
 ## Run
 
+From the `cmd/` directory:
+
 ```bash
-go run ./cmd
+task run
+# or
+go run .
 ```
 
 Or with a custom config path:
 
 ```bash
-go run ./cmd -config cmd/config.yaml
+go run . -config /path/to/config.yaml
 ```
 
 ## Build
 
-From project root:
+Uses [Task](https://taskfile.dev) (`Taskfile.yml` in this directory). From `cmd/`:
 
 ```bash
-make build
-./cmd/bin/agentctl
+task build
+./bin/agctl
 ```
 
-Or build manually with an embedded version (matches `make build`, which uses `git describe`):
-
-```bash
-go build -ldflags "-X main.version=$(git describe --tags --always --dirty 2>/dev/null || echo dev)" -o cmd/bin/agentctl ./cmd
-```
-
-A plain `go build ./cmd` leaves the version as `dev` until you pass `-ldflags`. **Release binaries** from GitHub get the tag via GoReleaser (see `.goreleaser.yaml`, `-X main.version=<git tag>`).
+`task build` embeds the version via `git describe` (`-ldflags "-X main.version=..."`). A plain `go build .` leaves the version as `dev`. **Release binaries** from GitHub get the tag via GoReleaser (see `../.goreleaser.yaml`, which builds this module with `dir: ./cmd`).
 
 The `cmd/bin/` directory is gitignored.
 
 ## Install
 
-Install `agentctl` to `$(go env GOPATH)/bin` so you can run it from anywhere (ensure that directory is in your PATH):
+Install `agctl` to `$(go env GOPATH)/bin` so you can run it from anywhere (ensure that directory is in your PATH). From `cmd/`:
 
 ```bash
-make install
-agentctl -config cmd/config.yaml
+task install
+agctl -config config.yaml
 ```
 
 ## Config file and env vars
 
-Config is loaded from `cmd/config.yaml` (default). If the file does not exist, defaults plus env vars are used.
+Config is loaded from `config.yaml` in the current directory (default; run from `cmd/`). Override with `-config <path>`. If the file does not exist, defaults plus env vars are used.
 
 | Env var | Description |
 |---------|-------------|
@@ -82,7 +80,7 @@ Config is loaded from `cmd/config.yaml` (default). If the file does not exist, d
 | `AGENT_LLM_MODEL` | e.g. `gpt-4o`, `claude-haiku-4-5`, `gemini-2.5-flash` |
 | `AGENT_LLM_BASEURL` | Optional; for OpenAI-compatible proxies |
 | `AGENT_LOGGER_LEVEL` | `error` (default), `warn`, `info`, `debug` |
-| `AGENT_LOGGER_OUTPUT` | Log file path; default `cmd/logs/agent.log` |
+| `AGENT_LOGGER_OUTPUT` | Log file path; default `cmd/logs/agctl.log` |
 | `AGENT_SHOW_LLM_USAGE` | When `true`, print accumulated session token usage on exit (`show_llm_usage` in config) |
 
 ### MCP (optional)
@@ -95,6 +93,6 @@ When at least one server is enabled, the CLI registers **`WithMCPConfig`** and *
 
 The CLI shows only **user prompts and agent responses** on the console. Internal logs go to a file.
 
-- **Default log file:** `cmd/logs/agent.log` (resolved from project root; gitignored)
+- **Default log file:** `cmd/logs/agctl.log` (resolved from the module root; gitignored)
 - **Configure:** Set `logger.output` in `config.yaml` or `AGENT_LOGGER_OUTPUT`
 - **Directories:** `logs/` and `cmd/bin/` are gitignored

@@ -1,4 +1,4 @@
-# Release: GoReleaser builds agentctl for multiple platforms, creates GitHub Release
+# Release: GoReleaser builds agctl for multiple platforms, creates GitHub Release
 # Trigger: push a tag (v0.0.1, v1.0.0, etc.)
 # See RELEASING.md for maintainer checklist
 name: Release

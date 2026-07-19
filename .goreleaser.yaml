@@ -1,4 +1,4 @@
-# GoReleaser config — builds agentctl for multiple platforms, creates GitHub Release
+# GoReleaser config — builds agctl for multiple platforms, creates GitHub Release
 # See https://goreleaser.com/customization/
 
 version: 2
@@ -6,9 +6,12 @@ version: 2
 project_name: agent-sdk-go
 
 builds:
-  - id: agentctl
-    main: ./cmd
-    binary: agentctl
+  # agctl is a separate Go module in ./cmd (its go.mod replaces the SDK with ../),
+  # so the build runs inside that directory.
+  - id: agctl
+    dir: ./cmd
+    main: .
+    binary: agctl
     ldflags:
       - -s -w
       - -X=main.version={{.Tag}}
@@ -23,11 +26,11 @@ builds:
       - CGO_ENABLED=0
 
 archives:
-  - id: agentctl
-    format: tar.gz
+  - id: agctl
+    formats: [tar.gz]
     format_overrides:
       - goos: windows
-        format: zip
+        formats: [zip]
 
 checksum:
   name_template: "checksums.txt"
@@ -42,7 +45,7 @@ release:
     go get github.com/agenticenv/agent-sdk-go@{{ .Tag }}
     ```
 
-    ### Install agentctl (CLI)
+    ### Install agctl (CLI)
 
     Download the archive for your platform from the **Assets** below (Linux, macOS, Windows — amd64 and arm64). Then extract and add to your `PATH`.
 

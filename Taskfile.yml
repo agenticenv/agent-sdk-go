@@ -1,14 +1,29 @@
 version: '3'
 
+silent: true
+
 dotenv: ['examples/.env']
 
 includes:
+  # agctl CLI — its own module in ./cmd; namespaced as `task cmd:build`, `task cmd:check`, etc.
+  cmd:
+    taskfile: cmd/Taskfile.yml
+    dir: cmd
   examples:
     taskfile: taskfiles/examples.yml
     flatten: true
   reports:
     taskfile: taskfiles/reports.yml
     flatten: true
+
+vars:
+  # Coverage merges via covdata; with GOTOOLCHAIN=auto the fetched toolchain can fail on
+  # packages with no tests ("go: no such tool covdata"). Pin to the exact toolchain line in
+  # go.mod (e.g. go1.26.0) — the bare language version (go1.26) is not a valid toolchain name.
+  # https://github.com/golang/go/issues/75031
+  GO_TOOLCHAIN:
+    sh: awk '/^toolchain / { print $2; exit }' go.mod
+  GOTOOLCHAIN_COVERAGE: '{{.GO_TOOLCHAIN}}+auto'
 
 tasks:
   # ── Default ───────────────────────────────────────────────
@@ -17,3 +32,130 @@ tasks:
     desc: Show available tasks
     cmds:
       - task --list
+
+  # ── SDK library: build / test / lint (migrated from the Makefile) ──
+
+  # Compile all SDK library packages. The agctl CLI is a separate module in ./cmd —
+  # build/install it with `task cmd:build` (or `task cmd:install`).
+  build:
+    desc: Compile all SDK library packages
+    cmds:
+      - echo "==> Building SDK packages..."
+      - go build ./...
+      - echo "==> Build complete"
+
+  test:
+    desc: Run Go tests (pkg, internal, eval-harness runner)
+    cmds:
+      - echo "==> Running tests..."
+      - go test ./pkg/... -count=1
+      - go test ./internal/... -count=1
+      - go test ./eval-harness/... -count=1
+      - echo "==> Tests complete"
+
+  test-coverage:
+    desc: Run tests with coverage; writes coverage.out and coverage.html
+    env:
+      GOTOOLCHAIN: '{{.GOTOOLCHAIN_COVERAGE}}'
+    cmds:
+      - echo "==> Running tests with coverage..."
+      - go test ./... -count=1 -coverprofile=coverage.out
+      - echo "==> Total coverage:"
+      - go tool cover -func=coverage.out | grep '^total:'
+      - go tool cover -html=coverage.out -o coverage.html
+      - 'echo "==> Coverage report: coverage.html"'
+
+  fmt:
+    desc: Format all Go files (gofmt -s -w)
+    cmds:
+      - echo "==> gofmt -s -w"
+      - gofmt -s -w .
+      - echo "==> Format complete"
+
+  fmt-check:
+    desc: Fail if any Go file needs gofmt -s (run `task fmt` to fix)
+    cmds:
+      - |
+        echo "==> Checking gofmt -s..."
+        files=$(gofmt -s -l .)
+        if [ -n "$files" ]; then
+          echo "These files are not gofmt -s formatted. Run: task fmt"
+          echo "$files"
+          exit 1
+        fi
+        echo "==> gofmt -s OK"
+
+  spell:
+    desc: Spell-check tracked source only (skips gitignored paths)
+    cmds:
+      - |
+        echo "==> misspell"
+        files=$(git ls-files -z -- '*.go' '*.md' '*.yaml' '*.yml')
+        if [ -z "$files" ]; then
+          echo "No files to spell-check"
+        else
+          printf '%s' "$files" | xargs -0 go run github.com/client9/misspell/cmd/misspell@latest -error
+        fi
+
+  lint:
+    desc: Run linters (gofmt -s check, misspell, go vet + golangci-lint)
+    cmds:
+      - task: fmt-check
+      - task: spell
+      - echo "==> Checking lints (go vet + golangci-lint)..."
+      - go vet ./...
+      - golangci-lint run ./...
+      - echo "==> Lint complete"
+
+  tidy:
+    desc: Tidy module dependencies
+    cmds:
+      - echo "==> Tidying module dependencies..."
+      - go mod tidy
+      - echo "==> Tidy complete"
+
+  clean:
+    desc: Remove built binaries and coverage artifacts
+    cmds:
+      - echo "==> Cleaning..."
+      - rm -rf cmd/bin
+      - rm -f coverage.out coverage.html
+      - echo "==> Clean complete"
+
+  secrets-scan:
+    desc: Scan tracked files for leaked secrets (gitleaks)
+    cmds:
+      - |
+        echo "==> gitleaks detect"
+        if command -v gitleaks >/dev/null 2>&1; then
+          gitleaks detect --source . --verbose --redact
+        elif command -v docker >/dev/null 2>&1; then
+          docker run --rm -v "$(pwd):/repo" -w /repo zricethezav/gitleaks:latest detect --source=/repo --verbose --redact
+        else
+          echo "Install gitleaks or Docker."
+          exit 1
+        fi
+
+  eval-harness:
+    desc: Promptfoo + DeepEval (same as CI eval-harness job). Requires Node.js and Python 3.10+.
+    cmds:
+      - echo "==> Running eval-harness (Promptfoo + DeepEval)..."
+      - cd eval-harness/promptfoo && npx --yes promptfoo@latest eval -c config.yaml
+      - |
+        cd eval-harness/deepeval && \
+          (test -d .venv || python3 -m venv .venv) && \
+          .venv/bin/pip install -q -r requirements.txt && \
+          .venv/bin/pytest test_agent.py -v
+      - echo "==> Eval-harness complete"
+
+  # Run before push: SDK lint/test/build + secrets scan + agctl (cmd) checks — all CI gates locally.
+  # Coverage is CI-only (`task test-coverage` when you want the report). If fmt-check fails, run `task fmt`.
+  check:
+    desc: All CI gates locally (SDK lint/test/build + secrets scan + agctl checks)
+    cmds:
+      - task: lint
+      - task: test
+      - task: build
+      - task: secrets-scan
+      - task: cmd:check
+      - echo "==> All checks passed (ready to push)"

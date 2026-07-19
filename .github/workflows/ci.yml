@@ -2,7 +2,7 @@
 # - PR to main: full checks + Codecov upload
 # - workflow_dispatch: same + Codecov upload (on-demand coverage report)
 # - Push / merge to main: no workflow (already validated on the PR)
-# (Secret scanning: run `make secrets-scan` locally.)
+# (Secret scanning: run `task secrets-scan` locally.)
 name: CI
 
 on:
@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  ci:
+  sdk:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -21,19 +21,23 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache-dependency-path: go.sum
 
       # v2 is built with Go >= 1.26; v1.x binaries refuse modules targeting go 1.26+
       - name: Install golangci-lint
         run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
 
+      - name: Install Task
+        run: go install github.com/go-task/task/v3/cmd/task@latest
+
       - name: Lint
-        run: make lint
+        run: task lint
 
       - name: Test
-        run: make test
+        run: task test
 
       - name: Code coverage
-        run: make test-coverage
+        run: task test-coverage
 
       - name: Upload coverage to Codecov
         if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
@@ -44,7 +48,31 @@ jobs:
           files: ./coverage.out
 
       - name: Build
-        run: make build
+        run: task build
+
+  # agctl CLI is its own module (cmd/go.mod). Runs the same lint/test/build gates
+  # that used to be covered when cmd was part of the SDK module.
+  agctl:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: cmd/go.mod
+          cache-dependency-path: cmd/go.sum
+
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+
+      - name: Install Task
+        run: go install github.com/go-task/task/v3/cmd/task@latest
+
+      - name: Check (lint + test + build)
+        working-directory: cmd
+        run: task check
 
   eval-harness:
     runs-on: ubuntu-latest
@@ -56,6 +84,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache-dependency-path: go.sum
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -90,6 +119,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache-dependency-path: go.sum
 
       - name: Install Task
         run: go install github.com/go-task/task/v3/cmd/task@latest

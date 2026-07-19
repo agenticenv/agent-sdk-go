@@ -115,9 +115,9 @@ Evaluate agent quality with Promptfoo and DeepEval — locally or in CI. See [ev
 See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, workflow, and guidelines.
 Project policies: [SECURITY.md](SECURITY.md) · [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
 
-Quick commands: `make check` | `make test` | `make lint` | `make fmt` | `make tidy` | `make test-coverage`
+Quick commands (requires [Task](https://taskfile.dev)): `task check` | `task test` | `task lint` | `task fmt` | `task tidy` | `task test-coverage`
 
-Coverage reports (PR and default branch) are on **[Codecov](https://app.codecov.io/gh/agenticenv/agent-sdk-go)**. Run `make test-coverage` locally to produce `coverage.out` and `coverage.html`.
+Coverage reports (PR and default branch) are on **[Codecov](https://app.codecov.io/gh/agenticenv/agent-sdk-go)**. Run `task test-coverage` locally to produce `coverage.out` and `coverage.html`.
 
 ## License
 

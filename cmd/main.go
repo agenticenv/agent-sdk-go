@@ -24,20 +24,20 @@ import (
 	"github.com/agenticenv/agent-sdk-go/pkg/tools/wikipedia"
 )
 
-// version is set at link time by GoReleaser (release) or Makefile (local build).
+// version is set at link time by GoReleaser (release) or Taskfile (local build).
 // Plain `go run` / `go build` without -ldflags leaves the default "dev".
 var version = "dev"
 
 const (
 	exitPrompt = "Type 'exit', 'quit', or 'bye' to end the conversation."
-	convID     = "interactive-agentctl"
+	convID     = "interactive-agctl"
 )
 
 func main() {
 	var configPath string
 	var showVersion bool
-	flag.StringVar(&configPath, "config", "cmd/config.yaml", "path to config file (env overrides file values)")
-	flag.StringVar(&configPath, "c", "cmd/config.yaml", "alias for -config")
+	flag.StringVar(&configPath, "config", "config.yaml", "path to config file (env overrides file values)")
+	flag.StringVar(&configPath, "c", "config.yaml", "alias for -config")
 	flag.BoolVar(&showVersion, "version", false, "print version and exit")
 	flag.BoolVar(&showVersion, "v", false, "alias for -version")
 	flag.Parse()
@@ -91,7 +91,7 @@ func main() {
 	}()
 
 	opts := []agent.Option{
-		agent.WithName("agentctl"),
+		agent.WithName("agctl"),
 		agent.WithSystemPrompt("You are a helpful assistant."),
 		agent.WithLLMClient(llmClient),
 		agent.WithStream(true),

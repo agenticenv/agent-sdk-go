@@ -1,15 +1,15 @@
 ---
 title: "CLI"
-description: "Run agents interactively from the terminal using agentctl with a YAML config file"
+description: "Run agents interactively from the terminal using agctl with a YAML config file"
 ---
 
-**`agentctl`** is the interactive REPL for Agent SDK for Go. Type prompts and receive agent responses. It uses the same SDK as your application code and supports both in-process and Temporal runtimes via a YAML config file.
+**`agctl`** is the interactive REPL for Agent SDK for Go. Type prompts and receive agent responses. It uses the same SDK as your application code and supports both in-process and Temporal runtimes via a YAML config file.
 
 <Note>
-**`agentctl` is not the Go library.** Install the SDK with `go get github.com/agenticenv/agent-sdk-go`. Install `agentctl` separately — download a release binary or build from source.
+**`agctl` is not the Go library.** Install the SDK with `go get github.com/agenticenv/agent-sdk-go`. Install `agctl` separately — download a release binary or build from source.
 </Note>
 
-## Install agentctl
+## Install agctl
 
 ### Option 1 — Release binary (recommended)
 
@@ -17,17 +17,19 @@ Pre-built binaries for Linux, macOS, and Windows (amd64 and arm64) are on [GitHu
 
 1. Open the latest release
 2. Download the archive for your platform from **Assets**
-3. Extract and add `agentctl` to your `PATH`
+3. Extract and add `agctl` to your `PATH`
 
 ### Option 2 — Build from source
 
 ```bash
-make build
-./cmd/bin/agentctl
+# agctl is its own module in cmd/ (build with Task)
+cd cmd
+task build
+./bin/agctl
 
 # Or install to $GOPATH/bin:
-make install
-agentctl -config cmd/config.yaml
+task install
+agctl -config config.yaml
 ```
 
 ### Option 3 — Run without building (development)
@@ -35,7 +37,8 @@ agentctl -config cmd/config.yaml
 From a cloned repository:
 
 ```bash
-go run ./cmd
+cd cmd
+go run .
 ```
 
 Compiles and runs on each invocation — useful during development.
@@ -48,7 +51,7 @@ cp cmd/config.sample.yaml config.yaml
 # Edit config.yaml — set llm.apiKey or use AGENT_LLM_APIKEY
 
 # 2. Run the CLI
-agentctl -config config.yaml
+agctl -config config.yaml
 ```
 
 If you use a release binary without cloning the repo, copy `config.sample.yaml` from the release assets into your working directory.
@@ -65,7 +68,7 @@ Type prompts at the `>` prompt. Enter `exit`, `quit`, or `bye` to end the sessio
 Run with a custom path:
 
 ```bash
-agentctl -config /path/to/config.yaml
+agctl -config /path/to/config.yaml
 ```
 
 ### Runtime selection
@@ -80,7 +83,7 @@ Set `runtime` in `config.yaml`:
 Override per invocation:
 
 ```bash
-AGENT_RUNTIME=temporal agentctl -config config.yaml
+AGENT_RUNTIME=temporal agctl -config config.yaml
 ```
 
 ### Minimal config.yaml
@@ -102,7 +105,7 @@ temporal:
 
 logger:
   level: info
-  output: logs/agent.log
+  output: logs/agctl.log
   format: json
 ```
 
@@ -129,7 +132,7 @@ Environment variables override config file values. Prefer them for secrets.
 export AGENT_LLM_APIKEY=sk-your-key
 export AGENT_LLM_PROVIDER=openai
 export AGENT_LLM_MODEL=gpt-4o
-agentctl -config config.yaml
+agctl -config config.yaml
 ```
 
 ## MCP servers (optional)
@@ -166,9 +169,9 @@ Use this to measure cost across a full interactive session. `cached_prompt` refl
 
 ## SDK vs CLI
 
-| | SDK (library) | CLI (`agentctl`) |
+| | SDK (library) | CLI (`agctl`) |
 |---|---|---|
-| **Install** | `go get github.com/agenticenv/agent-sdk-go@latest` | Download release binary or `make build` |
+| **Install** | `go get github.com/agenticenv/agent-sdk-go@latest` | Download release binary or `cd cmd && task build` |
 | **Use** | Import `pkg/agent` in your Go application | Interactive REPL from the terminal |
 | **Config** | Go code — `NewAgent(...)` options | YAML file + env vars |
 
@@ -176,9 +179,9 @@ Both are published from the same repository. Pin the SDK version in your `go.mod
 
 ## Logging
 
-`agentctl` prints **only user prompts and agent responses** on the console. Internal SDK logs go to a file.
+`agctl` prints **only user prompts and agent responses** on the console. Internal SDK logs go to a file.
 
-- Default: `cmd/logs/agent.log` (gitignored)
+- Default: `cmd/logs/agctl.log` (gitignored)
 - Override: `logger.output` in config or `AGENT_LOGGER_OUTPUT`
 
 ## Related

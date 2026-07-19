@@ -216,7 +216,7 @@ type LLMConfig struct {
 
 type LoggerConfig struct {
 	Level     string `mapstructure:"level"`
-	Output    string `mapstructure:"output"`     // stdout | stderr | file path; default resolves to cmd/logs/agent.log
+	Output    string `mapstructure:"output"`     // stdout | stderr | file path; default resolves to cmd/logs/agctl.log
 	Format    string `mapstructure:"format"`     // text | json (file/stdout/stderr)
 	AddSource bool   `mapstructure:"add_source"` // include file:line in each log line (slog source)
 	TeeStderr bool   `mapstructure:"tee_stderr"` // when output is a file, also copy to stderr (usually off so the REPL stays clean)
@@ -227,7 +227,7 @@ type LoggerConfig struct {
 func LoadConfig(path string) (*Config, error) {
 	v := viper.New()
 	if path == "" {
-		path = "cmd/config.yaml"
+		path = "config.yaml"
 	}
 	v.SetConfigFile(path)
 	v.SetConfigType("yaml")
@@ -262,7 +262,7 @@ func LoadConfig(path string) (*Config, error) {
 	v.SetDefault("llm.model", "gpt-4o")
 	v.SetDefault("llm.baseURL", "")
 	v.SetDefault("logger.level", "error")
-	v.SetDefault("logger.output", "logs/agent.log")
+	v.SetDefault("logger.output", "logs/agctl.log")
 	v.SetDefault("logger.format", "json")
 	v.SetDefault("logger.add_source", true)
 	v.SetDefault("logger.tee_stderr", false)
@@ -397,12 +397,12 @@ func getLogOutput(cfg *LoggerConfig) string {
 	if cfg != nil && cfg.Output != "" {
 		output = strings.TrimSpace(cfg.Output)
 	}
-	if output == "" || output == "logs/agent.log" {
-		// Default: resolve to cmd/logs/agent.log so logs stay inside cmd/ regardless of cwd
+	if output == "" || output == "logs/agctl.log" {
+		// Default: resolve to <module root>/logs/agctl.log so logs stay inside cmd/ regardless of cwd
 		if root := findProjectRoot(); root != "" {
-			output = filepath.Join(root, "cmd", "logs", "agent.log")
+			output = filepath.Join(root, "logs", "agctl.log")
 		} else {
-			output = filepath.Join("cmd", "logs", "agent.log")
+			output = filepath.Join("logs", "agctl.log")
 		}
 	}
 	return output
