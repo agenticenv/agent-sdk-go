@@ -10,13 +10,13 @@ Only users with **push access** to the repository can create tags and trigger re
 
 1. **You create and push a tag** (e.g. `v0.0.1`, `v1.0.0`, `v2.0.3`)
 2. **GitHub Actions runs** the Release workflow via [GoReleaser](https://goreleaser.com)
-3. **Builds** `agctl` (its own module in `cmd/`) for Linux, macOS, and Windows (amd64 and arm64 where supported), embedding **`agctl -version`** as the git tag (`ldflags -X main.version={{.Tag}}` in `.goreleaser.yaml`)
+3. **Builds** `agctl` (its own module in `cli/`) for Linux, macOS, and Windows (amd64 and arm64 where supported), embedding **`agctl -version`** as the git tag (`ldflags -X main.version={{.Tag}}` in `.goreleaser.yaml`)
 4. **Creates a GitHub Release** with archives (tar.gz / zip) and a checksums file
 
 ## Checklist before tagging
 
-- [ ] CI is green on `main` (lint, test, build pass — see [Actions](https://github.com/agenticenv/agent-sdk-go/actions))
-- [ ] `task lint` and `task test` pass locally (or rely on CI)
+- [ ] CI is green on `main` (`sdk`, `agctl`, and `eval-harness` jobs — see [Actions](https://github.com/agenticenv/agent-sdk-go/actions))
+- [ ] `task check` passes locally — SDK + `agctl` (cli module) gates (or rely on CI)
 - [ ] Commit messages follow [conventional commits](https://www.conventionalcommits.org) for categorized changelog (feat:, fix:, docs:, etc.)
 - [ ] Version follows [semver](https://semver.org):
   - **Patch** (0.0.1 → 0.0.2): bug fixes, no API changes
@@ -76,3 +76,4 @@ Use `goreleaser check` to validate the config.
 - **Tag = release.** Pushing a tag immediately triggers the build and creates the release. Double-check the version before pushing.
 - **Tags are immutable.** If you push `v0.0.1` by mistake, you must create a new tag (e.g. `v0.0.2`) — you cannot change or delete the release tag easily.
 - **Go modules:** The tag becomes the module version for `go get github.com/agenticenv/agent-sdk-go@v1.0.0`.
+- **agctl is not `go install`-able.** `cli/go.mod` is a separate module with a local `replace github.com/agenticenv/agent-sdk-go => ../`, which only applies when `cli` is the main module — it is not honored by `go get`/`go install` fetching it as a dependency. `agctl` is distributed only via the GoReleaser binaries attached to each release.

@@ -63,7 +63,9 @@ Keep your branch short and descriptive. Sync with `main` before opening a PR: `g
 task check
 ```
 
-Runs `fmt-check`, spell check, `task lint`, `task test`, `task build`, and `task secrets-scan` — same core gates as the main CI job (coverage is CI-only; use `task test-coverage` locally if you want a report). `task test` includes eval-harness Go tests; the full Promptfoo/DeepEval suite runs in CI and via `task eval-harness` (see below).
+Runs `fmt-check`, spell check, `task lint`, `task test`, `task build`, `task secrets-scan`, and `task cli:check` (agctl lint/test/build) — same gates as the `sdk` and `agctl` CI jobs (coverage is CI-only; use `task test-coverage` locally if you want a report). `task test` includes eval-harness Go tests; the full Promptfoo/DeepEval suite runs in CI and via `task eval-harness` (see below).
+
+If you only changed files under `cli/` (the `agctl` CLI, its own Go module), you can run just its checks: `task cli:check` (or `cd cli && task check`).
 
 Also run the full example suite on any code change to catch regressions unit tests may miss:
 
@@ -173,7 +175,7 @@ Using the SDK and ran into issues, unclear docs, or confusing behavior? **Raise 
 ## What Contributors Must Follow
 
 1. **Code quality**
-   - Run `task check` before submitting a PR (format, spell, lint, test, build, secrets scan). PRs must pass.
+   - Run `task check` before submitting a PR (format, spell, lint, test, build, secrets scan, agctl checks). PRs must pass.
    - Run `task examples:all` before submitting a PR to verify nothing in the example suite breaks (any code change — not only example edits). Requires Task, Docker, and LLM credentials — see [examples/README.md](examples/README.md).
    - New examples that support batch runs must be added to **`taskfiles/examples.yml`** (see §6).
    - Run `task tidy` before committing if you add or remove dependencies.

@@ -1,4 +1,4 @@
-module github.com/agenticenv/agent-sdk-go/cmd
+module github.com/agenticenv/agent-sdk-go/cli
 
 go 1.26
 

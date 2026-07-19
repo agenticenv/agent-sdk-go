@@ -1,12 +1,12 @@
 # CLI
 
-`agctl` is the interactive CLI for **agent-sdk-go**. It is its **own Go module** (`cmd/go.mod`) so the SDK library stays free of CLI-only dependencies. Its `go.mod` uses `replace github.com/agenticenv/agent-sdk-go => ../` to build against the SDK in this repo, so **run every command from the `cmd/` directory** (or use the installed binary).
+`agctl` is the interactive CLI for **agent-sdk-go**. It is its **own Go module** (`cli/go.mod`) so the SDK library stays free of CLI-only dependencies. Its `go.mod` uses `replace github.com/agenticenv/agent-sdk-go => ../` to build against the SDK in this repo, so **run every command from the `cli/` directory** (or use the installed binary).
 
 Interactive conversation mode. Type prompts, get responses. Type `exit`, `quit`, or `bye` to end.
 
 ## Configuration
 
-1. **Copy the sample config** and add your values (from `cmd/`):
+1. **Copy the sample config** and add your values (from `cli/`):
 
    ```bash
    cp config.sample.yaml config.yaml
@@ -32,7 +32,7 @@ The CLI uses `temporal.host`, `temporal.port`, and `temporal.namespace` from `co
 
 ## Run
 
-From the `cmd/` directory:
+From the `cli/` directory:
 
 ```bash
 task run
@@ -48,20 +48,20 @@ go run . -config /path/to/config.yaml
 
 ## Build
 
-Uses [Task](https://taskfile.dev) (`Taskfile.yml` in this directory). From `cmd/`:
+Uses [Task](https://taskfile.dev) (`Taskfile.yml` in this directory). From `cli/`:
 
 ```bash
 task build
 ./bin/agctl
 ```
 
-`task build` embeds the version via `git describe` (`-ldflags "-X main.version=..."`). A plain `go build .` leaves the version as `dev`. **Release binaries** from GitHub get the tag via GoReleaser (see `../.goreleaser.yaml`, which builds this module with `dir: ./cmd`).
+Local builds (`task build` or a plain `go build .`) leave the version at its default, `dev`. **Release binaries** from GitHub are stamped with the git tag via GoReleaser (`-X main.version={{.Tag}}`; see `../.goreleaser.yaml`, which builds this module with `dir: ./cli`).
 
-The `cmd/bin/` directory is gitignored.
+The `cli/bin/` directory is gitignored.
 
 ## Install
 
-Install `agctl` to `$(go env GOPATH)/bin` so you can run it from anywhere (ensure that directory is in your PATH). From `cmd/`:
+Install `agctl` to `$(go env GOPATH)/bin` so you can run it from anywhere (ensure that directory is in your PATH). From `cli/`:
 
 ```bash
 task install
@@ -70,7 +70,7 @@ agctl -config config.yaml
 
 ## Config file and env vars
 
-Config is loaded from `config.yaml` in the current directory (default; run from `cmd/`). Override with `-config <path>`. If the file does not exist, defaults plus env vars are used.
+Config is loaded from `config.yaml` in the current directory (default; run from `cli/`). Override with `-config <path>`. If the file does not exist, defaults plus env vars are used.
 
 | Env var | Description |
 |---------|-------------|
@@ -80,7 +80,7 @@ Config is loaded from `config.yaml` in the current directory (default; run from 
 | `AGENT_LLM_MODEL` | e.g. `gpt-4o`, `claude-haiku-4-5`, `gemini-2.5-flash` |
 | `AGENT_LLM_BASEURL` | Optional; for OpenAI-compatible proxies |
 | `AGENT_LOGGER_LEVEL` | `error` (default), `warn`, `info`, `debug` |
-| `AGENT_LOGGER_OUTPUT` | Log file path; default `cmd/logs/agctl.log` |
+| `AGENT_LOGGER_OUTPUT` | Log file path; default `cli/logs/agctl.log` |
 | `AGENT_SHOW_LLM_USAGE` | When `true`, print accumulated session token usage on exit (`show_llm_usage` in config) |
 
 ### MCP (optional)
@@ -93,6 +93,6 @@ When at least one server is enabled, the CLI registers **`WithMCPConfig`** and *
 
 The CLI shows only **user prompts and agent responses** on the console. Internal logs go to a file.
 
-- **Default log file:** `cmd/logs/agctl.log` (resolved from the module root; gitignored)
+- **Default log file:** `cli/logs/agctl.log` (resolved from the module root; gitignored)
 - **Configure:** Set `logger.output` in `config.yaml` or `AGENT_LOGGER_OUTPUT`
-- **Directories:** `logs/` and `cmd/bin/` are gitignored
+- **Directories:** `logs/` and `cli/bin/` are gitignored

@@ -14,5 +14,5 @@ coverage:
 ignore:
   - "**/mocks/**"
   - "examples/**"
-  - "cmd/**"
+  - "cli/**"
   - "**/*_test.go"

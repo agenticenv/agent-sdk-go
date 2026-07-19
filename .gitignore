@@ -1,9 +1,9 @@
 dist/
 examples/.env
-cmd/config.yaml
-cmd/bin/
+cli/config.yaml
+cli/bin/
 logs/
-cmd/logs/
+cli/logs/
 coverage.out
 coverage.html
 reports/
