@@ -1,18 +1,18 @@
 # agent-sdk-go CLI configuration sample
 #
-# 1. Copy this file to config.yaml:
-#    cp cmd/config.sample.yaml cmd/config.yaml
+# 1. Copy this file to config.yaml (run from the cmd/ directory):
+#    cp config.sample.yaml config.yaml
 #
-# 2. Edit cmd/config.yaml with your values (API keys, Temporal host, etc.)
-# 3. Run: go run ./cmd   or   ./cmd/bin/agentctl -config cmd/config.yaml
+# 2. Edit config.yaml with your values (API keys, Temporal host, etc.)
+# 3. Run: task run   or   go run .   or   ./bin/agctl -config config.yaml
 #
 # Environment variables with AGENT_ prefix override file values.
-# Example: AGENT_LLM_APIKEY=sk-xxx AGENT_LLM_PROVIDER=openai go run ./cmd
+# Example: AGENT_LLM_APIKEY=sk-xxx AGENT_LLM_PROVIDER=openai go run .
 
 # Runtime: local (default) or temporal.
 # local    — runs entirely in-process; no Temporal server required.
 # temporal — durable execution via Temporal; requires a running Temporal server.
-# Override per-run: AGENT_RUNTIME=temporal go run ./cmd
+# Override per-run: AGENT_RUNTIME=temporal go run .
 runtime: local
 
 # Temporal connection (for durable agent execution)
@@ -32,7 +32,7 @@ llm:
 # Logger: file by default (JSON + caller). Prompts/responses use fmt in main, not this logger.
 logger:
   level: info              # error | warn | info | debug
-  output: logs/agent.log   # file path | stdout | stderr
+  output: logs/agctl.log   # file path | stdout | stderr
   format: json             # json | text
   add_source: false
   tee_stderr: false

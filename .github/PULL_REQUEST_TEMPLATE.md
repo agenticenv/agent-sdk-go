@@ -16,9 +16,9 @@
 
 ## Checklist
 
-- [ ] I have run `make check`
+- [ ] I have run `task check`
 - [ ] I have run `task examples:all`
-- [ ] I have run `make tidy` if I added or removed dependencies
+- [ ] I have run `task tidy` if I added or removed dependencies
 - [ ] Commit messages follow [conventional commits](https://www.conventionalcommits.org) (e.g. `feat:`, `fix:`, `docs:`)
 - [ ] I have added/updated tests for my changes
 - [ ] Documentation is updated if needed

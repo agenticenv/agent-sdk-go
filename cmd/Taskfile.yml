@@ -1,0 +1,79 @@
+# Taskfile for the agctl CLI (its own Go module).
+# Install Task: https://taskfile.dev/installation/
+# Run from the cmd/ directory: `task` (lists tasks), `task build`, `task run -- -config config.yaml`.
+version: "3"
+
+silent: true
+
+vars:
+  BIN_DIR: bin
+  BINARY: bin/agctl
+  GOPATH_BIN:
+    sh: echo "$(go env GOPATH)/bin"
+
+tasks:
+  # Bare `task` (no args) lists available tasks instead of running a build.
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+
+  build:
+    # Local builds leave main.version at its default ("dev"); release builds are
+    # stamped with the git tag by GoReleaser (see ../.goreleaser.yaml).
+    desc: Build the agctl binary into cmd/bin (version = dev)
+    cmds:
+      - mkdir -p {{.BIN_DIR}}
+      - go build -o {{.BINARY}} .
+      - 'echo "==> Built {{.BINARY}} (dev)"'
+
+  install:
+    desc: Install agctl to $(go env GOPATH)/bin
+    deps: [build]
+    cmds:
+      - cp {{.BINARY}} {{.GOPATH_BIN}}/agctl
+      - 'echo "==> Installed to {{.GOPATH_BIN}}/agctl"'
+
+  run:
+    desc: 'Run agctl (pass flags after --, e.g. task run -- -config config.yaml)'
+    cmds:
+      - go run . {{.CLI_ARGS}}
+
+  test:
+    desc: Run the cmd module tests
+    cmds:
+      - go test ./... -count=1
+
+  lint:
+    desc: Lint the cmd module (gofmt check, vet, golangci-lint)
+    cmds:
+      - test -z "$(gofmt -s -l .)" || (echo 'not gofmt -s formatted (run task fmt)' && exit 1)
+      - go vet ./...
+      - golangci-lint run ./...
+
+  check:
+    desc: All cmd checks (lint + test + build) — mirrors the CI agctl job
+    cmds:
+      - task: lint
+      - task: test
+      - task: build
+
+  fmt:
+    desc: Format Go files (gofmt -s)
+    cmds:
+      - gofmt -s -w .
+
+  vet:
+    desc: go vet
+    cmds:
+      - go vet ./...
+
+  tidy:
+    desc: Tidy module dependencies
+    cmds:
+      - go mod tidy
+
+  clean:
+    desc: Remove built binaries
+    cmds:
+      - rm -rf {{.BIN_DIR}}
