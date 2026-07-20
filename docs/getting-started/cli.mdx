@@ -1,143 +1,282 @@
 ---
-title: "CLI"
-description: "Run agents interactively from the terminal using agctl with a YAML config file"
+title: "CLI (agctl)"
+description: "Run agents from the terminal with agctl — interactive chat or one-shot prompts"
 ---
 
-**`agctl`** is the interactive chat session (conversation mode) for Agent SDK for Go. Type prompts and receive agent responses. It uses the same SDK as your application code and supports both in-process and Temporal runtimes via a YAML config file.
+**`agctl`** runs Agent SDK for Go from your terminal — one-shot prompts or multi-turn chat, with built-in tools, optional MCP servers, and local or Temporal execution. Configuration is YAML plus environment variables.
 
 <Note>
-**`agctl` is not the Go library.** Install the SDK with `go get github.com/agenticenv/agent-sdk-go`. Install `agctl` separately — download a release binary or build from source.
+`agctl` is not the Go library. If you're building an app in Go, install the SDK with `go get github.com/agenticenv/agent-sdk-go`. Install `agctl` separately using one of the methods below.
 </Note>
+## Install
 
-## Install agctl
+### GitHub Releases (recommended)
 
-### Option 1 — Release binary (recommended)
+Pre-built binaries for Linux, macOS, and Windows (`amd64` and `arm64`) are published on [GitHub Releases](https://github.com/agenticenv/agent-sdk-go/releases).
 
-Pre-built binaries for Linux, macOS, and Windows (amd64 and arm64) are on [GitHub Releases](https://github.com/agenticenv/agent-sdk-go/releases).
+1. Open the latest release.
+2. Download the archive for your OS and architecture from **Assets**.
+3. Extract `agctl` and place it on your `PATH`.
 
-1. Open the latest release
-2. Download the archive for your platform from **Assets**
-3. Extract and add `agctl` to your `PATH`
-
-### Option 2 — Build from source
-
-```bash
-# agctl is its own module in cli/ (build with Task)
-cd cli
-task build
-./bin/agctl
-
-# Or install to $GOPATH/bin:
-task install
-agctl -config config.yaml
-```
-
-### Option 3 — Run without building (development)
-
-From a cloned repository:
+Verify:
 
 ```bash
-cd cli
-go run .
+agctl version
 ```
 
-Compiles and runs on each invocation — useful during development.
+### go install
+
+If you have Go 1.26+ installed:
+
+```bash
+go install github.com/agenticenv/agent-sdk-go/cli@latest
+```
+
+The binary is written to `$(go env GOPATH)/bin` — ensure that directory is on your `PATH`.
 
 ## Quick start
 
-```bash
-# 1. Copy the sample config
-cp cli/config.sample.yaml config.yaml
-# Edit config.yaml — set llm.apiKey or use AGENT_LLM_APIKEY
+You need an LLM API key for cloud providers (OpenAI, Anthropic, Gemini, etc.). A config file is optional — set env vars and run:
 
-# 2. Run the CLI
-agctl -config config.yaml
+```bash
+export AGCTL_LLM_APIKEY=sk-your-key
+export AGCTL_LLM_PROVIDER=openai
+export AGCTL_LLM_MODEL=gpt-4o
+
+agctl run --prompt "Hello"
+agctl chat
 ```
 
-If you use a release binary without cloning the repo, copy `config.sample.yaml` from the release assets into your working directory.
+**Save settings:** `agctl config edit` opens your config in `$EDITOR` and writes to the path from `agctl config path` when you save.
 
-Type prompts at the `>` prompt. Enter `exit`, `quit`, or `bye` to end the session.
+**One command only:** `agctl --config ~/my-settings.yaml chat` or `AGCTL_CONFIG=~/my-settings.yaml` — partial YAML is fine (see [Configuration](#configuration)).
 
-## Configuration file
+In chat, type at `You:`. Exit with `exit`, `quit`, or `bye`.
 
-| File | Purpose |
+For local **Ollama**, you usually omit the API key: `AGCTL_LLM_PROVIDER=ollama AGCTL_LLM_MODEL=llama3 agctl chat`.
+
+## Command reference
+
+| Command | Description |
 |---|---|
-| `cli/config.sample.yaml` | Template — safe to commit |
-| `cli/config.yaml` | Your config — gitignored, copy from sample |
+| `agctl` | Print help |
+| `agctl chat` | Interactive multi-turn session |
+| `agctl run --prompt "…"` | One-shot prompt; also accepts a positional argument or stdin |
+| `agctl version` | Print version |
+| `agctl config path` | Print where your saved config file lives |
+| `agctl config show` | Print your effective config after merge (secrets redacted) |
+| `agctl config edit` | Open config in `$EDITOR`; creates the file on save if it does not exist yet |
 
-Run with a custom path:
+Global flag: `--config` / `-c` / `AGCTL_CONFIG` — optional YAML file merged on top of defaults and your saved config.
+
+**Tool approval:** In `agctl chat`, built-in tools prompt `Approve? (y/n)` before they run. If you enable MCP servers, tools run automatically. `agctl run` never prompts — it auto-approves all tool calls.
+
+### `agctl chat` and `agctl run` flags
+
+These override config for a single invocation (highest precedence):
+
+| Flag | Env | Description |
+|---|---|---|
+| `--runtime` | `AGCTL_RUNTIME` | `local` (default) or `temporal` |
+| `--provider` | `AGCTL_LLM_PROVIDER` | e.g. `openai`, `anthropic`, `gemini`, `ollama` |
+| `--model` | `AGCTL_LLM_MODEL` | Model name |
+| `--api-key` | `AGCTL_LLM_APIKEY` | LLM API key (prefer env for secrets) |
+| `--llm-usage` | `AGCTL_LLM_USAGE` | Print token usage summary on exit |
+| `--temporal-host` | `AGCTL_TEMPORAL_HOST` | Temporal host when `runtime: temporal` |
+| `--temporal-port` | `AGCTL_TEMPORAL_PORT` | Temporal gRPC port (default `7233`) |
+| `--temporal-namespace` | `AGCTL_TEMPORAL_NAMESPACE` | Namespace (default `default`) |
+| `--temporal-task-queue` | `AGCTL_TEMPORAL_TASKQUEUE` | Task queue (default `agent-sdk-go`) |
+
+## Examples
+
+### One-shot query
 
 ```bash
-agctl -config /path/to/config.yaml
+export AGCTL_LLM_APIKEY=sk-your-key
+agctl run --prompt "Summarize the benefits of durable agent execution."
 ```
 
-### Runtime selection
+With flags instead of env:
 
-Set `runtime` in `config.yaml`:
+```bash
+agctl run --api-key sk-your-key --provider openai --model gpt-4o --prompt "Hello"
+```
 
-| Value | Behavior |
+### Interactive chat
+
+```bash
+export AGCTL_LLM_APIKEY=sk-your-key
+agctl chat
+```
+
+### Override config for one command
+
+```bash
+agctl --config ~/my-agctl.yaml chat
+# or
+AGCTL_CONFIG=~/my-agctl.yaml agctl run --prompt "Hello"
+```
+
+Partial files are enough — only include keys you want to change:
+
+```yaml
+# ~/my-agctl.yaml
+llm:
+  model: gpt-4o-mini
+tools:
+  weather:
+    enabled: false
+```
+
+### Temporal runtime
+
+```bash
+agctl chat --runtime temporal
+# optional connection overrides (defaults: localhost:7233, namespace default, task queue agent-sdk-go)
+agctl chat --runtime temporal --temporal-host my-temporal.example --temporal-port 7233
+```
+
+## Configuration
+
+`agctl` ships with sensible defaults. You can run with env vars only, save a file with `config edit`, or pass `--config` for a one-off override.
+
+Settings merge in order — **later layers win**. You only need to set the keys you care about in YAML.
+
+| Order | Source |
 |---|---|
-| `local` (default) | In-process — no Temporal server required |
-| `temporal` | Durable execution — requires a running Temporal server |
+| 1 | Built-in defaults (compiled into the binary) |
+| 2 | Saved config at `agctl config path` (if the file exists) |
+| 3 | `--config` / `AGCTL_CONFIG` (file must exist) |
+| 4 | `AGCTL_*` environment variables |
+| 5 | `agctl chat` / `agctl run` flags |
 
-Override per invocation:
+**Config file location** (`agctl config path`):
 
-```bash
-AGENT_RUNTIME=temporal agctl -config config.yaml
-```
+- macOS: `~/Library/Application Support/agctl/config.yaml`
+- Linux: `~/.config/agctl/config.yaml` (or `$XDG_CONFIG_HOME/agctl/config.yaml`)
+- Windows: `%LOCALAPPDATA%\agctl\config.yaml`
 
-### Minimal config.yaml
+Run `agctl config show` to see what is in effect. API keys and tokens print as `***`. The `temporal` block appears only when `runtime` is `temporal`.
+
+### Config schema
+
+Top-level keys:
+
+| Key | Description |
+|---|---|
+| `runtime` | `local` or `temporal` |
+| `name` | Agent name (default `agctl`) |
+| `system_prompt` | System prompt for the agent |
+| `llm` | Provider, model, API key, base URL |
+| `conversation` | Store backend (`inmem` or `redis`) and limits |
+| `logger` | SDK log level, output, format |
+| `llm_usage` | Print token usage summary on exit |
+| `tools` | Built-in tools — each `enabled: true\|false` |
+| `mcp` | Optional MCP server list |
+| `temporal` | Connection settings when `runtime: temporal` |
+
+**`llm`**
+
+| Field | Env | Notes |
+|---|---|---|
+| `provider` | `AGCTL_LLM_PROVIDER` | `openai`, `anthropic`, `gemini`, `deepseek`, `ollama`, … |
+| `apiKey` | `AGCTL_LLM_APIKEY` | Prefer env; not required for local Ollama |
+| `model` | `AGCTL_LLM_MODEL` | e.g. `gpt-4o` |
+| `baseURL` | `AGCTL_LLM_BASEURL` | OpenAI-compatible proxy URL |
+
+**`conversation`**
+
+| Field | Env | Notes |
+|---|---|---|
+| `store` | `AGCTL_CONVERSATION_STORE` | `inmem` (default) or `redis` |
+| `max_size` | — | Max messages stored |
+| `size` | — | Max messages fetched for LLM context |
+| `save_on_iteration` | — | Persist after each tool round |
+| `redis.addr` | `AGCTL_CONVERSATION_REDIS_ADDR` | Required when `store: redis` |
+| `redis.password` | `AGCTL_CONVERSATION_REDIS_PASSWORD` | Optional |
+| `redis.db` | `AGCTL_CONVERSATION_REDIS_DB` | Default `0` |
+
+**`tools`** — built-in tool names: `echo`, `current_time`, `random`, `calculator`, `weather`, `wikipedia`, `search`. All default to enabled; set `enabled: false` to omit from the registry.
+
+**`temporal`** — only used when `runtime: temporal`. Defaults if omitted: `localhost:7233`, namespace `default`, task queue `agent-sdk-go`.
+
+**`logger`** — SDK/agent logs only; prompts and replies print to the console separately. Default output resolves to a log file under XDG state (`$XDG_STATE_HOME/agctl/agctl.log` for installed binaries).
+
+### Example config.yaml
 
 ```yaml
 runtime: local
+name: agctl
+system_prompt: "You are a helpful agent. Use available tools when they improve accuracy."
 
 llm:
   provider: openai
-  apiKey: ""           # prefer AGENT_LLM_APIKEY env var
+  apiKey: ""              # prefer AGCTL_LLM_APIKEY
   model: gpt-4o
   baseURL: https://api.openai.com/v1
 
-temporal:
-  host: localhost
-  port: 7233
-  namespace: default
-  taskQueue: agent-sdk-go
+conversation:
+  store: inmem
+  max_size: 100
+  size: 20
+  save_on_iteration: true
 
 logger:
   level: info
   output: logs/agctl.log
   format: json
+
+llm_usage: false
+
+tools:
+  echo: { enabled: true }
+  calculator: { enabled: true }
+  weather: { enabled: false }
+
+# Uncomment when using temporal:
+# temporal:
+#   host: localhost
+#   port: 7233
+#   namespace: default
+#   taskQueue: agent-sdk-go
+
+# Optional MCP — see section below
+# mcp:
+#   servers: [...]
 ```
 
 ## Environment variables
 
-Environment variables override config file values. Prefer them for secrets.
+All use the `AGCTL_` prefix. They override merged file values. Prefer env for secrets.
 
 | Variable | Description |
 |---|---|
-| `AGENT_RUNTIME` | `local` or `temporal` |
-| `AGENT_TEMPORAL_HOST` | Temporal server host |
-| `AGENT_TEMPORAL_PORT` | Temporal gRPC port |
-| `AGENT_TEMPORAL_NAMESPACE` | Temporal namespace |
-| `AGENT_TEMPORAL_TASKQUEUE` | Task queue name |
-| `AGENT_LLM_PROVIDER` | `openai`, `anthropic`, or `gemini` |
-| `AGENT_LLM_APIKEY` | LLM API key |
-| `AGENT_LLM_MODEL` | Model name |
-| `AGENT_LLM_BASEURL` | Optional base URL for OpenAI-compatible proxies |
-| `AGENT_LOGGER_LEVEL` | `error`, `warn`, `info`, `debug` |
-| `AGENT_LOGGER_OUTPUT` | Log file path, `stdout`, or `stderr` |
-| `AGENT_SHOW_LLM_USAGE` | Print session token usage summary on exit |
-
-```bash
-export AGENT_LLM_APIKEY=sk-your-key
-export AGENT_LLM_PROVIDER=openai
-export AGENT_LLM_MODEL=gpt-4o
-agctl -config config.yaml
-```
+| `AGCTL_CONFIG` | Path to optional override YAML |
+| `AGCTL_RUNTIME` | `local` or `temporal` |
+| `AGCTL_NAME` | Agent name |
+| `AGCTL_SYSTEM_PROMPT` | System prompt |
+| `AGCTL_CONVERSATION_STORE` | `inmem` or `redis` |
+| `AGCTL_CONVERSATION_REDIS_ADDR` | Redis address |
+| `AGCTL_CONVERSATION_REDIS_PASSWORD` | Redis password |
+| `AGCTL_CONVERSATION_REDIS_DB` | Redis DB number |
+| `AGCTL_TEMPORAL_HOST` | Temporal server host |
+| `AGCTL_TEMPORAL_PORT` | Temporal gRPC port |
+| `AGCTL_TEMPORAL_NAMESPACE` | Temporal namespace |
+| `AGCTL_TEMPORAL_TASKQUEUE` | Task queue name |
+| `AGCTL_LLM_PROVIDER` | LLM provider |
+| `AGCTL_LLM_APIKEY` | LLM API key |
+| `AGCTL_LLM_MODEL` | Model name |
+| `AGCTL_LLM_BASEURL` | API base URL |
+| `AGCTL_LOGGER_LEVEL` | `error`, `warn`, `info`, `debug` |
+| `AGCTL_LOGGER_OUTPUT` | File path, `stdout`, or `stderr` |
+| `AGCTL_LOGGER_FORMAT` | `json` or `text` |
+| `AGCTL_LOGGER_ADD_SOURCE` | `true` / `false` |
+| `AGCTL_LOGGER_TEE_STDERR` | `true` / `false` |
+| `AGCTL_LLM_USAGE` | Print token usage on exit |
 
 ## MCP servers (optional)
 
-Add `mcp.servers` entries to `config.yaml` to connect MCP tool servers. When at least one server is enabled, the CLI registers [`WithMCPConfig`](/features/mcp) and [`AutoToolApprovalPolicy`](/features/approvals) so MCP tools run without per-call approval in the interactive session.
+Add entries under `mcp.servers` in your config (via `agctl config edit` or `--config`):
 
 ```yaml
 mcp:
@@ -147,15 +286,27 @@ mcp:
       transport: stdio
       command: npx
       args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+      timeout_seconds: 60
+      retry_attempts: 3
 ```
 
-Each entry supports: `enabled`, `name`, `transport` (`stdio` or `streamable_http`), `command`/`args` (stdio) or `url`/`bearer_token` (HTTP), and optional `timeout_seconds`, `retry_attempts`, `allow_tools`, `block_tools`.
+| Field | Notes |
+|---|---|
+| `enabled` | Must be `true` to connect |
+| `name` | Prefix for tools: `mcp_<name>_<tool>` |
+| `transport` | `stdio` (subprocess) or `streamable_http` |
+| `command`, `args`, `env` | For stdio transports |
+| `url`, `bearer_token`, OAuth fields, `headers` | For HTTP transports |
+| `allow_tools`, `block_tools` | Optional tool filters |
+| `timeout_seconds`, `retry_attempts` | Connection tuning |
 
-See `cli/config.sample.yaml` for HTTP transport, OAuth, and tool filter examples.
+When at least one MCP server is enabled, `agctl chat` auto-approves MCP tool calls (no per-call prompt). See [MCP](/features/mcp) for how MCP works in the SDK.
+
+Run `agctl config edit` for commented examples of HTTP transport and OAuth fields.
 
 ## Token usage summary
 
-When `show_llm_usage: true` is set in `config.yaml` (or `AGENT_SHOW_LLM_USAGE=true`), the CLI accumulates `LLMUsage` across every turn of the session and prints one summary on exit (`exit`/`quit`/`bye`):
+Set `llm_usage: true` in config, `AGCTL_LLM_USAGE=true`, or pass `--llm-usage` on a single run. Chat prints a session total on exit; run prints after the single turn:
 
 ```
 [USAGE] session total
@@ -165,24 +316,43 @@ When `show_llm_usage: true` is set in `config.yaml` (or `AGENT_SHOW_LLM_USAGE=tr
   cached_prompt:     12541
 ```
 
-Use this to measure cost across a full interactive session. `cached_prompt` reflects provider cache hits when the LLM reports them (for Anthropic, only when prompt caching is enabled — the CLI enables it automatically for Anthropic).
-
-## SDK vs CLI
-
-| | SDK (library) | CLI (`agctl`) |
-|---|---|---|
-| **Install** | `go get github.com/agenticenv/agent-sdk-go@latest` | Download release binary or `cd cli && task build` |
-| **Use** | Import `pkg/agent` in your Go application | Interactive chat session from the terminal |
-| **Config** | Go code — `NewAgent(...)` options | YAML file + env vars |
-
-Both are published from the same repository. Pin the SDK version in your `go.mod`; pin the CLI by downloading the matching release tag.
+When `llm.provider` is `anthropic`, the CLI enables prompt caching automatically (unlike the SDK library default — see [LLM Providers](/getting-started/llm-providers#prompt-caching)).
 
 ## Logging
 
-`agctl` prints **only user prompts and agent responses** on the console. Internal SDK logs go to a file.
+The console shows **your prompts and the agent’s replies**. SDK diagnostic logs go to a file by default (`logger.output`, typically under `$XDG_STATE_HOME/agctl/agctl.log`). Override with `logger.output` or `AGCTL_LOGGER_OUTPUT` (`stdout`, `stderr`, or a path).
 
-- Default: `cli/logs/agctl.log` (gitignored)
-- Override: `logger.output` in config or `AGENT_LOGGER_OUTPUT`
+## Troubleshooting
+
+### LLM API key required
+
+Cloud providers need a key. Set `AGCTL_LLM_APIKEY` or `llm.apiKey` in config. Local **Ollama** usually does not need a key (`AGCTL_LLM_PROVIDER=ollama`).
+
+### Config file not found
+
+If you pass `--config` or `AGCTL_CONFIG`, the path must exist. Check spelling and permissions. To use only defaults + env, omit both.
+
+### Saved config file missing
+
+If `agctl config path` points to a file that does not exist yet, that is expected. `agctl` still runs with built-in defaults and env vars. Use `agctl config edit` to create the file, or write YAML at that path yourself.
+
+### Env var not applying
+
+Confirm the `AGCTL_` prefix and spelling (e.g. `AGCTL_LLM_APIKEY`, not `AGENT_`). Env overrides file values but chat/run **flags override env** for the same field. Run `agctl config show` to see the merged result.
+
+### `--config` partial file seems ignored
+
+Partial YAML only overrides the keys you set. If you also have a saved config file, `--config` is merged after it, so your override file wins for any keys you specify there.
+
+Run `agctl config show` to confirm the merged result.
+
+### Temporal connection errors
+
+Ensure a Temporal server is running and reachable. With `--runtime temporal` and no `temporal:` block, defaults are `localhost:7233`, namespace `default`, task queue `agent-sdk-go`. Override via config, env, or `--temporal-*` flags.
+
+### MCP server fails to start
+
+Check `command` and `args` for stdio servers, or `url` for HTTP. Increase `timeout_seconds`. Inspect SDK logs (`logger.output` / XDG state log file).
 
 ## Related
 
@@ -193,6 +363,6 @@ Both are published from the same repository. Pin the SDK version in your `go.mod
   </Card>
 
   <Card title="Configuration" icon="sliders" href="/getting-started/configuration" horizontal>
-    All SDK options the CLI uses under the hood
+    SDK configuration options the CLI uses under the hood
   </Card>
 </CardGroup>

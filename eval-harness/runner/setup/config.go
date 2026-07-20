@@ -2,6 +2,7 @@ package setup
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	testutil "github.com/agenticenv/agent-sdk-go/internal/testing"
@@ -9,6 +10,7 @@ import (
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
 	"github.com/agenticenv/agent-sdk-go/pkg/memory"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -40,10 +42,10 @@ type ToolConfig struct{}
 
 // TemporalConfig configures Temporal when Runtime is temporal.
 type TemporalConfig struct {
-	Host      string `mapstructure:"host"`
-	Port      int    `mapstructure:"port"`
-	Namespace string `mapstructure:"namespace"`
-	TaskQueue string `mapstructure:"task_queue"`
+	Host      string `yaml:"host"`
+	Port      int    `yaml:"port"`
+	Namespace string `yaml:"namespace"`
+	TaskQueue string `yaml:"task_queue"`
 }
 
 // MemoryConfig configures long-term memory for eval harness runs.
@@ -70,6 +72,144 @@ type Config struct {
 	LLMClient    interfaces.LLMClient
 	ToolRegistry agent.ToolRegistry
 	Logger       logger.Logger
+}
+
+// FileConfig is the YAML configuration for eval-harness runs.
+type FileConfig struct {
+	Runtime    string           `yaml:"runtime"`
+	UserPrompt string           `yaml:"user_prompt"`
+	Agent      FileAgentConfig  `yaml:"agent"`
+	Memory     FileMemoryConfig `yaml:"memory"`
+	Temporal   TemporalConfig   `yaml:"temporal"`
+}
+
+// FileMemoryConfig holds memory fields from YAML.
+type FileMemoryConfig struct {
+	Enabled      bool   `yaml:"enabled"`
+	StoreMode    string `yaml:"store_mode"`
+	UserID       string `yaml:"user_id"`
+	Scenario     string `yaml:"scenario"`
+	StorePrompt  string `yaml:"store_prompt"`
+	RecallPrompt string `yaml:"recall_prompt"`
+}
+
+// FileAgentConfig holds agent fields from YAML.
+type FileAgentConfig struct {
+	Name         string `yaml:"name"`
+	SystemPrompt string `yaml:"system_prompt"`
+	ToolCount    int    `yaml:"tool_count"`
+}
+
+// Config returns a runner Config from the file config.
+func (f *FileConfig) Config() Config {
+	if f == nil {
+		return Config{}
+	}
+	storeMode, _ := ParseMemoryStoreMode(f.Memory.StoreMode)
+	return Config{
+		UserPrompt:   f.UserPrompt,
+		Runtime:      Runtime(f.Runtime),
+		Temporal:     f.Temporal,
+		AgentName:    f.Agent.Name,
+		SystemPrompt: f.Agent.SystemPrompt,
+		ToolCount:    f.Agent.ToolCount,
+		Memory: MemoryConfig{
+			Enabled:      f.Memory.Enabled,
+			StoreMode:    storeMode,
+			UserID:       f.Memory.UserID,
+			Scenario:     f.Memory.Scenario,
+			StorePrompt:  f.Memory.StorePrompt,
+			RecallPrompt: f.Memory.RecallPrompt,
+		},
+	}
+}
+
+// LoadConfig reads and validates eval-harness config from a YAML file.
+func LoadConfig(path string) (*FileConfig, error) {
+	if path == "" {
+		path = defaultConfigPath()
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read config %q: %w", path, err)
+	}
+	var cfg FileConfig
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("parse config: %w", err)
+	}
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+	return &cfg, nil
+}
+
+// DefaultConfigPath returns the default eval-harness config file path.
+func DefaultConfigPath() string { return defaultConfigPath() }
+
+func defaultConfigPath() string {
+	for _, candidate := range []string{
+		"eval-harness/runner/config.yaml",
+		"runner/config.yaml",
+		"config.yaml",
+	} {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	return "config.yaml"
+}
+
+func (f *FileConfig) validate() error {
+	if f == nil {
+		return fmt.Errorf("config is required")
+	}
+	if strings.TrimSpace(f.UserPrompt) == "" && !strings.EqualFold(strings.TrimSpace(f.Memory.Scenario), MemoryScenarioStoreRecall) {
+		return fmt.Errorf("user_prompt is required")
+	}
+	switch strings.ToLower(strings.TrimSpace(f.Runtime)) {
+	case "", string(RuntimeLocal):
+		if f.Runtime == "" {
+			f.Runtime = string(RuntimeLocal)
+		}
+	case string(RuntimeTemporal):
+	default:
+		return fmt.Errorf("runtime must be %q or %q", RuntimeLocal, RuntimeTemporal)
+	}
+	if f.Agent.ToolCount <= 0 && !f.Memory.Enabled {
+		f.Agent.ToolCount = DefaultToolCount
+	}
+	if f.Agent.Name == "" {
+		f.Agent.Name = DefaultAgentName
+	}
+	if f.Agent.SystemPrompt == "" {
+		f.Agent.SystemPrompt = DefaultSystemPrompt
+	}
+	if f.Temporal.TaskQueue == "" {
+		f.Temporal.TaskQueue = "eval-harness"
+	}
+	if f.Temporal.Port == 0 {
+		f.Temporal.Port = 7233
+	}
+	if f.Temporal.Host == "" {
+		f.Temporal.Host = "localhost"
+	}
+	if f.Temporal.Namespace == "" {
+		f.Temporal.Namespace = "default"
+	}
+	if f.Memory.Enabled {
+		if _, err := ParseMemoryStoreMode(f.Memory.StoreMode); err != nil {
+			return err
+		}
+		if strings.EqualFold(strings.TrimSpace(f.Memory.Scenario), MemoryScenarioStoreRecall) {
+			if strings.TrimSpace(f.Memory.StorePrompt) == "" {
+				return fmt.Errorf("memory.store_prompt is required when memory.scenario is %q", MemoryScenarioStoreRecall)
+			}
+			if strings.TrimSpace(f.Memory.RecallPrompt) == "" {
+				return fmt.Errorf("memory.recall_prompt is required when memory.scenario is %q", MemoryScenarioStoreRecall)
+			}
+		}
+	}
+	return nil
 }
 
 // UseTemporal reports whether cfg selects the Temporal runtime.

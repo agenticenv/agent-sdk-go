@@ -10,7 +10,7 @@ Only users with **push access** to the repository can create tags and trigger re
 
 1. **You create and push a tag** (e.g. `v0.0.1`, `v1.0.0`, `v2.0.3`)
 2. **GitHub Actions runs** the Release workflow via [GoReleaser](https://goreleaser.com)
-3. **Builds** `agctl` (its own module in `cli/`) for Linux, macOS, and Windows (amd64 and arm64 where supported), embedding **`agctl -version`** as the git tag (`ldflags -X main.version={{.Tag}}` in `.goreleaser.yaml`)
+3. **Builds** `agctl` (its own module in `cli/`) for Linux, macOS, and Windows (amd64 and arm64 where supported), embedding the git tag so **`agctl version`** prints it (`ldflags -X main.version={{.Tag}}` in `.goreleaser.yaml`)
 4. **Creates a GitHub Release** with archives (tar.gz / zip) and a checksums file
 
 ## Checklist before tagging

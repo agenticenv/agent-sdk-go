@@ -88,21 +88,18 @@ fmt.Println(result.Content)
 - **Durable execution** — crash-resilient runs via Temporal; horizontal worker scaling
 - **Observability** — OpenTelemetry traces, metrics, and structured logs
 
-## CLI
+## CLI (`agctl`)
 
-**`agctl`** is an interactive chat session for the SDK — no Go code required. Same config-driven setup, in-process or Temporal.
+Download a binary from [GitHub Releases](https://github.com/agenticenv/agent-sdk-go/releases), extract it, and put `agctl` on your `PATH`.
 
 ```bash
-# 1. Configure your LLM (or use a config.yaml)
-export AGENT_LLM_APIKEY=sk-your-key AGENT_LLM_PROVIDER=openai AGENT_LLM_MODEL=gpt-4o
-
-# 2. Start the interactive session and chat
-agctl
-# Conversation mode. Type 'exit', 'quit', or 'bye' to end the conversation.
-# You: What can you help me with?
+export AGCTL_LLM_APIKEY=sk-your-key
+agctl run --model gpt-4o --prompt "hello"
+# or interactive
+agctl chat
 ```
 
-Download a binary from [Releases](https://github.com/agenticenv/agent-sdk-go/releases), or build from source — `agctl` is its own Go module in [`cli/`](cli/). See the [CLI docs](https://docs.agenticenv.ai/getting-started/cli) and [cli/README.md](cli/README.md) for install and config details.
+See the [CLI docs](https://docs.agenticenv.ai/getting-started/cli) for commands, config, and env vars.
 
 ## Reference Apps
 

@@ -1,98 +1,81 @@
-# CLI
+# agctl
 
-`agctl` is the interactive CLI for **agent-sdk-go**. It is its **own Go module** (`cli/go.mod`) so the SDK library stays free of CLI-only dependencies. Its `go.mod` uses `replace github.com/agenticenv/agent-sdk-go => ../` to build against the SDK in this repo, so **run every command from the `cli/` directory** (or use the installed binary).
+Hacking on the CLI? Work from this directory. It is a separate Go module (`cli/go.mod`) that `replace`s the SDK with `../`, so your changes to both build together.
 
-Interactive conversation mode. Type prompts, get responses. Type `exit`, `quit`, or `bye` to end.
-
-## Configuration
-
-1. **Copy the sample config** and add your values (from `cli/`):
-
-   ```bash
-   cp config.sample.yaml config.yaml
-   ```
-
-2. **Edit `config.yaml`** with your Temporal host, LLM provider, API key, and model. Optional **MCP** servers live under `mcp.servers` in `config.sample.yaml`: set `enabled: true` on entries you want (stdio subprocess or `streamable_http` URL); leave others `enabled: false`.
-
-3. **Optional:** Use environment variables to override (keeps secrets out of the config file):
-
-   ```bash
-   export AGENT_LLM_APIKEY=sk-your-key
-   export AGENT_LLM_PROVIDER=openai
-   export AGENT_LLM_MODEL=gpt-4o
-   go run .
-   ```
-
-- **config.sample.yaml** — template (committed to repo)
-- **config.yaml** — your config (gitignored; do not commit)
-
-The CLI uses `temporal.host`, `temporal.port`, and `temporal.namespace` from `config.yaml` (default: localhost, 7233, default). Override with `AGENT_TEMPORAL_HOST`, `AGENT_TEMPORAL_PORT`, and `AGENT_TEMPORAL_NAMESPACE` if Temporal runs elsewhere.
-
-**Anthropic prompt caching:** when `llm.provider: anthropic`, the CLI always enables `llm.WithPromptCaching(true)` — this differs from the SDK library default, which is caching **off** unless you opt in explicitly (see [LLM Providers](../docs/getting-started/llm-providers.mdx#prompt-caching)). Set `show_llm_usage: true` to see `cached_prompt` in the exit summary and confirm cache hits.
-
-## Run
-
-From the `cli/` directory:
+## Run and build
 
 ```bash
-task run
-# or
-go run .
+cd cli
+
+# Fast iteration
+go run . chat
+go run . run --prompt "hello"
+go run . config show
+
+# Local YAML overrides (config.yaml is gitignored)
+go run . --config ./config.yaml chat
+
+# Binary + CI parity
+task build          # ./bin/agctl  (version prints "dev")
+task test
+task check          # lint, test, build — same as the agctl CI job
 ```
 
-Or with a custom config path:
+For LLM calls you still need a key — `export AGCTL_LLM_APIKEY=…` or put it in `./config.yaml`. After editing `default.yaml`, rebuild or `go run` so the embedded copy is refreshed.
+
+From the repo root, SDK-wide checks include the CLI: `task cli:check` (or `cd cli && task check`).
+
+## How a command runs
+
+1. **Kong** parses flags/subcommands (`CLI` in `cli.go`).
+2. **`config.LoadConfig`** merges layers into one `*config.Config` (see below).
+3. The subcommand’s **`Run`** method runs — chat/run call **`ApplyAgentOverrides`** for per-invocation flags.
+4. **`internal/agent.Build`** constructs the SDK agent (LLM, tools, MCP, conversation store, runtime).
+
+Most behavior changes belong in `internal/config` or `internal/agent`, not duplicated in each command.
+
+## Config merge (for extenders)
+
+Later wins; partial YAML is fine.
+
+| Layer | Source |
+|-------|--------|
+| 1 | `default.yaml` embedded in the binary (`main.go`) |
+| 2 | XDG `…/agctl/config.yaml` if it exists |
+| 3 | `--config` / `AGCTL_CONFIG` if set (file must exist) |
+| 4 | `AGCTL_*` env vars |
+| 5 | Chat/run flags (`ApplyAgentOverrides`) |
+
+**Adding a new setting**
+
+1. Document the default in `default.yaml`.
+2. Add the field to `config.Config` (and nested structs as needed).
+3. Fill defaults in `ensureConfigStructs`; add env keys in `applyEnvOverrides` if users should override via env.
+4. Wire it in `internal/agent.Build` (or a small helper there).
+5. If `agctl config show` should reflect it, update `ForShow` (redact secrets, hide sections that do not apply).
+
+**Two loaders:** `LoadConfig` is the full merge stack the agent uses. Kong-yaml (`kongYAMLPath` in `cli.go`) may seed **flag defaults** from one existing file only — do not treat it as a second source of truth.
+
+**`config edit`** copies embedded `default.yaml` into a temp file, opens `$EDITOR`, and writes to XDG on save (or to `--config` when that path is explicit).
+
+## New subcommand
+
+1. Add a type with `Run(...)` under `internal/command/` — copy the pattern from `run.go` or `config.go`.
+2. Register it on `CLI` in `cli.go` with `` `cmd:""` `` and help text.
+3. If `Run` needs injected values, add `ctx.Bind(...)` in `Execute` (today: `*config.Config`, version, config path, embedded YAML bytes).
+
+Chat and run share runtime/LLM/temporal flags through **`AgentOverrides`** embedded on both structs. Extend that embed instead of copying Kong tags.
+
+## Tests and release
+
+Tests live next to packages: `internal/config`, `internal/agent`, `cli_test.go`, etc.
 
 ```bash
-go run . -config /path/to/config.yaml
+go test ./... -count=1
 ```
 
-## Build
+The eval harness under `../eval-harness/` evaluates SDK agent behavior, not the CLI binary — no hook there unless you add one on purpose.
 
-Uses [Task](https://taskfile.dev) (`Taskfile.yml` in this directory). From `cli/`:
+Release binaries are built by GoReleaser on git tags (`dir: ./cli` in [`.goreleaser.yaml`](../.goreleaser.yaml)); tags set `main.version` so `agctl version` matches the release. Maintainer flow: [RELEASING.md](../RELEASING.md).
 
-```bash
-task build
-./bin/agctl
-```
-
-Local builds (`task build` or a plain `go build .`) leave the version at its default, `dev`. **Release binaries** from GitHub are stamped with the git tag via GoReleaser (`-X main.version={{.Tag}}`; see `../.goreleaser.yaml`, which builds this module with `dir: ./cli`).
-
-The `cli/bin/` directory is gitignored.
-
-## Install
-
-Install `agctl` to `$(go env GOPATH)/bin` so you can run it from anywhere (ensure that directory is in your PATH). From `cli/`:
-
-```bash
-task install
-agctl -config config.yaml
-```
-
-## Config file and env vars
-
-Config is loaded from `config.yaml` in the current directory (default; run from `cli/`). Override with `-config <path>`. If the file does not exist, defaults plus env vars are used.
-
-| Env var | Description |
-|---------|-------------|
-| `AGENT_TEMPORAL_HOST`, `AGENT_TEMPORAL_PORT`, `AGENT_TEMPORAL_NAMESPACE`, `AGENT_TEMPORAL_TASKQUEUE` | Temporal connection |
-| `AGENT_LLM_PROVIDER` | `openai` \| `anthropic` \| `gemini` |
-| `AGENT_LLM_APIKEY` | LLM API key (preferred over putting in config file) |
-| `AGENT_LLM_MODEL` | e.g. `gpt-4o`, `claude-haiku-4-5`, `gemini-2.5-flash` |
-| `AGENT_LLM_BASEURL` | Optional; for OpenAI-compatible proxies |
-| `AGENT_LOGGER_LEVEL` | `error` (default), `warn`, `info`, `debug` |
-| `AGENT_LOGGER_OUTPUT` | Log file path; default `cli/logs/agctl.log` |
-| `AGENT_SHOW_LLM_USAGE` | When `true`, print accumulated session token usage on exit (`show_llm_usage` in config) |
-
-### MCP (optional)
-
-Define `mcp.servers` in `config.yaml` (see `config.sample.yaml`). Each entry supports **`enabled`** (omit or `true` to use; `false` to skip), **`name`** (stable id for that MCP connection), **`transport`** (`stdio` or `streamable_http`), plus transport-specific fields (`command` / `args` / `env` for stdio; `url` / `bearer_token` / OAuth / `headers` for HTTP). Optional **`timeout_seconds`**, **`retry_attempts`**, **`allow_tools`** / **`block_tools`**.
-
-When at least one server is enabled, the CLI registers **`WithMCPConfig`** and **`AutoToolApprovalPolicy`** so MCP tools run without per-call approval in the interactive session.
-
-## Logging
-
-The CLI shows only **user prompts and agent responses** on the console. Internal logs go to a file.
-
-- **Default log file:** `cli/logs/agctl.log` (resolved from the module root; gitignored)
-- **Configure:** Set `logger.output` in `config.yaml` or `AGENT_LOGGER_OUTPUT`
-- **Directories:** `logs/` and `cli/bin/` are gitignored
+User-facing install and usage: [root README](../README.md) and [CLI docs](https://docs.agenticenv.ai/getting-started/cli).

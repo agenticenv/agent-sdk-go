@@ -1,0 +1,122 @@
+# agent-sdk-go CLI configuration (agctl)
+#
+# This file is embedded in the binary (runtime defaults + seed for `agctl config edit`).
+#
+# Load order (later wins):
+#   1. embedded defaults (this file, compiled in)
+#   2. XDG config.yaml   — created on first save via `agctl config edit`
+#   3. --config / $AGCTL_CONFIG  — optional partial override
+#   4. AGCTL_* environment variables
+#   5. CLI flags
+#
+# Preferred XDG location (`agctl config edit`):
+#   macOS:   ~/Library/Application Support/agctl/config.yaml
+#   Linux:   ~/.config/agctl/config.yaml  (or $XDG_CONFIG_HOME/agctl/config.yaml)
+#   Windows: %LOCALAPPDATA%\agctl\config.yaml
+#
+# Secrets: prefer AGCTL_LLM_APIKEY (and other AGCTL_* vars) over putting keys here.
+# Example:
+#   export AGCTL_LLM_APIKEY=sk-xxx AGCTL_LLM_PROVIDER=openai AGCTL_LLM_MODEL=gpt-4o
+#   agctl chat
+#   agctl run --prompt "Hello"
+
+# Runtime: local (default) or temporal.
+# Override: AGCTL_RUNTIME=temporal agctl chat
+runtime: local
+
+# Agent identity (AGCTL_NAME / AGCTL_SYSTEM_PROMPT)
+name: agctl
+system_prompt: "You are a helpful agent. Use the tools available to you whenever they improve accuracy—calculator for math, current_time for time, search, wikipedia, and weather for facts—and keep answers clear and concise."
+
+# Temporal connection — only used when runtime is temporal (uncomment to customize).
+# Defaults if omitted: localhost:7233, namespace default, taskQueue agent-sdk-go.
+#
+# temporal:
+#   host: localhost       # AGCTL_TEMPORAL_HOST
+#   port: 7233            # AGCTL_TEMPORAL_PORT
+#   namespace: default     # AGCTL_TEMPORAL_NAMESPACE
+#   taskQueue: agent-sdk-go   # AGCTL_TEMPORAL_TASKQUEUE
+
+# Conversation store: inmem (default) or redis.
+# Override: AGCTL_CONVERSATION_STORE=redis
+conversation:
+  store: inmem            # inmem | redis
+  max_size: 100           # max messages kept in the store
+  size: 20                # max messages fetched for LLM context
+  save_on_iteration: true
+  # When store is redis (uncomment / set store: redis):
+  # redis:
+  #   addr: localhost:6379          # AGCTL_CONVERSATION_REDIS_ADDR
+  #   password: ""                  # AGCTL_CONVERSATION_REDIS_PASSWORD
+  #   db: 0                         # AGCTL_CONVERSATION_REDIS_DB
+  #   key_prefix: conversation
+  #   ttl_hours: 24
+
+# LLM provider (OpenAI, Anthropic, Gemini, DeepSeek, or Ollama)
+llm:
+  provider: openai      # openai | anthropic | gemini | deepseek | ollama — AGCTL_LLM_PROVIDER
+  apiKey: ""            # prefer AGCTL_LLM_APIKEY. Not needed for local ollama.
+  model: gpt-4o         # AGCTL_LLM_MODEL
+  baseURL: https://api.openai.com/v1   # AGCTL_LLM_BASEURL; optional for proxies
+
+# Logger: file by default. Prompts/responses use fmt, not this logger.
+logger:
+  level: info              # AGCTL_LOGGER_LEVEL — error | warn | info | debug
+  output: logs/agctl.log   # AGCTL_LOGGER_OUTPUT — file path | stdout | stderr
+  format: json             # AGCTL_LOGGER_FORMAT — json | text
+  add_source: false        # AGCTL_LOGGER_ADD_SOURCE
+  tee_stderr: false        # AGCTL_LOGGER_TEE_STDERR
+
+# When true, print token usage summary on exit.
+# Override: AGCTL_LLM_USAGE=true
+llm_usage: false
+
+# Built-in tools (registered when enabled). Default: all true.
+# Partial override example (XDG / --config): disable weather only —
+#   tools:
+#     weather:
+#       enabled: false
+tools:
+  echo:
+    enabled: true
+  current_time:
+    enabled: true
+  random:
+    enabled: true
+  calculator:
+    enabled: true
+  weather:
+    enabled: true
+  wikipedia:
+    enabled: true
+  search:
+    enabled: true
+
+# Optional MCP servers (tools become mcp_<name>_<tool>). Uncomment and set enabled: true.
+# When any server is enabled, the CLI uses auto tool approval.
+# Transports: stdio | local (subprocess); streamable_http | http | remote | streamable (URL).
+#
+# mcp:
+#   servers:
+#     - enabled: true
+#       name: filesystem
+#       transport: stdio
+#       command: npx
+#       args: ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"]
+#       env: {}
+#       timeout_seconds: 60
+#       retry_attempts: 3
+#       # allow_tools: [list, of, tool, names]
+#       # block_tools: []
+#
+#     - enabled: false
+#       name: remote
+#       transport: streamable_http
+#       url: https://example.com/mcp
+#       bearer_token: ""
+#       # oauth_client_id: ""
+#       # oauth_client_secret: ""
+#       # oauth_token_url: ""
+#       skip_tls_verify: false
+#       timeout_seconds: 30
+#       retry_attempts: 3

@@ -148,6 +148,13 @@ tasks:
           .venv/bin/pytest test_agent.py -v
       - echo "==> Eval-harness complete"
 
+  benchmarks:
+    desc: Run SDK concurrency/scale benchmarks (mock LLM; see benchmarks/config.yaml)
+    cmds:
+      - echo "==> Running benchmarks..."
+      - go run ./benchmarks/ -config benchmarks/config.yaml
+      - echo "==> Benchmarks complete"
+
   # Run before push: SDK lint/test/build + secrets scan + agctl (cli) checks — all CI gates locally.
   # Coverage is CI-only (`task test-coverage` when you want the report). If fmt-check fails, run `task fmt`.
   check:
