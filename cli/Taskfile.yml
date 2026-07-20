@@ -35,7 +35,7 @@ tasks:
       - 'echo "==> Installed to {{.GOPATH_BIN}}/agctl"'
 
   run:
-    desc: 'Run agctl (pass flags after --, e.g. task run -- -config config.yaml)'
+    desc: 'Run agctl (pass args after --, e.g. task run -- chat)'
     cmds:
       - go run . {{.CLI_ARGS}}
 

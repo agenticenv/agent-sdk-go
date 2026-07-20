@@ -9,78 +9,78 @@ import (
 	testutil "github.com/agenticenv/agent-sdk-go/internal/testing"
 	"github.com/agenticenv/agent-sdk-go/pkg/agent"
 	"github.com/agenticenv/agent-sdk-go/pkg/memory"
-	"github.com/spf13/viper"
+	"gopkg.in/yaml.v3"
 )
 
 const BenchmarkTreeSeed int64 = 42
 const defaultMemoryUserID = "benchmark-user"
 
 type Config struct {
-	Runtime  string         `mapstructure:"runtime"`
-	Temporal TemporalConfig `mapstructure:"temporal"`
-	LLM      LLMConfig      `mapstructure:"llm"`
-	Tool     ToolConfig     `mapstructure:"tool"`
-	Agent    AgentConfig    `mapstructure:"agent"`
-	Memory   MemoryConfig   `mapstructure:"memory"`
-	Logger   LoggerConfig   `mapstructure:"logger"`
-	Output   OutputConfig   `mapstructure:"output"`
+	Runtime  string         `yaml:"runtime"`
+	Temporal TemporalConfig `yaml:"temporal"`
+	LLM      LLMConfig      `yaml:"llm"`
+	Tool     ToolConfig     `yaml:"tool"`
+	Agent    AgentConfig    `yaml:"agent"`
+	Memory   MemoryConfig   `yaml:"memory"`
+	Logger   LoggerConfig   `yaml:"logger"`
+	Output   OutputConfig   `yaml:"output"`
 }
 
 type TemporalConfig struct {
-	Host         string `mapstructure:"host"`
-	Port         int    `mapstructure:"port"`
-	Namespace    string `mapstructure:"namespace"`
-	TaskQueue    string `mapstructure:"task_queue"`
-	WorkersCount int    `mapstructure:"workers_count"`
+	Host         string `yaml:"host"`
+	Port         int    `yaml:"port"`
+	Namespace    string `yaml:"namespace"`
+	TaskQueue    string `yaml:"task_queue"`
+	WorkersCount int    `yaml:"workers_count"`
 }
 
 type LLMConfig struct {
-	LatencyMs  int `mapstructure:"latency_ms"`
-	JitterMs   int `mapstructure:"jitter_ms"`
-	MockTokens int `mapstructure:"mock_tokens"`
+	LatencyMs  int `yaml:"latency_ms"`
+	JitterMs   int `yaml:"jitter_ms"`
+	MockTokens int `yaml:"mock_tokens"`
 }
 
 type ToolConfig struct {
-	LatencyMs int `mapstructure:"latency_ms"`
-	JitterMs  int `mapstructure:"jitter_ms"`
+	LatencyMs int `yaml:"latency_ms"`
+	JitterMs  int `yaml:"jitter_ms"`
 }
 
 type AgentConfig struct {
-	Runs            int              `mapstructure:"runs"`
-	Concurrent      bool             `mapstructure:"concurrent"`
-	ConcurrentCount int              `mapstructure:"concurrent_count"`
-	Tools           AgentToolsConfig `mapstructure:"tools"`
-	Subagents       SubagentsConfig  `mapstructure:"subagents"`
+	Runs            int              `yaml:"runs"`
+	Concurrent      bool             `yaml:"concurrent"`
+	ConcurrentCount int              `yaml:"concurrent_count"`
+	Tools           AgentToolsConfig `yaml:"tools"`
+	Subagents       SubagentsConfig  `yaml:"subagents"`
 }
 
 type AgentToolsConfig struct {
-	Count     int    `mapstructure:"count"`
-	Execution string `mapstructure:"execution"`
+	Count     int    `yaml:"count"`
+	Execution string `yaml:"execution"`
 }
 
 type SubagentsConfig struct {
-	Count  int `mapstructure:"count"`
-	Levels int `mapstructure:"levels"`
+	Count  int `yaml:"count"`
+	Levels int `yaml:"levels"`
 }
 
 // MemoryConfig configures long-term memory for benchmark runs.
 type MemoryConfig struct {
-	Enabled   bool   `mapstructure:"enabled"`
-	StoreMode string `mapstructure:"store_mode"`
-	UserID    string `mapstructure:"user_id"`
+	Enabled   bool   `yaml:"enabled"`
+	StoreMode string `yaml:"store_mode"`
+	UserID    string `yaml:"user_id"`
 }
 
 type LoggerConfig struct {
-	Enabled bool   `mapstructure:"enabled"`
-	Dir     string `mapstructure:"dir"`
-	Level   string `mapstructure:"level"`
+	Enabled bool   `yaml:"enabled"`
+	Dir     string `yaml:"dir"`
+	Level   string `yaml:"level"`
 }
 
 type OutputConfig struct {
-	Console bool   `mapstructure:"console"`
-	File    bool   `mapstructure:"file"`
-	Dir     string `mapstructure:"dir"`
-	Format  string `mapstructure:"format"`
+	Console bool   `yaml:"console"`
+	File    bool   `yaml:"file"`
+	Dir     string `yaml:"dir"`
+	Format  string `yaml:"format"`
 }
 
 func (c *Config) UseTemporal() bool {
@@ -139,14 +139,12 @@ func LoadConfig(path string) (*Config, error) {
 	if path == "" {
 		path = defaultConfigPath()
 	}
-	v := viper.New()
-	v.SetConfigFile(path)
-	v.SetConfigType("yaml")
-	if err := v.ReadInConfig(); err != nil {
+	data, err := os.ReadFile(path)
+	if err != nil {
 		return nil, fmt.Errorf("read config %q: %w", path, err)
 	}
 	var cfg Config
-	if err := v.Unmarshal(&cfg); err != nil {
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 	if err := cfg.validate(); err != nil {

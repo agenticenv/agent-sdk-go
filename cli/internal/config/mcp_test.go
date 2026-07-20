@@ -1,10 +1,12 @@
-package main
+package config
 
 import (
 	"testing"
 
 	"github.com/agenticenv/agent-sdk-go/pkg/mcp"
 )
+
+func ptrBool(b bool) *bool { return &b }
 
 func TestBuildMCPServers_allDisabled(t *testing.T) {
 	cfg := &Config{
@@ -44,5 +46,3 @@ func TestBuildMCPServers_stdio(t *testing.T) {
 		t.Fatalf("transport %#v", mc.Transport)
 	}
 }
-
-func ptrBool(b bool) *bool { return &b }
