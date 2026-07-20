@@ -36,7 +36,7 @@ type Config struct {
 	Conversation *ConversationConfig   `yaml:"conversation,omitempty"`
 	MCP          *MCPRootConfig        `yaml:"mcp,omitempty"`
 	Tools        map[string]ToolConfig `yaml:"tools,omitempty"`
-	LLMUsage      bool                  `yaml:"llm_usage"`
+	LLMUsage     bool                  `yaml:"llm_usage"`
 }
 
 // ConversationConfig selects the conversation store (inmem or redis).
