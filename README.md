@@ -52,7 +52,7 @@ a, _ := agent.NewAgent(
 )
 defer a.Close()
 
-// --- Run (blocking) ---
+// --- Run ---
 run, _ := a.Run(context.Background(), "Reply with a short greeting.", nil)
 result, _ := run.Get(context.Background())
 fmt.Println(result.Content)
@@ -129,7 +129,7 @@ for event := range events {
     _ = event
 }
 
-// --- Reconnect after a process crash (Temporal only) ---
+// --- Reconnect after a process crash ---
 savedOffset := int64(0) // last event Offset() persisted before handling it
 s, _ := a.GetAgentStream(context.Background(), savedRunID)
 ch, _ := s.Events(context.Background(), agent.WithOffset(savedOffset))
