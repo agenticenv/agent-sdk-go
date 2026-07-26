@@ -19,7 +19,7 @@ func TestWithHooks_MergesInDeclarationOrder(t *testing.T) {
 
 	cfg, err := buildAgentConfig([]Option{
 		WithName("hooks"),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 		WithHooks("guardrails", AgentHooks{BeforeLLM: []BeforeLLMHook{h1}}),
 		WithHooks("audit", AgentHooks{
 			BeforeLLM: []BeforeLLMHook{h2},
@@ -50,7 +50,7 @@ func TestWithHooks_RequiresName(t *testing.T) {
 	}
 	_, err := buildAgentConfig([]Option{
 		WithName("hooks-empty"),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 		WithHooks("", AgentHooks{BeforeRetrieve: []BeforeRetrieveHook{h}}),
 	})
 	if err == nil || !strings.Contains(err.Error(), "hook group name is required") {
@@ -64,7 +64,7 @@ func TestWithHooks_RejectsDuplicateName(t *testing.T) {
 	}
 	_, err := buildAgentConfig([]Option{
 		WithName("hooks-dup"),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 		WithHooks("audit", AgentHooks{BeforeRetrieve: []BeforeRetrieveHook{h}}),
 		WithHooks("audit", AgentHooks{}),
 	})
@@ -79,7 +79,7 @@ func TestRuntimeAgentConfig_PassesHookGroups(t *testing.T) {
 	}
 	cfg, err := buildAgentConfig([]Option{
 		WithName("hooks-runtime"),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 		WithHooks("guardrails", AgentHooks{BeforeLLM: []BeforeLLMHook{h}}),
 		WithHooks("audit", AgentHooks{}),
 	})
@@ -129,7 +129,7 @@ func TestAgentConfigFingerprint_HookGroupsChangesDigest(t *testing.T) {
 	}
 	baseOpts := []Option{
 		WithName("hooks-fp"),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 	}
 	cfgNoHooks, err := buildAgentConfig(baseOpts)
 	if err != nil {

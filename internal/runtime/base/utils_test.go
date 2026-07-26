@@ -3,7 +3,6 @@ package base
 import (
 	"testing"
 
-	"github.com/agenticenv/agent-sdk-go/internal/runtime"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/golang/mock/gomock"
@@ -145,27 +144,4 @@ func TestApplyLLMSampling_MaxTokensZeroNotApplied(t *testing.T) {
 	req := &interfaces.LLMRequest{MaxTokens: 100}
 	ApplyLLMSampling(&types.LLMSampling{MaxTokens: 0}, req)
 	require.Equal(t, 100, req.MaxTokens) // unchanged when zero
-}
-
-// --- GetConversationID ---
-
-func TestGetConversationID(t *testing.T) {
-	t.Run("nil request", func(t *testing.T) {
-		require.Equal(t, "", GetConversationID(nil))
-	})
-	t.Run("nil RunOptions", func(t *testing.T) {
-		require.Equal(t, "", GetConversationID(&runtime.ExecuteRequest{}))
-	})
-	t.Run("nil ConversationOptions", func(t *testing.T) {
-		req := &runtime.ExecuteRequest{RunOptions: &types.AgentRunOptions{}}
-		require.Equal(t, "", GetConversationID(req))
-	})
-	t.Run("returns ID", func(t *testing.T) {
-		req := &runtime.ExecuteRequest{
-			RunOptions: &types.AgentRunOptions{
-				ConversationOptions: &types.ConversationOptions{ID: "session-1"},
-			},
-		}
-		require.Equal(t, "session-1", GetConversationID(req))
-	})
 }

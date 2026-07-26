@@ -102,9 +102,13 @@ func runOnce(ctx context.Context, a *agent.Agent, label, prompt string) {
 	fmt.Println("user:", prompt)
 	fmt.Fprintln(os.Stderr, "--- hook activity ---")
 
-	result, err := a.Run(ctx, prompt, nil)
+	agentRun, err := a.Run(ctx, prompt, nil)
 	if err != nil {
 		log.Printf("%s failed: %v", label, err)
+		return
+	}
+	result, err := agentRun.Get(ctx)
+	if err != nil {
 		return
 	}
 	fmt.Println("assistant:", result.Content)

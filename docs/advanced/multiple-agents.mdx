@@ -72,7 +72,7 @@ Use the **same** `TaskQueue` and `InstanceId` on `NewAgent` and `NewAgentWorker`
 
 ### Single agent, multiple requests
 
-A single `Agent` instance handles **concurrent `Run`, `RunAsync`, and `Stream` calls** from different goroutines. Each call gets its own unique Temporal workflow (or in-process goroutine) — no serialisation, no queuing.
+A single `Agent` instance handles **concurrent `Run` and `Stream` calls** from different goroutines. Each call gets its own unique Temporal workflow (or in-process goroutine) — no serialisation, no queuing.
 
 ```go
 var wg sync.WaitGroup
@@ -80,9 +80,9 @@ for _, prompt := range prompts {
     wg.Add(1)
     go func(p string) {
         defer wg.Done()
-        asyncCh, _ := a.RunAsync(ctx, p, nil)
-        res := <-asyncCh
-        fmt.Println(res.Result.Content)
+        agentRun, _ := a.Run(ctx, p, nil)
+        result, _ := agentRun.Get(ctx)
+        fmt.Println(result.Content)
     }(prompt)
 }
 wg.Wait()
@@ -101,12 +101,14 @@ var wg sync.WaitGroup
 wg.Add(2)
 go func() {
     defer wg.Done()
-    result, _ := a1.Run(ctx, "What is 7 times 8?", nil)
+    agentRun, _ := a1.Run(ctx, "What is 7 times 8?", nil)
+    result, _ := agentRun.Get(ctx)
     fmt.Println(result.Content)
 }()
 go func() {
     defer wg.Done()
-    result, _ := a2.Run(ctx, "Write a haiku about rain.", nil)
+    agentRun, _ := a2.Run(ctx, "Write a haiku about rain.", nil)
+    result, _ := agentRun.Get(ctx)
     fmt.Println(result.Content)
 }()
 wg.Wait()
@@ -124,7 +126,7 @@ Example: [Multiple Agents](/examples/multiple-agents).
 | Memory store | Shared backend OK — isolate by scope (user, tenant, agent name) |
 | Tool registries | **Per agent** — each `Agent` has its own registries |
 
-## Worker separation with multiple agents
+## Distributed execution with multiple agents
 
 When splitting client and worker:
 
@@ -132,7 +134,7 @@ When splitting client and worker:
 2. Pass matching options to each worker and its corresponding `NewAgent`
 3. Use Redis conversation when any agent uses remote workers
 
-See [Worker Separation](/advanced/worker-separation).
+See [Distributed Execution](/advanced/distributed-execution).
 
 ## In-process runtime
 
@@ -159,7 +161,7 @@ See [In-Process runtime](/runtimes/in-process).
     Orchestrator + specialist pattern
   </Card>
 
-  <Card title="Worker Separation" icon="server" href="/advanced/worker-separation" horizontal>
+  <Card title="Distributed Execution" icon="server" href="/advanced/distributed-execution" horizontal>
     One worker per task queue
   </Card>
 </CardGroup>

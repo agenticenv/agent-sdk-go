@@ -101,7 +101,7 @@ graph TD
 
 | Component | Role |
 |---|---|
-| **Temporal client** | Your application uses this to start runs via `Run`, `Stream`, or `RunAsync` |
+| **Temporal client** | Your application uses this to start runs via `Run` or `Stream` |
 | **Workflow** | Replay-safe orchestration — the agent loop (LLM rounds, tool routing, delegation). Must stay deterministic |
 | **Activities** | Side effects and I/O — LLM calls, tool execution, MCP calls, memory I/O, approval steps. Retries and timeouts apply here |
 | **Worker** | Polls a task queue and executes workflow and activity code. Scale horizontally by adding workers |
@@ -153,15 +153,68 @@ a, err := agent.NewAgent(
 )
 ```
 
-Both processes must share identical configuration — task queue, tools, conversation backend (Redis for remote workers), memory, approval policy, and hook groups. See [Worker separation](/advanced/worker-separation).
+Both processes must share identical configuration — task queue, tools, conversation backend (Redis for remote workers), memory, approval policy, and hook groups. See [Distributed execution](/advanced/distributed-execution).
 
-When using `DisableLocalWorker` with streaming or approvals across processes, also pass [`EnableRemoteWorkers()`](/getting-started/configuration).
+Streaming and approvals work across processes with no extra configuration — the agent subscribes to the run's event stream directly through the Temporal client, independent of which process executes the workflow task.
 
 ## Streaming and approvals
 
-The agent run (the Temporal workflow) is durable. Live stream delivery is not — incremental tokens and events are delivered as produced and are not backfilled if your client disconnects. The workflow continues in Temporal regardless; only the live event stream is lost.
+Events are delivered through **Temporal Workflow Streams** — a durable, ordered event log hosted inside the `AgentWorkflow`. Every published event is appended to the log with a monotonic offset; subscribers receive the same events in the same order regardless of which process or worker executes the workflow.
 
-See [Temporal runtime streaming](/runtimes/temporal#streaming-and-approvals) and [Approvals](/features/approvals) for full details.
+**Workflow Streams delivery model:**
+
+| Property | Value |
+|---|---|
+| **Durability** | Event log lives in the Temporal workflow; survives worker crashes and restarts |
+| **Delivery** | Events forwarded to the subscriber process via a long-poll `Subscribe` call through the Temporal client |
+| **Terminal events** | A terminal `RUN_FINISHED` or `RUN_ERROR` event is always delivered before the channel closes, even on stream connection failures |
+| **Offset** | Each event carries an `Offset()` accessible via the stream forwarder; use it to resume after disconnect |
+| **Reconnect** | After a process crash or disconnect: `GetAgentStream` + `WithOffset` for streams, or `GetAgentRun` for non-stream `Run` |
+| **Sub-agents** | All child workflow events fan into the root workflow's stream; a single subscriber sees every event |
+
+**After a disconnect — stream reconnect with `GetAgentStream`:**
+
+```go
+// Save runID and offset during normal streaming.
+agentStream, err := a.Stream(ctx, prompt, nil)
+runID := agentStream.ID()
+eventCh, err := agentStream.Events(ctx)
+for ev := range eventCh {
+    if ob, ok := ev.(interface{ Offset() (int64, bool) }); ok {
+        if off, has := ob.Offset(); has {
+            saveOffset(runID, off) // persist before processing each event
+        }
+    }
+    handleEvent(ev)
+}
+
+// On process restart: reconnect from last saved offset.
+savedRunID, savedOffset := loadSavedRun()
+agentStream, err = a.GetAgentStream(ctx, savedRunID)
+resumeCh, err := agentStream.Events(ctx, agent.WithOffset(savedOffset))
+```
+
+<Note>
+Always persist the runID and offset **before** processing each event. If your process crashes between reading an event and saving its offset, you will replay only that event on reconnect, never lose progress beyond it.
+</Note>
+
+**After a disconnect — run reconnect with `GetAgentRun`:**
+
+```go
+// Save runID immediately after Run — before Get / Done.
+agentRun, err := a.Run(ctx, prompt, nil)
+saveRunID(agentRun.ID())
+
+// On process restart: reconnect and wait for the result.
+run, err := a.GetAgentRun(ctx, loadSavedRunID())
+if errors.Is(err, agent.ErrRunAlreadyCompleted) {
+    // Workflow finished while disconnected — use conversation/memory.
+    return
+}
+result, err := run.Get(ctx) // or <-run.Done() then Get
+```
+
+See [Reconnect example](/examples/reconnect) for the stream protocol, [Durable Execution](/advanced/durable-execution) for run + stream recovery, and [Approvals](/features/approvals) for approval events on stream.
 
 ## Agent mode
 
@@ -171,7 +224,7 @@ See [Temporal runtime streaming](/runtimes/temporal#streaming-and-approvals) and
 
 Client and worker processes must share identical configuration — task queue, tools, memory, conversation backend, approval policy, and hook groups. The SDK validates this with a fingerprint check at activity entry; a mismatch aborts the run with a clear error.
 
-See [Worker separation](/advanced/worker-separation) for the full list and production setup guide.
+See [Distributed execution](/advanced/distributed-execution) for the full list and production setup guide.
 
 ## Sub-agents on Temporal
 
@@ -187,5 +240,9 @@ Sub-agent delegation runs as a **child workflow** on its own task queue. This is
 
   <Card title="Agent Worker" icon="server" href="/examples/agent-worker" horizontal>
     Client and worker in separate processes
+  </Card>
+
+  <Card title="Reconnect" icon="rotate" href="/examples/reconnect" horizontal>
+    Resume a stream from a saved offset
   </Card>
 </CardGroup>

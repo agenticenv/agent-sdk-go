@@ -25,7 +25,6 @@ func main() {
 		agent.WithDescription("Agent with a custom tool that uses ToolAuthorizer"),
 		agent.WithSystemPrompt("You are a helpful assistant. Use the protected_note tool when the user asks for the protected note or internal note."),
 		agent.WithLLMClient(llmClient),
-		agent.WithStream(true),
 		agent.WithTools(NewProtectedNote()),
 		agent.WithToolApprovalPolicy(agent.AutoToolApprovalPolicy()),
 		agent.WithLogger(config.NewLoggerFromLogConfig(cfg)),
@@ -46,12 +45,18 @@ func main() {
 	fmt.Println("user:", prompt)
 	fmt.Println("tip: set ALLOW_PROTECTED_NOTE=1 to authorize the tool")
 
-	eventCh, err := a.Stream(context.Background(), prompt, nil)
+	agentStream, err := a.Stream(context.Background(), prompt, nil)
 	if err != nil {
 		log.Printf("stream failed: %v", err)
 		return
 	}
-
+	runID := agentStream.ID()
+	eventCh, err := agentStream.Events(context.Background())
+	if err != nil {
+		log.Printf("stream events: %v", err)
+		return
+	}
+	fmt.Println(shared.RunIDLine(runID))
 	fmt.Println("--- events ---")
 
 	streamed := false

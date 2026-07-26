@@ -2,15 +2,15 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
 
 	"log/slog"
 
-	"github.com/agenticenv/agent-sdk-go/internal/eventbus"
-	"github.com/agenticenv/agent-sdk-go/internal/events"
 	"github.com/agenticenv/agent-sdk-go/internal/runtime"
+	"github.com/agenticenv/agent-sdk-go/internal/store"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/memory"
@@ -22,21 +22,25 @@ import (
 type Agent struct {
 	agentConfig
 	runtime          runtime.Runtime
-	localAgentWorker *AgentWorker // run worker; set when workers are embedded
+	localAgentWorker *AgentWorker                    // run worker; set when workers are embedded
+	runs             *store.KV[string, *agentRun]    // map of runID to AgentRun
+	streams          *store.KV[string, *agentStream] // map of runID to AgentStream
 }
 
-// AgentRunOptions is the options to use runtime execution
+// AgentRunOptions holds per-call options for [Agent.Run].
+// A nil pointer is valid and means "no options" (no conversation, default behaviour).
 type AgentRunOptions = types.AgentRunOptions
 
-// ConversationOptions is the options to use for the conversation
+// AgentStreamOptions holds per-call options for [Agent.Stream].
+// A nil pointer is valid and means "no options" (LLM token streaming on, no conversation).
+type AgentStreamOptions = types.AgentStreamOptions
+
+// ConversationOptions identifies a conversation session for one call.
+// ID must be stable across all turns of the same session (e.g. a user or chat ID).
 type ConversationOptions = types.ConversationOptions
 
-// AgentRunResult is the structured result of [Agent.Run] and [Agent.RunAsync] ([RunAsyncResult.Result]).
+// AgentRunResult is the structured result returned by [AgentRun.Get] after a run completes.
 type AgentRunResult = types.AgentRunResult
-
-// AgentRunAsyncResult is the single outcome from [Agent.RunAsync]. After the channel closes, Err is non-nil
-// on failure; otherwise Result is non-nil.
-type AgentRunAsyncResult = types.AgentRunAsyncResult
 
 // AgentTelemetry is the unified container for operational insights across
 // a single agent run, covering run lifecycle, tool calls, and storage operations.
@@ -63,13 +67,8 @@ func buildAgent(opts []Option) (*Agent, error) {
 	}
 	a := &Agent{
 		agentConfig: *cfg,
-	}
-
-	// This guard is Temporal-specific: streaming on Temporal requires a local worker unless
-	// remote workers are enabled. LocalRuntime streams in-process via ExecuteStream and needs
-	// no background worker poll loop, so we skip the guard for the local backend.
-	if cfg.hasTemporalRuntime() && a.disableLocalWorker && a.streamEnabled && !a.enableRemoteWorkers {
-		return nil, fmt.Errorf("DisableLocalWorker with streaming requires EnableRemoteWorkers()")
+		runs:        store.NewKV[string, *agentRun](),
+		streams:     store.NewKV[string, *agentStream](),
 	}
 
 	rt, err := cfg.buildAgentRuntime(false)
@@ -130,95 +129,52 @@ func (a *Agent) Close() {
 	a.logger.Info(ctx, "agent closed", slog.String("scope", "agent"), slog.String("name", a.Name))
 }
 
-// Run starts one execution and returns the result. Use [WithApprovalHandler] when tools require approval for Run (handler uses req.Respond); [Stream] uses approval events and [Agent.OnApproval].
-// Use [WithTimeout] or a context with deadline to avoid blocking.
-// When using [WithConversation], pass the conversation ID; agent and worker must use the same ID.
-func (a *Agent) Run(ctx context.Context, input string, opts *AgentRunOptions) (*AgentRunResult, error) {
-	a.logger.Debug(ctx, "agent run started", slog.String("scope", "agent"), slog.String("name", a.Name), slog.Int("inputLen", len(input)))
-	return a.runInternal(ctx, input, opts, false)
-}
-
-func (a *Agent) runInternal(ctx context.Context, input string, opts *AgentRunOptions, runAsync bool) (*AgentRunResult, error) {
+// Run starts an agent run and returns an [AgentRun] immediately after pre-flight validation.
+// It calls [runtime.Runtime.Run], wraps the runtime handle with [newAgentRun], and returns.
+// Use [AgentRun.Get] or [AgentRun.Done] to wait for the result.
+//
+// Use [WithApprovalHandler] when any registered tool requires approval.
+// When using [WithConversation], pass the conversation ID in opts.
+func (a *Agent) Run(ctx context.Context, input string, opts *AgentRunOptions) (AgentRun, error) {
 	ctx = a.attachMemoryScopeContext(ctx)
 	conversationID := conversationIDFromOpts(opts)
 
-	spanName := "agent.run"
-	if runAsync {
-		spanName = "agent.run.async"
+	if err := a.validateConversationID(conversationID); err != nil {
+		return nil, err
+	}
+	tools, err := a.resolveTools(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if a.hasApprovalTools(tools) && a.approvalHandler == nil {
+		return nil, fmt.Errorf("tools require approval but WithApprovalHandler was not set (required for Run)")
+	}
+	subAgents, err := a.resolveSubAgentSpecs(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	start := time.Now()
-	ctx, sp := a.tracer.StartSpan(ctx, spanName,
+	ctx, sp := a.tracer.StartSpan(ctx, "agent.run",
 		interfaces.Attribute{Key: "agent.name", Value: a.Name},
-		interfaces.Attribute{Key: "conversation.id", Value: conversationID},
 		interfaces.Attribute{Key: "input.length", Value: len(input)},
 	)
 	defer sp.End()
 	a.metrics.IncrementCounter(ctx, types.MetricRunStarted)
 
-	if err := a.validateConversationID(conversationID); err != nil {
-		sp.RecordError(err)
-		a.metrics.IncrementCounter(ctx, types.MetricRunFailed, interfaces.Attribute{Key: "error", Value: "conversation_id_invalid"})
-		a.metrics.RecordHistogram(ctx, types.MetricRunDurationMs, float64(time.Since(start).Milliseconds()))
-		return nil, err
-	}
-
-	tools, err := a.resolveTools(ctx)
+	req := a.createRunRequest(input, conversationID, false, tools, subAgents)
+	rh, err := a.runtime.Run(ctx, req)
+	elapsed := float64(time.Since(start).Milliseconds())
 	if err != nil {
 		sp.RecordError(err)
-		a.metrics.IncrementCounter(ctx, types.MetricRunFailed, interfaces.Attribute{Key: "error", Value: "tools_list_failed"})
-		a.metrics.RecordHistogram(ctx, types.MetricRunDurationMs, float64(time.Since(start).Milliseconds()))
+		a.metrics.IncrementCounter(ctx, types.MetricRunFailed, interfaces.Attribute{Key: "error", Value: "runtime_run_failed"})
+		a.metrics.RecordHistogram(ctx, types.MetricRunDurationMs, elapsed)
 		return nil, err
 	}
-
-	if a.hasApprovalTools(tools) && a.approvalHandler == nil {
-		err := fmt.Errorf("tools require approval but WithApprovalHandler was not set (required for Run)")
-		sp.RecordError(err)
-		a.metrics.IncrementCounter(ctx, types.MetricRunFailed, interfaces.Attribute{Key: "error", Value: "missing_approval_handler"})
-		a.metrics.RecordHistogram(ctx, types.MetricRunDurationMs, float64(time.Since(start).Milliseconds()))
-		return nil, err
-	}
-
-	subAgents, err := a.resolveSubAgentSpecs(ctx)
-	if err != nil {
-		sp.RecordError(err)
-		a.metrics.IncrementCounter(ctx, types.MetricRunFailed, interfaces.Attribute{Key: "error", Value: "build_sub_agent_specs_failed"})
-		a.metrics.RecordHistogram(ctx, types.MetricRunDurationMs, float64(time.Since(start).Milliseconds()))
-		return nil, err
-	}
-	a.shareEventBusWithSubAgents()
-
-	req := a.executeRequest(input, opts, false, tools, subAgents)
-
-	result, err := a.runtime.Execute(ctx, req)
-	if err != nil {
-		sp.RecordError(err)
-		a.metrics.IncrementCounter(ctx, types.MetricRunFailed, interfaces.Attribute{Key: "error", Value: "runtime_execute_failed"})
-		a.metrics.RecordHistogram(ctx, types.MetricRunDurationMs, float64(time.Since(start).Milliseconds()))
-		return nil, err
-	}
-	a.metrics.RecordHistogram(ctx, types.MetricRunDurationMs, float64(time.Since(start).Milliseconds()))
+	sp.SetAttribute("run.id", rh.ID())
+	a.metrics.RecordHistogram(ctx, types.MetricRunDurationMs, elapsed)
 	a.metrics.IncrementCounter(ctx, types.MetricRunCompleted)
-	return result, nil
-}
-
-// RunAsync starts the run in a goroutine and returns a channel that receives exactly one
-// [AgentRunAsyncResult], then closes. Use [WithApprovalHandler] when tools require approval
-// (same as [Agent.Run]).
-func (a *Agent) RunAsync(ctx context.Context, input string, opts *AgentRunOptions) (<-chan AgentRunAsyncResult, error) {
-	a.logger.Debug(ctx, "agent run async started", slog.String("scope", "agent"), slog.String("name", a.Name), slog.Int("inputLen", len(input)))
-
-	resCh := make(chan AgentRunAsyncResult, 1)
-	go func() {
-		defer close(resCh)
-		resp, err := a.runInternal(ctx, input, opts, true)
-		if err != nil {
-			resCh <- AgentRunAsyncResult{Error: err}
-			return
-		}
-		resCh <- AgentRunAsyncResult{Result: resp}
-	}()
-	return resCh, nil
+	return newAgentRun(rh, a.runs), nil
 }
 
 func copyApprovalArgs(src map[string]any) map[string]any {
@@ -232,18 +188,25 @@ func copyApprovalArgs(src map[string]any) map[string]any {
 	return dst
 }
 
-// Stream starts the run and returns a channel of [AgentEvent]. Streaming continues until the root run’s
-// terminal lifecycle event ([AgentEventTypeRunFinished] / [*AgentRunFinishedEvent]); sub-agent runs may emit
-// additional [AgentEventTypeRunFinished] events that are delivered but do not close the root stream (see doc on [BaseEvent]).
-// After the root completes, the channel may stay open briefly while the backend finishes cleanup, then closes.
-// For approvals (tool or delegation), receive [AgentEventTypeCustom] ([AgentCustomEvent]), parse with
-// [ParseCustomEventApproval] / [ParseCustomEventDelegation], then call [Agent.OnApproval] with the token from Value.
-// When using [WithConversation], pass the conversation ID.
-func (a *Agent) Stream(ctx context.Context, input string, opts *AgentRunOptions) (<-chan events.AgentEvent, error) {
-	a.logger.Debug(ctx, "agent run stream started", slog.String("scope", "agent"), slog.String("name", a.Name), slog.Int("inputLen", len(input)))
-
+// Stream starts the agent run and returns an [AgentStream] immediately after pre-flight validation.
+// It calls [runtime.Runtime.Stream], wraps the runtime handle with [newAgentStream], and returns.
+// Call [AgentStream.Events] to subscribe (optionally [WithOffset] after reconnect).
+// Persist [AgentStream.ID] before Events when crash-durability matters.
+//
+// Cancelling ctx cancels the agent run (same idea as [Agent.Run]). Cancelling the context
+// passed to [AgentStream.Events] only stops that subscriber — use a separate Events ctx for
+// reconnect / "subscriber gone". You can also stop the run with [AgentStream.Cancel] or
+// [WithTimeout].
+//
+// By default, LLM token streaming is enabled (TEXT_MESSAGE_CONTENT events are emitted).
+// Set opts.DisableTokenStreaming = true to receive a single complete message instead.
+//
+// For approvals (tool or delegation), receive [AgentEventTypeCustom] events from the Events channel
+// and call [Agent.OnApproval] with the token extracted from the payload.
+// When using [WithConversation], pass the conversation ID in opts.
+func (a *Agent) Stream(ctx context.Context, input string, opts *AgentStreamOptions) (AgentStream, error) {
 	ctx = a.attachMemoryScopeContext(ctx)
-	conversationID := conversationIDFromOpts(opts)
+	conversationID := conversationIDFromStreamOpts(opts)
 
 	start := time.Now()
 	ctx, sp := a.tracer.StartSpan(ctx, "agent.stream",
@@ -275,20 +238,127 @@ func (a *Agent) Stream(ctx context.Context, input string, opts *AgentRunOptions)
 		a.metrics.RecordHistogram(ctx, types.MetricStreamDurationMs, float64(time.Since(start).Milliseconds()))
 		return nil, err
 	}
-	a.shareEventBusWithSubAgents()
 
-	req := a.executeRequest(input, opts, true, tools, subAgents)
-
-	streamCh, err := a.runtime.ExecuteStream(ctx, req)
+	enableLLMStream := opts == nil || !opts.DisableTokenStreaming
+	req := a.createRunRequest(input, conversationID, enableLLMStream, tools, subAgents)
+	sh, err := a.runtime.Stream(ctx, req)
+	elapsed := float64(time.Since(start).Milliseconds())
 	if err != nil {
 		sp.RecordError(err)
-		a.metrics.IncrementCounter(ctx, types.MetricStreamFailed, interfaces.Attribute{Key: "error", Value: "runtime_execute_stream_failed"})
-		a.metrics.RecordHistogram(ctx, types.MetricStreamDurationMs, float64(time.Since(start).Milliseconds()))
+		a.metrics.IncrementCounter(ctx, types.MetricStreamFailed, interfaces.Attribute{Key: "error", Value: "runtime_stream_failed"})
+		a.metrics.RecordHistogram(ctx, types.MetricStreamDurationMs, elapsed)
 		return nil, err
 	}
-	a.metrics.RecordHistogram(ctx, types.MetricStreamDurationMs, float64(time.Since(start).Milliseconds()))
+	sp.SetAttribute("run.id", sh.ID())
+	a.metrics.RecordHistogram(ctx, types.MetricStreamDurationMs, elapsed)
 	a.metrics.IncrementCounter(ctx, types.MetricStreamDispatched)
-	return streamCh, nil
+	return newAgentStream(sh, a.streams), nil
+}
+
+// GetAgentRun returns an [AgentRun] for runID so callers can await or control a run started
+// in this or a previous process ([AgentRun.Get], [AgentRun.Done], [AgentRun.Status], [AgentRun.Cancel]).
+//
+// Same-process: if [Agent.Run] or a prior GetAgentRun already registered a live handle for
+// runID, that same [AgentRun] is returned. If that handle's [AgentRun.Done] is already closed,
+// the registry entry is cleared and [ErrRunAlreadyCompleted] is returned.
+//
+// Otherwise reconnects with [runtime.Runtime.GetRunHandle] and wraps the runtime handle as an
+// [AgentRun] (registered in the in-process run registry). Cancelling ctx only affects the
+// reconnect lookup (status/describe); it does not cancel the agent run — use [AgentRun.Cancel].
+//
+// Returns [ErrRunAlreadyCompleted] when the runtime reports the run is already terminal —
+// no handle is returned; load the outcome from conversation/memory instead of calling Get.
+// Returns [ErrRunNotFound] when runID is unknown or the runtime cannot reconnect
+// (e.g. LocalRuntime after a crash — no durable run tracking). Other GetRunHandle errors
+// are returned as-is.
+func (a *Agent) GetAgentRun(ctx context.Context, runID string) (AgentRun, error) {
+	ctx, sp := a.tracer.StartSpan(ctx, "agent.run.reconnect",
+		interfaces.Attribute{Key: "agent.name", Value: a.Name},
+		interfaces.Attribute{Key: "run.id", Value: runID},
+	)
+	defer sp.End()
+	a.metrics.IncrementCounter(ctx, types.MetricRunReconnectStarted)
+
+	if existing, ok := a.runs.Get(runID); ok {
+		select {
+		case <-existing.Done():
+			a.runs.Delete(runID)
+			a.metrics.IncrementCounter(ctx, types.MetricRunReconnectCompleted, interfaces.Attribute{Key: "outcome", Value: "already_completed"})
+			return nil, ErrRunAlreadyCompleted
+		default:
+			a.metrics.IncrementCounter(ctx, types.MetricRunReconnectCompleted, interfaces.Attribute{Key: "outcome", Value: "existing"})
+			return existing, nil
+		}
+	}
+
+	rh, err := a.runtime.GetRunHandle(ctx, runID)
+	if err != nil {
+		if errors.Is(err, types.ErrRunAlreadyCompleted) {
+			a.metrics.IncrementCounter(ctx, types.MetricRunReconnectCompleted, interfaces.Attribute{Key: "outcome", Value: "already_completed"})
+			return nil, ErrRunAlreadyCompleted
+		}
+		sp.RecordError(err)
+		a.metrics.IncrementCounter(ctx, types.MetricRunReconnectFailed, interfaces.Attribute{Key: "error", Value: "runtime_get_run_handle_failed"})
+		return nil, err
+	}
+
+	run := newAgentRun(rh, a.runs)
+	a.metrics.IncrementCounter(ctx, types.MetricRunReconnectCompleted, interfaces.Attribute{Key: "outcome", Value: "live"})
+	return run, nil
+}
+
+// GetAgentStream returns an [AgentStream] for runID so callers can subscribe or control a
+// stream started in this or a previous process ([AgentStream.Events], [AgentStream.Status],
+// [AgentStream.Cancel]). Use [WithOffset] on Events to resume after a crash.
+//
+// Same-process: if [Agent.Stream] or a prior GetAgentStream already registered a live handle
+// for runID, that same [AgentStream] is returned. If [AgentStream.Status] reports terminal,
+// the registry entry is cleared and [ErrRunAlreadyCompleted] is returned.
+//
+// Otherwise reconnects with [runtime.Runtime.GetStreamHandle] and wraps the runtime handle as
+// an [AgentStream] (registered in the in-process stream registry). Cancelling ctx only affects
+// the reconnect lookup (status/describe); it does not cancel the agent run — use
+// [AgentStream.Cancel]. Cancelling [AgentStream.Events]'s ctx stops that subscriber only.
+//
+// Returns [ErrRunAlreadyCompleted] when the runtime reports the stream run is already terminal —
+// no handle is returned; load the outcome from conversation/memory instead of calling Events.
+// Returns [ErrStreamNotFound] when runID is unknown or the runtime cannot reconnect
+// (e.g. LocalRuntime after a crash — no durable stream tracking). Other GetStreamHandle errors
+// are returned as-is.
+func (a *Agent) GetAgentStream(ctx context.Context, runID string) (AgentStream, error) {
+	ctx, sp := a.tracer.StartSpan(ctx, "agent.stream.reconnect",
+		interfaces.Attribute{Key: "agent.name", Value: a.Name},
+		interfaces.Attribute{Key: "run.id", Value: runID},
+	)
+	defer sp.End()
+	a.metrics.IncrementCounter(ctx, types.MetricStreamReconnectStarted)
+
+	if existing, ok := a.streams.Get(runID); ok {
+		select {
+		case <-existing.Done():
+			a.streams.Delete(runID)
+			a.metrics.IncrementCounter(ctx, types.MetricStreamReconnectCompleted, interfaces.Attribute{Key: "outcome", Value: "already_completed"})
+			return nil, ErrRunAlreadyCompleted
+		default:
+			a.metrics.IncrementCounter(ctx, types.MetricStreamReconnectCompleted, interfaces.Attribute{Key: "outcome", Value: "existing"})
+			return existing, nil
+		}
+	}
+
+	sh, err := a.runtime.GetStreamHandle(ctx, runID)
+	if err != nil {
+		if errors.Is(err, types.ErrRunAlreadyCompleted) {
+			a.metrics.IncrementCounter(ctx, types.MetricStreamReconnectCompleted, interfaces.Attribute{Key: "outcome", Value: "already_completed"})
+			return nil, ErrRunAlreadyCompleted
+		}
+		sp.RecordError(err)
+		a.metrics.IncrementCounter(ctx, types.MetricStreamReconnectFailed, interfaces.Attribute{Key: "error", Value: "runtime_get_stream_handle_failed"})
+		return nil, err
+	}
+
+	stream := newAgentStream(sh, a.streams)
+	a.metrics.IncrementCounter(ctx, types.MetricStreamReconnectCompleted, interfaces.Attribute{Key: "outcome", Value: "live"})
+	return stream, nil
 }
 
 func (a *Agent) attachMemoryScopeContext(ctx context.Context) context.Context {
@@ -298,7 +368,16 @@ func (a *Agent) attachMemoryScopeContext(ctx context.Context) context.Context {
 	return ctx
 }
 
+// conversationIDFromOpts extracts the conversation ID from AgentRunOptions.
 func conversationIDFromOpts(opts *AgentRunOptions) string {
+	if opts != nil && opts.ConversationOptions != nil {
+		return opts.ConversationOptions.ID
+	}
+	return ""
+}
+
+// conversationIDFromStreamOpts extracts the conversation ID from AgentStreamOptions.
+func conversationIDFromStreamOpts(opts *AgentStreamOptions) string {
 	if opts != nil && opts.ConversationOptions != nil {
 		return opts.ConversationOptions.ID
 	}
@@ -315,55 +394,21 @@ func (a *Agent) validateConversationID(conversationID string) error {
 	return nil
 }
 
-// executeRequest builds [runtime.ExecuteRequest] with per-run fields for Run, Stream, and RunAsync.
-func (a *Agent) executeRequest(userPrompt string, opts *AgentRunOptions, streaming bool, tools []interfaces.Tool, subAgents []*runtime.SubAgentSpec) *runtime.ExecuteRequest {
-	return &runtime.ExecuteRequest{
+// createRunRequest builds a [runtime.RunRequest] for [Agent.Run] / [Agent.Stream].
+// The runtime mints the run ID; conversationID and enableLLMStream come from call options.
+func (a *Agent) createRunRequest(
+	userPrompt, conversationID string,
+	enableLLMStream bool,
+	tools []interfaces.Tool,
+	subAgents []*runtime.SubAgentSpec,
+) *runtime.RunRequest {
+	return &runtime.RunRequest{
 		UserPrompt:       userPrompt,
-		RunOptions:       opts,
-		StreamingEnabled: streaming,
+		ConversationID:   conversationID,
+		EnableLLMStream:  enableLLMStream,
 		SubAgents:        subAgents,
 		MaxSubAgentDepth: a.maxSubAgentDepth,
-		ApprovalHandler:  a.approvalHandler,
 		Tools:            tools,
-	}
-}
-
-// Sub-agents share the parent's in-memory pub/sub when the runtime implements [runtime.EventBusRuntime]
-// (e.g. Temporal). A custom [runtime.Runtime] from a future WithRuntime need only implement [Runtime];
-// wiring is skipped when the assert to EventBusRuntime fails.
-func (a *Agent) shareEventBusWithSubAgents() {
-	if a == nil {
-		return
-	}
-	ir, ok := a.runtime.(runtime.EventBusRuntime)
-	if !ok || a.subAgentRegistry == nil {
-		return
-	}
-	bus := ir.GetEventBus()
-	for _, sub := range a.subAgentRegistry.List() {
-		if sub != nil {
-			shareEventBusWithSubAgent(bus, sub)
-		}
-	}
-}
-
-func shareEventBusWithSubAgent(bus eventbus.EventBus, agent *Agent) {
-	if agent == nil || bus == nil {
-		return
-	}
-	if ir, ok := agent.runtime.(runtime.EventBusRuntime); ok {
-		ir.SetEventBus(bus)
-	}
-	if agent.localAgentWorker != nil {
-		if ir, ok := agent.localAgentWorker.runtime.(runtime.EventBusRuntime); ok {
-			ir.SetEventBus(bus)
-		}
-	}
-	if agent.subAgentRegistry == nil {
-		return
-	}
-	for _, child := range agent.subAgentRegistry.List() {
-		shareEventBusWithSubAgent(bus, child)
 	}
 }
 

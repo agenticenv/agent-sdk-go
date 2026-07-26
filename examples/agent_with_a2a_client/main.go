@@ -74,9 +74,13 @@ func main() {
 	}
 
 	fmt.Println("user:", prompt)
-	result, err := a.Run(context.Background(), prompt, nil)
+	agentRun, err := a.Run(context.Background(), prompt, nil)
 	if err != nil {
 		log.Printf("run failed: %v", err)
+		return
+	}
+	result, err := agentRun.Get(context.Background())
+	if err != nil {
 		return
 	}
 	fmt.Println("assistant:", result.Content)

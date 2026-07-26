@@ -1,0 +1,91 @@
+---
+title: "Non-blocking Run"
+description: "Run an agent with a handle — poll Status, optionally Cancel, wait on Done(), then Get(); tool approvals via WithApprovalHandler"
+---
+
+Starts a run that returns an `AgentRun` handle immediately. Poll `Status` while waiting, optionally call `Cancel`, wait on `Done()`, then `Get()` for the result. Uses `WithApprovalHandler` so tool calls can be approved interactively on stdin — same semantics as a blocking `Run` + `Get`.
+
+Source: [`examples/agent_with_nonblocking_run/`](https://github.com/agenticenv/agent-sdk-go/tree/main/examples/agent_with_nonblocking_run)
+
+## What it demonstrates
+
+- `Run` returning an [`AgentRun`](https://pkg.go.dev/github.com/agenticenv/agent-sdk-go/pkg/agent#AgentRun) handle immediately
+- Polling `AgentRun.Status` while the run is in progress
+- `AgentRun.Cancel` to stop the run (demo: after ~10s if still running — e.g. waiting on approval)
+- Waiting on `AgentRun.Done()`, then `Get()`
+- `WithApprovalHandler` for tool approval during the run
+
+See [Run](/getting-started/run) for the full `AgentRun` method table. `AgentStream` shares `Status` / `Cancel` / `Done` / `Get` and adds `Events` — see [Streaming](/getting-started/streaming).
+
+## Run
+
+From `examples/`:
+
+```bash
+go run ./agent_with_nonblocking_run "What is 15 + 27?"
+```
+
+When the calculator tool is invoked, type `y` or `n` at the approval prompt. If you wait ~10s without answering, the example calls `Cancel`.
+
+## Key code
+
+```go
+a, err := agent.NewAgent(
+    agent.WithLLMClient(llmClient),
+    agent.WithToolRegistry(reg),
+    agent.WithApprovalHandler(approvalHandler),
+)
+
+// Run returns a handle immediately; persist runID before waiting when crash-durability matters.
+agentRun, err := a.Run(ctx, prompt, nil)
+runID := agentRun.ID()
+
+polls := 0
+cancelled := false
+for {
+    select {
+    case <-agentRun.Done():
+        result, err := agentRun.Get(ctx)
+        // ...
+        return
+    case <-time.After(5 * time.Second):
+        polls++
+        st, _ := agentRun.Status(ctx)
+        fmt.Printf("still running (poll %d), status=%s\n", polls, st)
+        if !cancelled && polls >= 2 {
+            _ = agentRun.Cancel(ctx) // stops the run; then Done closes and Get returns
+            cancelled = true
+        }
+    }
+}
+```
+
+Cancelling the `Get` context only unblocks the waiter — use `AgentRun.Cancel` to cancel the agent run itself.
+
+On the Temporal runtime, persist `runID` before waiting. After a process crash, reconnect with [`GetAgentRun`](/getting-started/run#reconnect-with-getagentrun) and call `Get` again — see [Durable Execution](/advanced/durable-execution#client-side-run-recovery).
+
+The approval handler receives `*agent.ApprovalRequest` and calls `req.Respond(agent.ApprovalStatusApproved)` or `Rejected`. See [Approvals](/features/approvals) for stream-based approval with `Stream`.
+
+## Expected output
+
+```
+Tool call: calculator({"expression":"15+27"})
+Approve? [y/n]: y
+15 + 27 = 42
+```
+
+Typing `n` rejects the tool call and the agent replies without that result. Leaving the prompt unanswered long enough triggers `Cancel` and a cancelled/failed finish path.
+
+## Learn more
+
+<CardGroup cols={2}>
+  <Card title="Run" icon="play" href="/getting-started/run" horizontal>
+    AgentRun — Get, Done, Status, Cancel, GetAgentRun
+  </Card>
+  <Card title="Durable Execution" icon="shield" href="/advanced/durable-execution#client-side-run-recovery" horizontal>
+    Reconnect a Run after crash with GetAgentRun
+  </Card>
+  <Card title="Approvals" icon="shield-check" href="/features/approvals" horizontal>
+    Policies, handlers, and stream events
+  </Card>
+</CardGroup>

@@ -2,6 +2,7 @@ package eventbus
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
@@ -66,5 +67,32 @@ func TestInmem_CloseUnsubscribes(t *testing.T) {
 	_, ok := <-ch
 	if ok {
 		t.Error("channel should be closed")
+	}
+}
+
+func TestInmem_Close_ClosesSubscribers(t *testing.T) {
+	c := NewInmem(logger.NoopLogger())
+	ctx := context.Background()
+
+	ch, closeFn, err := c.Subscribe(ctx, "ch")
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	c.Close()
+	c.Close() // idempotent
+
+	_, ok := <-ch
+	if ok {
+		t.Error("subscriber channel should be closed after Close")
+	}
+	if err := closeFn(); err != nil {
+		t.Fatalf("closeFn after Close: %v", err)
+	}
+	if err := c.Publish(ctx, "ch", []byte("x")); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Publish after Close: got %v, want ErrClosed", err)
+	}
+	if _, _, err := c.Subscribe(ctx, "ch"); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Subscribe after Close: got %v, want ErrClosed", err)
 	}
 }

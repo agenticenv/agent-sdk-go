@@ -18,13 +18,15 @@ Source: [`examples/agent_with_stream_conversation/`](https://github.com/agentice
 ```go
 a, err := agent.NewAgent(
     agent.WithLLMClient(llmClient),
-    agent.WithStream(true),
     agent.WithConversation(inMemoryConv),
 )
 
-eventCh, err := a.Stream(ctx, prompt, &agent.AgentRunOptions{
-    ConversationOptions: &agent.ConversationRunOptions{ID: "demo"},
+agentStream, err := a.Stream(ctx, prompt, &agent.AgentStreamOptions{
+    ConversationOptions: &agent.ConversationOptions{ID: "demo"},
 })
+runID := agentStream.ID()
+_ = runID // persist for GetAgentStream on the Temporal runtime
+eventCh, err := agentStream.Events(ctx)
 for ev := range eventCh {
     switch ev.Type() {
     case agent.AgentEventTypeTextMessageContent:

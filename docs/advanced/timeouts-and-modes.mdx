@@ -18,10 +18,14 @@ Two ways to limit how long a run waits:
 ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 defer cancel()
 
-result, err := a.Run(ctx, "Hello", nil)
+agentRun, err := a.Run(ctx, "Hello", nil)
+if err != nil {
+    // handle start error
+}
+result, err := agentRun.Get(ctx)
 ```
 
-Works with `Run`, `Stream`, and `RunAsync`. The context deadline applies to the entire call.
+Works with `Run` and `Stream`. A deadline on the `Run` / `Stream` context bounds (and cancels) the agent run. Cancelling `Get`'s context only unblocks the waiter; cancelling `Events`' context only stops that subscriber (Temporal) — use `Cancel()` on the handle if you need to stop the run without cancelling the Stream ctx.
 
 ### Option 2 — WithTimeout (agent default)
 
@@ -31,7 +35,11 @@ a, _ := agent.NewAgent(
     agent.WithTimeout(5 * time.Minute),
 )
 
-result, err := a.Run(context.Background(), "Hello", nil)
+agentRun, err := a.Run(context.Background(), "Hello", nil)
+if err != nil {
+    // handle start error
+}
+result, err := agentRun.Get(context.Background())
 ```
 
 Used when the context has **no deadline**. Agent-only — ignored by `NewAgentWorker`.
@@ -40,8 +48,43 @@ Used when the context has **no deadline**. Agent-only — ignored by `NewAgentWo
 
 | Rule | Behavior |
 |---|---|
-| Context deadline | **Always wins** — if ctx expires in 2 min but `WithTimeout` is 10 min, the run ends at 2 min |
+| `Run` / `Stream` context deadline | **Wins over `WithTimeout`** — if that ctx expires in 2 min but `WithTimeout` is 10 min, the run ends at 2 min |
+| `WithTimeout` | Used when the `Run` / `Stream` context has **no** deadline |
 | Default when unset | Follows agent mode — see below |
+
+### What each context does
+
+Use a separate context for starting the run vs waiting or subscribing. Cancelling the wrong one is a common mistake.
+
+| Call | Cancelling its `ctx`… |
+|---|---|
+| `Run(ctx, …)` / `Stream(ctx, …)` | Stops the **agent run** |
+| `Get(ctx)` | Only stops **waiting** for the result — run keeps going |
+| `Events(ctx)` | Only stops **this subscriber** (Temporal) — run keeps going |
+| `GetAgentRun(ctx, id)` / `GetAgentStream(ctx, id)` | Only bounds the **reconnect lookup** — run keeps going |
+| `handle.Cancel(ctx)` | Stops the **agent run** (explicit stop) |
+
+**App pattern:** put the run lifetime on `Run` / `Stream`. Put short deadlines on `Get` / `Events` when you only want to stop waiting or unsubscribing. After a crash, reconnect with `GetAgentRun` / `GetAgentStream`, then wait again with `Get` / `Events`. Call `Cancel()` on the handle when you want to stop the run.
+
+```go
+// This ctx owns the run — cancel or deadline here stops the agent.
+runCtx, cancelRun := context.WithTimeout(context.Background(), 5*time.Minute)
+defer cancelRun()
+run, err := a.Run(runCtx, prompt, nil)
+
+// This ctx only bounds how long you wait — canceling it does not stop the run.
+waitCtx, cancelWait := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancelWait()
+result, err := run.Get(waitCtx)
+```
+
+### Timeouts after reconnect (Temporal)
+
+`GetAgentRun` / `GetAgentStream` do not take over the original `Run` / `Stream` context.
+
+- Cancelling the reconnect `ctx` does **not** stop the run.
+- If the agent has `WithTimeout`, that limit applies again from the moment you reconnect — it is a **fresh** timeout, not “time left” from the original start.
+- To stop the run after reconnect, call `Cancel()` on the handle.
 
 ## Agent modes
 
@@ -96,9 +139,8 @@ a, _ := agent.NewAgent(
 
 | Method | Behavior |
 |---|---|
-| `Run` | Returns error |
+| `Run` | `Get` returns error |
 | `Stream` | Emits `AgentEventTypeRunError` |
-| `RunAsync` | `resultCh` receives result with `Error` set |
 
 <Warning>
 If you use a long context deadline but omit `WithTimeout`, approval still expires at ~4.5 minutes (interactive default 5 min − 30s). Set `WithTimeout` or `WithApprovalTimeout` explicitly for longer approval windows.
@@ -134,13 +176,13 @@ If `finish_reason: max_iterations` appears in telemetry but the task wasn't comp
 
 ## Behavior under failure
 
-| Failure | `Run` | `Stream` | `RunAsync` |
-|---|---|---|---|
-| **Context deadline exceeded** | Returns `context.DeadlineExceeded` | Emits `AgentEventTypeRunError` | Channel receives result with `Error` set |
-| **Agent timeout fires** | Returns timeout error | Emits `AgentEventTypeRunError` | Channel receives result with `Error` set |
-| **Approval timeout** | Returns error after approval window expires | Emits `AgentEventTypeRunError` | Channel receives result with `Error` set |
-| **Max iterations reached** | Returns result with `FinishReason: max_iterations` | Emits `RUN_FINISHED` with reason set | Channel receives result normally |
-| **LLM provider error** | Returns the provider error | Emits `AgentEventTypeRunError` | Channel receives result with `Error` set |
+| Failure | `Run` (`Get`) | `Stream` |
+|---|---|---|
+| **Context deadline exceeded** | On `Run`/`Stream` ctx: cancels the run. On `Get` ctx only: unblocks waiter (run continues) | On `Stream` ctx: cancels run, emits `AgentEventTypeRunError`. On `Events` ctx only: subscriber stops (Temporal; run continues) |
+| **Agent timeout fires** | `Get` returns timeout error | Emits `AgentEventTypeRunError` |
+| **Approval timeout** | `Get` returns error after approval window expires | Emits `AgentEventTypeRunError` |
+| **Max iterations reached** | `Get` returns result with `FinishReason: max_iterations` | Emits `RUN_FINISHED` with reason set |
+| **LLM provider error** | `Get` returns the provider error | Emits `AgentEventTypeRunError` |
 
 On the **Temporal runtime**, process crashes and worker restarts do not appear as failures — the workflow resumes from the last recorded step. Only deadline expiry, max iterations, and provider errors surface as run failures. See [Temporal runtime](/runtimes/temporal).
 
@@ -153,10 +195,8 @@ a, _ := agent.NewAgent(
     agent.WithTemporalConfig(cfg),
     agent.WithLLMClient(llmClient),
     agent.DisableLocalWorker(),
-    agent.EnableRemoteWorkers(),
     agent.WithAgentMode(agent.AgentModeInteractive),
     agent.WithTimeout(5 * time.Minute),
-    agent.WithStream(true),
 )
 ```
 
@@ -177,7 +217,11 @@ a, _ := agent.NewAgent(
 ```go
 ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 defer cancel()
-result, err := a.Run(ctx, quickPrompt, nil) // 30s cap regardless of agent timeout
+agentRun, err := a.Run(ctx, quickPrompt, nil) // 30s cap regardless of agent timeout
+if err != nil {
+    // handle start error
+}
+result, err := agentRun.Get(ctx)
 ```
 
 ## Execution config
@@ -213,7 +257,7 @@ See [Execution config](/features/execution-config) for the full defaults table a
     Approval handler and OnApproval flows
   </Card>
 
-  <Card title="Worker Separation" icon="server" href="/advanced/worker-separation" horizontal>
+  <Card title="Distributed Execution" icon="server" href="/advanced/distributed-execution" horizontal>
     Interactive worker pre-check with DisableLocalWorker
   </Card>
 </CardGroup>

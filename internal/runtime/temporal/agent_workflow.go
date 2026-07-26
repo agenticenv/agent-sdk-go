@@ -18,7 +18,7 @@ import (
 	"github.com/google/uuid"
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/activity"
-	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/contrib/workflowstreams"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
@@ -30,18 +30,16 @@ var (
 
 	agentToolApprovalActivityMaxAttempts int32 = 1
 
-	sendEventActivityTaskTimeout time.Duration = 15 * time.Second
-	sendEventActivityMaxAttempts int32         = 1
+	// AgentWorkflowCleanupActivity: short RPCs to CompleteActivityByID for leftover approvals.
+	agentWorkflowCleanupActivityTaskTimeout time.Duration = 30 * time.Second
+	agentWorkflowCleanupActivityMaxAttempts int32         = 3
 
-	// updateWorkflowEventRPCTimeout caps UpdateWorkflow for normal events (Accepted). When the event worker
-	// or process is gone, fail fast instead of blocking until sendEventActivityTaskTimeout. Must be < sendEventActivityTaskTimeout.
-	updateWorkflowEventRPCTimeout = 10 * time.Second
-	// updateWorkflowApprovalRPCTimeout caps UpdateWorkflow when posting approval to the event pipeline (Completed).
-	// Only the "deliver to event workflow handler" phase; must be far below approval activity StartToClose.
-	updateWorkflowApprovalRPCTimeout = 30 * time.Second
+	// publishStreamEventActivityTaskTimeout caps how long the one-shot event-forward activity
+	// in sub-agent workflows may run. Kept short: the activity is a single signal + ack.
+	publishStreamEventActivityTaskTimeout time.Duration = 15 * time.Second
 
 	// AgentWorkflow uses ContinueAsNew when Temporal execution history crosses these bounds (see loop below).
-	// Checked after each tool round (when tool results are appended). Not evaluated on the “LLM returned no tools”
+	// Checked after each tool round (when tool results are appended). Not evaluated on the "LLM returned no tools"
 	// exit path in the same iteration. Byte limit is tighter than the event pipeline because LLM payloads are large.
 	agentWorkflowHistoryLength    = 10_000
 	agentWorkflowHistorySizeBytes = 20_000_000
@@ -51,74 +49,38 @@ var (
 const (
 	msgToolRejected            = "Tool execution was rejected by the user."
 	msgToolApprovalUnavailable = "Tool approval could not be completed because the event stream is unavailable; continuing without running the tool."
+	msgToolApprovalTimedOut    = "Tool approval timed out; continuing without running the tool."
 	msgToolUnauthorized        = "Tool execution was denied by authorization policy."
 )
 
-// SendAgentEventResult is returned by SendAgentEventUpdateActivity. Fatal errors are returned as activity error;
-// StreamUnavailable is a soft failure: workflow sets streamingUnavailable and continues.
-type SendAgentEventResult struct {
-	// StreamUnavailable is true when delivery failed in a way that likely means the stream is gone.
-	StreamUnavailable bool `json:"stream_unavailable,omitempty"`
-}
-
-// sendAgentEventWorkflowUpdate sends one update to AgentEventWorkflow using UpdateWithStartWorkflow so the
-// event workflow is started lazily on first use (no separate ExecuteWorkflow). USE_EXISTING applies the update
-// when a run is already active. Bounded RPC deadline; errors are mapped to soft failure by callers.
-// Use WorkflowUpdateStageAccepted for token traffic; WorkflowUpdateStageCompleted for approval so the handler
-// has returned before AgentToolApprovalActivity blocks on ErrResultPending.
-func (rt *TemporalRuntime) sendAgentEventWorkflowUpdate(ctx context.Context, eventWorkflowID, eventTaskQueue string, upd *AgentEventUpdate, stage client.WorkflowUpdateStage, rpcTimeout time.Duration) error {
-	rpcCtx, cancel := context.WithTimeout(ctx, rpcTimeout)
-	defer cancel()
-
-	startOp := rt.temporalClient.NewWithStartWorkflowOperation(
-		client.StartWorkflowOptions{
-			ID:                       eventWorkflowID,
-			TaskQueue:                eventTaskQueue,
-			WorkflowIDConflictPolicy: enumspb.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING,
-			WorkflowIDReusePolicy:    enumspb.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE,
-		},
-		rt.AgentEventWorkflow,
-	)
-	_, err := rt.temporalClient.UpdateWithStartWorkflow(rpcCtx, client.UpdateWithStartWorkflowOptions{
-		StartWorkflowOperation: startOp,
-		UpdateOptions: client.UpdateWorkflowOptions{
-			WorkflowID:   eventWorkflowID,
-			UpdateName:   agentEventName,
-			Args:         []interface{}{upd},
-			WaitForStage: stage,
-		},
-	})
-	return err
-}
-
-// AgentWorkflowInput is the input to AgentWorkflow. EventWorkflowID is set when streaming or approval is used.
-// StreamingEnabled enables partial content streaming (from WithStream).
-// ConversationID is set when conversation is used; workflow fetches messages and writes assistant/tool via activities.
+// AgentWorkflowInput is the input to AgentWorkflow.
+//
+// RootWorkflowID is empty for the top-level agent run (the root). Sub-agent child workflows set it
+// to the root workflow's ID so their events are published to the root's WorkflowStream instead of
+// a separate stream that the client is not subscribed to.
+//
+// StreamState carries the WorkflowStream's durable log across ContinueAsNew boundaries (root only).
+// StreamingEnabled enables partial LLM token streaming (set by Agent.Stream).
+// ConversationID is set when conversation is used; workflow fetches messages and writes via activities.
 // SubAgentDepth is 0 for a top-level user run; each child workflow increments it (runtime cap vs maxSubAgentDepth).
 // SubAgentRoutes maps sub-agent tool name -> route; built from WithSubAgents when the run starts.
 // MemoryScope is resolved before the workflow starts and passed through for recall/store activities.
-// LocalChannelName is the in-process pub/sub channel name used for in-memory event fan-in across the
-// delegation tree. Set once at the top level (agent_event_<main-workflow-id>) and propagated unchanged
-// to all sub-agents. Contrast with EventWorkflowID which is used for out-of-process (remote) routing.
-// EventTaskQueue is the Temporal task queue for AgentEventWorkflow (e.g. main TaskQueue + "-events"); required
-// for UpdateWithStartWorkflow when EventWorkflowID is set.
-// EventTypes is set by the SDK; a single "*" element means emit all event kinds (used for Stream).
+// EventTypes controls whether events are published to the stream: empty = no events, ["*"] = all events.
 // AgentFingerprint is the per-run digest (config + resolved tools). Caller and worker compute it at resolve time.
 type AgentWorkflowInput struct {
-	UserPrompt       string                   `json:"user_prompt,omitempty"`
-	EventWorkflowID  string                   `json:"event_workflow_id,omitempty"`
-	EventTaskQueue   string                   `json:"event_task_queue,omitempty"`
-	LocalChannelName string                   `json:"local_channel_name,omitempty"`
-	StreamingEnabled bool                     `json:"streaming_enabled,omitempty"`
-	ConversationID   string                   `json:"conversation_id,omitempty"`
-	AgentFingerprint string                   `json:"agent_fingerprint,omitempty"`
-	RunID            string                   `json:"run_id,omitempty"`
-	MemoryScope      interfaces.MemoryScope   `json:"memory_scope,omitempty"`
-	EventTypes       []events.AgentEventType  `json:"event_types,omitempty"`
-	SubAgentDepth    int                      `json:"sub_agent_depth,omitempty"`
-	SubAgentRoutes   map[string]SubAgentRoute `json:"sub_agent_routes,omitempty"`
-	MaxSubAgentDepth int                      `json:"max_sub_agent_depth,omitempty"`
-	State            *AgentWorkflowState      `json:"state,omitempty"`
+	UserPrompt       string                               `json:"user_prompt,omitempty"`
+	RootWorkflowID   string                               `json:"root_workflow_id,omitempty"`
+	StreamState      *workflowstreams.WorkflowStreamState `json:"stream_state,omitempty"`
+	StreamingEnabled bool                                 `json:"streaming_enabled,omitempty"`
+	ConversationID   string                               `json:"conversation_id,omitempty"`
+	AgentFingerprint string                               `json:"agent_fingerprint,omitempty"`
+	RunID            string                               `json:"run_id,omitempty"`
+	MemoryScope      interfaces.MemoryScope               `json:"memory_scope,omitempty"`
+	EventTypes       []events.AgentEventType              `json:"event_types,omitempty"`
+	SubAgentDepth    int                                  `json:"sub_agent_depth,omitempty"`
+	SubAgentRoutes   map[string]SubAgentRoute             `json:"sub_agent_routes,omitempty"`
+	MaxSubAgentDepth int                                  `json:"max_sub_agent_depth,omitempty"`
+	State            *AgentWorkflowState                  `json:"state,omitempty"`
 }
 
 // AgentWorkflowState is the state of the agent workflow.
@@ -175,6 +137,8 @@ type AgentMemoryStoreInput struct {
 // for TEXT_MESSAGE_* (and stream ordering with REASONING_*); the workflow sets it each turn.
 // RetrieverContext is the pre-fetched RAG context from AgentRetrieverActivity (prefetch / hybrid modes).
 // MemoryContext is the pre-fetched long-term memory context from AgentMemoryRecallActivity.
+// StreamWorkflowID is the Temporal workflow ID of the stream the activity publishes events to;
+// empty disables activity-side event publishing (non-streaming / non-approval runs).
 type AgentLLMInput struct {
 	AgentName        string               `json:"agent_name,omitempty"`
 	ConversationID   string               `json:"conversation_id,omitempty"`
@@ -182,9 +146,7 @@ type AgentLLMInput struct {
 	SkipTools        bool                 `json:"skip_tools,omitempty"`
 	AgentFingerprint string               `json:"agent_fingerprint,omitempty"`
 	MessageID        string               `json:"message_id,omitempty"`
-	EventWorkflowID  string               `json:"event_workflow_id,omitempty"`
-	EventTaskQueue   string               `json:"event_task_queue,omitempty"`
-	LocalChannelName string               `json:"local_channel_name,omitempty"`
+	StreamWorkflowID string               `json:"stream_workflow_id,omitempty"`
 	MemoryContext    string               `json:"memory_context,omitempty"`
 	RetrieverContext string               `json:"retriever_context,omitempty"`
 	RunID            string               `json:"run_id,omitempty"`
@@ -193,9 +155,10 @@ type AgentLLMInput struct {
 
 // AgentLLMResult is the return value of AgentLLMActivity. Workflow uses it to decide: return content or execute tools.
 type AgentLLMResult struct {
-	Content   string               `json:"content"`
-	ToolCalls []ToolCallRequest    `json:"tool_calls"`
-	Usage     *interfaces.LLMUsage `json:"usage,omitempty"`
+	Content    string               `json:"content"`
+	ToolCalls  []ToolCallRequest    `json:"tool_calls"`
+	Usage      *interfaces.LLMUsage `json:"usage,omitempty"`
+	RetryCount int32                `json:"retry_count,omitempty"` // number of Temporal retries before this successful attempt (Attempt - 1)
 }
 
 // baseLLMResultToActivity converts a [base.LLMResult] (no JSON tags) to an [AgentLLMResult]
@@ -229,25 +192,45 @@ type ToolCallRequest struct {
 	NeedsApproval   bool           `json:"needs_approval"`
 }
 
+// QueryIsApprovalPending is the workflow query name that reports whether a ToolCallID still has a
+// pending approval activity. Arg: toolCallID (string). Result: bool.
+// Used by the forwarder on Events/reconnect to skip CUSTOM events for approvals that were already
+// resolved while the subscriber was disconnected.
+const QueryIsApprovalPending = "is_approval_pending"
+
+// pendingApproval tracks one in-flight AgentToolApprovalActivity (keyed by ToolCallID in the map).
+type pendingApproval struct {
+	ActivityID string `json:"activity_id"`
+}
+
+// AgentWorkflowCleanupInput is the input to AgentWorkflowCleanupActivity.
+// ApprovalActivityIDs are Temporal activity IDs of still-pending AgentToolApprovalActivity tasks.
+type AgentWorkflowCleanupInput struct {
+	ApprovalActivityIDs []string `json:"approval_activity_ids,omitempty"`
+}
+
 // agentToolCallInput bundles the workflow handle, per-iteration activity contexts, and emit plumbing for tool execution.
 // Built once per sequential LLM tool round, or once per parallel branch (unique parallelSlot activity IDs).
 type agentToolCallInput struct {
-	wfCtx         workflow.Context
-	input         AgentWorkflowInput
-	messageID     string
-	iteration     int
-	emitEvent     func(events.AgentEvent) error
-	authorizeCtx  workflow.Context
-	approvalCtx   workflow.Context
-	activityScope string
-	policies      agentrt.ExecutionPolicies
+	wfCtx               workflow.Context
+	input               AgentWorkflowInput
+	messageID           string
+	iteration           int
+	streamWorkflowID    string // root stream owner; own ID for root, RootWorkflowID for sub-agents
+	emitEvent           func(events.AgentEvent) error
+	authorizeCtx        workflow.Context
+	approvalCtx         workflow.Context
+	authorizeActivityID string // set once in newAgentToolCallInput
+	approvalActivityID  string // set once in newAgentToolCallInput
+	executeActivityID   string // set once in newAgentToolCallInput
+	policies            agentrt.ExecutionPolicies
+	pendingApprovals    map[string]*pendingApproval // shared with AgentWorkflow; nil when not tracking
 }
 
 // agentToolCallOutput is the output of executeAgentToolCall.
 type agentToolCallOutput struct {
-	msg                  interfaces.Message
-	failed               bool // true: hard err or ExecuteTool err
-	streamingUnavailable bool
+	msg    interfaces.Message
+	failed bool // true: hard err or ExecuteTool err
 }
 
 // agentToolResult is one tool outcome collected for the conversation and telemetry.
@@ -269,15 +252,16 @@ type AgentToolExecuteInput struct {
 	MemoryScope      interfaces.MemoryScope `json:"memory_scope,omitempty"`
 }
 
+// AgentToolApprovalInput is the input to AgentToolApprovalActivity.
+// StreamWorkflowID is the workflow whose WorkflowStream receives the approval event;
+// the activity publishes it via workflowstreams so the client can display the approval request.
 type AgentToolApprovalInput struct {
 	AgentName        string         `json:"agent_name"`
 	ToolCallID       string         `json:"tool_call_id"`
 	ToolName         string         `json:"tool_name"`
 	ToolDisplayName  string         `json:"tool_display_name,omitempty"`
 	Args             map[string]any `json:"args"`
-	EventWorkflowID  string         `json:"event_workflow_id"`
-	EventTaskQueue   string         `json:"event_task_queue,omitempty"`
-	LocalChannelName string         `json:"local_channel_name,omitempty"`
+	StreamWorkflowID string         `json:"stream_workflow_id"`
 	SubAgentName     string         `json:"sub_agent_name,omitempty"`
 	AgentFingerprint string         `json:"agent_fingerprint,omitempty"`
 }
@@ -294,14 +278,6 @@ type AgentToolAuthorizeResult struct {
 	Reason  string `json:"reason,omitempty"`
 }
 
-// SendAgentEventActivityInput is the payload for SendAgentEventUpdateActivity (workflow + activity).
-type SendAgentEventActivityInput struct {
-	EventWorkflowID string                `json:"event_workflow_id,omitempty"`
-	EventTaskQueue  string                `json:"event_task_queue,omitempty"`
-	EventType       events.AgentEventType `json:"event_type"`
-	Update          *AgentEventUpdate     `json:"update"`
-}
-
 // AddConversationMessagesInput is the input to AddConversationMessagesActivity.
 type AddConversationMessagesInput struct {
 	ConversationID   string               `json:"conversation_id,omitempty"`
@@ -309,11 +285,23 @@ type AddConversationMessagesInput struct {
 	AgentFingerprint string               `json:"agent_fingerprint,omitempty"`
 }
 
+// PublishStreamEventInput is the activity input for PublishStreamEventActivity.
+// StreamWorkflowID is the Temporal workflow ID whose WorkflowStream should receive the event.
+type PublishStreamEventInput struct {
+	StreamWorkflowID string          `json:"stream_workflow_id"`
+	EventJSON        json.RawMessage `json:"event_json"`
+}
+
 // AgentWorkflow runs the agent loop: LLM → tool calls → approval/execute → feed results back to LLM → repeat.
 // Stops when LLM returns no tool calls, or max iterations reached.
-// When Input.EventWorkflowID is set, sends agent events and approval requests to the event workflow.
+//
+// When input.RootWorkflowID is empty, this is the root workflow: it creates a WorkflowStream and publishes
+// all agent events directly to it (no activity overhead). When non-empty, this is a sub-agent: events are
+// forwarded to the root's stream via PublishStreamEventActivity.
+//
 // ContinueAsNew: when workflow history length or size (GetInfo) exceeds agentWorkflowHistory*, after tool
-// results are merged into messages for that iteration; carries AgentWorkflowState (iteration + messages) forward.
+// results are merged into messages for that iteration. The root workflow detaches the stream's pollers,
+// waits for all handlers to finish, captures the stream state, and carries it forward in StreamState.
 func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkflowInput) (*types.AgentRunResult, error) {
 	logger := workflow.GetLogger(ctx)
 	logger.Info("workflow: agent run started", "scope", "workflow")
@@ -323,13 +311,44 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 			"routeCount", n,
 			"subAgentDepth", input.SubAgentDepth)
 	}
-	eventWorkflowID := input.EventWorkflowID
-	eventTaskQueue := input.EventTaskQueue
+
 	agentName := rt.AgentSpec.Name
 	model := rt.AgentConfig.LLM.Client.GetModel()
-
 	maxIter := rt.AgentConfig.Limits.MaxIterations
 	policies := rt.executionPolicies()
+
+	// isRoot indicates this is the top-level workflow that owns the WorkflowStream.
+	isRoot := input.RootWorkflowID == ""
+
+	// streamWorkflowID is the Temporal workflow ID of the WorkflowStream that all events route to.
+	// For root workflows: own ID. For sub-agents: the root's ID (passed in from the parent).
+	var streamWorkflowID string
+	if isRoot {
+		streamWorkflowID = workflow.GetInfo(ctx).WorkflowExecution.ID
+	} else {
+		streamWorkflowID = input.RootWorkflowID
+	}
+
+	// stream is the root workflow's event log; nil for sub-agents (they publish to the root's stream).
+	var stream *workflowstreams.WorkflowStream
+	if isRoot {
+		var err error
+		stream, err = workflowstreams.NewWorkflowStream(ctx, input.StreamState)
+		if err != nil {
+			return nil, fmt.Errorf("workflow: create stream: %w", err)
+		}
+	}
+
+	// pendingApprovals tracks in-flight AgentToolApprovalActivity invocations (ToolCallID → meta).
+	// Exposed via QueryIsApprovalPending so the reconnect forwarder can skip already-resolved
+	// CUSTOM approval events without re-prompting the user.
+	pendingApprovals := make(map[string]*pendingApproval)
+	if err := workflow.SetQueryHandler(ctx, QueryIsApprovalPending, func(toolCallID string) (bool, error) {
+		_, ok := pendingApprovals[toolCallID]
+		return ok, nil
+	}); err != nil {
+		return nil, fmt.Errorf("workflow: register %s query handler: %w", QueryIsApprovalPending, err)
+	}
 
 	var activityIDSuffix string
 	err := workflow.SideEffect(ctx, func(ctx workflow.Context) interface{} {
@@ -339,21 +358,55 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 		return nil, err
 	}
 
+	// On cancel (or other exit) while approvals are still pending, complete those async activities
+	// so they do not stay Pending until StartToClose. Uses a disconnected context so cleanup
+	// is not cancelled with the workflow. Entries are left in pendingApprovals on cancel
+	// (see executeAgentToolCall) so this defer still sees them.
+	defer func() {
+		ids := pendingApprovalActivityIDs(pendingApprovals)
+		if len(ids) == 0 {
+			return
+		}
+		disconnectedCtx, _ := workflow.NewDisconnectedContext(ctx)
+		cleanupCtx := workflow.WithActivityOptions(disconnectedCtx, workflow.ActivityOptions{
+			ActivityID:          "AgentWorkflowCleanupActivity_" + activityIDSuffix,
+			StartToCloseTimeout: agentWorkflowCleanupActivityTaskTimeout,
+			RetryPolicy:         retryPolicy(agentWorkflowCleanupActivityMaxAttempts),
+		})
+		if cleanupErr := workflow.ExecuteActivity(cleanupCtx, rt.AgentWorkflowCleanupActivity, AgentWorkflowCleanupInput{
+			ApprovalActivityIDs: ids,
+		}).Get(cleanupCtx, nil); cleanupErr != nil {
+			logger.Warn("workflow: cleanup activity failed",
+				"scope", "workflow",
+				"pendingApprovalCount", len(ids),
+				"error", cleanupErr)
+		}
+	}()
+
 	llmActCtx := workflow.WithActivityOptions(ctx, execActivityOptions(policies.LLM, "AgentLLMActivity_"+activityIDSuffix, false))
 	streamActCtx := workflow.WithActivityOptions(ctx, execActivityOptions(policies.LLM, "AgentLLMStreamActivity_"+activityIDSuffix, true))
 
-	sendEventCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		ActivityID:          "SendAgentEventUpdateActivity_" + activityIDSuffix,
-		StartToCloseTimeout: sendEventActivityTaskTimeout,
-		RetryPolicy:         retryPolicy(sendEventActivityMaxAttempts),
-	})
+	// publishEventActCtx is used by sub-agent workflows to forward events to the root stream.
+	// ActivityID is intentionally empty: Temporal auto-assigns unique IDs, which is safe for
+	// concurrent coroutines (parallel tool branches each emit events independently).
+	var publishEventActCtx workflow.Context
+	if !isRoot {
+		publishEventActCtx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+			StartToCloseTimeout: publishStreamEventActivityTaskTimeout,
+			RetryPolicy:         retryPolicy(1), // single attempt; event loss is acceptable
+		})
+	}
+
 	convCtx := workflow.WithActivityOptions(ctx, execActivityOptions(policies.Conversation, "ConversationActivity_"+activityIDSuffix, false))
 	retrieverActCtx := workflow.WithActivityOptions(ctx, execActivityOptions(policies.Retriever, "AgentRetrieverActivity_"+activityIDSuffix, false))
 	memoryActCtx := workflow.WithActivityOptions(ctx, execActivityOptions(policies.Memory, "AgentMemoryActivity_"+activityIDSuffix, false))
 
-	var streamingUnavailable bool
-	// emitAgentEvent must use wfCtx (the coroutine that calls Get) for ExecuteActivity().Get — not the root
-	// workflow ctx — or parallel tool branches panic: "wrong Context is used to do blocking call".
+	// emitAgentEvent publishes one event to the stream.
+	// Root workflow: direct in-memory append (zero activity overhead).
+	// Sub-agent workflow: delegates to PublishStreamEventActivity (one Temporal activity per event).
+	//
+	// EventTypes acts as a publish filter: if empty (non-streaming, no approval) no events are emitted.
+	// ["*"] emits all event types; a specific list emits only the listed types.
 	emitAgentEvent := func(wfCtx workflow.Context, ev events.AgentEvent) error {
 		if ev == nil {
 			return nil
@@ -362,16 +415,9 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 		if len(eventTypes) == 0 {
 			return nil
 		}
-		if streamingUnavailable {
-			return nil
-		}
 		emit := false
 		for _, et := range eventTypes {
-			if et == events.AgentEventAll {
-				emit = true
-				break
-			}
-			if et == ev.Type() {
+			if et == events.AgentEventAll || et == ev.Type() {
 				emit = true
 				break
 			}
@@ -380,25 +426,14 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 			return nil
 		}
 		eventBytes, _ := ev.ToJSON()
-		upd := &AgentEventUpdate{
-			AgentName:        agentName,
-			LocalChannelName: input.LocalChannelName,
-			EventJSON:        json.RawMessage(eventBytes),
+		if isRoot {
+			return stream.Topic(streamTopicEvents).Publish(json.RawMessage(eventBytes))
 		}
-		var res SendAgentEventResult
-		actIn := SendAgentEventActivityInput{
-			EventWorkflowID: eventWorkflowID,
-			EventTaskQueue:  eventTaskQueue,
-			EventType:       ev.Type(),
-			Update:          upd,
-		}
-		if err := workflow.ExecuteActivity(sendEventCtx, rt.SendAgentEventUpdateActivity, actIn).Get(wfCtx, &res); err != nil {
-			return err
-		}
-		if res.StreamUnavailable {
-			streamingUnavailable = true
-		}
-		return nil
+		// Sub-agent: forward to root stream via activity.
+		return workflow.ExecuteActivity(publishEventActCtx, rt.PublishStreamEventActivity, PublishStreamEventInput{
+			StreamWorkflowID: streamWorkflowID,
+			EventJSON:        eventBytes,
+		}).Get(wfCtx, nil)
 	}
 
 	useStreaming := input.StreamingEnabled && rt.AgentConfig.LLM.Client.IsStreamSupported()
@@ -481,9 +516,7 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 			MessageID:        messageID,
 			RunID:            input.RunID,
 			Iteration:        iter,
-			EventWorkflowID:  eventWorkflowID,
-			EventTaskQueue:   eventTaskQueue,
-			LocalChannelName: input.LocalChannelName,
+			StreamWorkflowID: streamWorkflowID,
 			MemoryContext:    memoryContext,
 			RetrieverContext: retrieverContext,
 		}
@@ -501,6 +534,7 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 		}
 
 		telemetry.Run.TotalLLMCalls++
+		telemetry.Run.LLMRetryCount += int64(llmResult.RetryCount)
 		llmUsage = base.MergeLLMUsage(llmUsage, llmResult.Usage)
 
 		if len(llmResult.ToolCalls) == 0 {
@@ -512,11 +546,13 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 
 		if iter == maxIter-1 {
 			logger.Info("workflow: max iterations reached, final LLM round without tools", "scope", "workflow", "iteration", iter)
+			// Fresh messageID so the final SkipTools round does not reuse the tool-calls
+			// round's ID (stream consumers / staleMessageIDs treat START after END as a new attempt).
+			llmInput.MessageID = uuid.New().String()
+			llmInput.SkipTools = true
 			if useStreaming {
-				llmInput.SkipTools = true
 				err = workflow.ExecuteActivity(streamActCtx, rt.AgentLLMStreamActivity, llmInput).Get(streamActCtx, &llmResult)
 			} else {
-				llmInput.SkipTools = true
 				err = workflow.ExecuteActivity(llmActCtx, rt.AgentLLMActivity, llmInput).Get(llmActCtx, &llmResult)
 			}
 			if err != nil {
@@ -582,8 +618,9 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 							"toolName", tc.ToolName,
 							"toolCallID", tc.ToolCallID)
 						slot := strconv.Itoa(i)
-						parallelInput := rt.newAgentToolCallInput(gCtx, input, activityIDSuffix, messageID, iter, emitAgentEvent, slot)
-						toolOutput, runErr := rt.executeAgentToolCall(parallelInput, tc, streamingUnavailable)
+						parallelInput := rt.newAgentToolCallInput(gCtx, input, activityIDSuffix, messageID, iter, streamWorkflowID, emitAgentEvent, slot)
+						parallelInput.pendingApprovals = pendingApprovals
+						toolOutput, runErr := rt.executeAgentToolCall(parallelInput, tc)
 						if runErr != nil {
 							gLog.Debug("workflow: parallel tool branch finished with error",
 								"scope", "workflow",
@@ -594,7 +631,6 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 							settable.Set(nil, runErr)
 							return
 						}
-						// executeAgentToolCall returns (nil, err) or (non-nil *agentToolCallOutput, nil) only.
 						gLog.Debug("workflow: parallel tool branch finished ok",
 							"scope", "workflow",
 							"toolIndex", i,
@@ -631,14 +667,10 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 							"scope", "workflow",
 							"toolIndex", i,
 							"toolName", tc.ToolName,
-							"toolCallID", tc.ToolCallID,
-							"streamingUnavailable", v.streamingUnavailable)
+							"toolCallID", tc.ToolCallID)
 						toolResults[i] = agentToolResult{
 							message: v.msg,
 							failed:  v.failed,
-						}
-						if v.streamingUnavailable {
-							streamingUnavailable = true
 						}
 					}
 				}
@@ -649,7 +681,8 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 					"scope", "workflow",
 					"executionMode", string(types.AgentToolExecutionModeSequential),
 					"toolCount", len(llmResult.ToolCalls))
-				toolInput := rt.newAgentToolCallInput(ctx, input, activityIDSuffix, messageID, iter, emitAgentEvent, "")
+				toolInput := rt.newAgentToolCallInput(ctx, input, activityIDSuffix, messageID, iter, streamWorkflowID, emitAgentEvent, "")
+				toolInput.pendingApprovals = pendingApprovals
 				toolResults = make([]agentToolResult, len(llmResult.ToolCalls))
 				for i, tc := range llmResult.ToolCalls {
 					logger.Debug("workflow: sequential tool executing",
@@ -658,7 +691,7 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 						"toolName", tc.ToolName,
 						"toolCallID", tc.ToolCallID,
 						"toolCount", len(llmResult.ToolCalls))
-					toolOutput, runErr := rt.executeAgentToolCall(toolInput, tc, streamingUnavailable)
+					toolOutput, runErr := rt.executeAgentToolCall(toolInput, tc)
 					if runErr != nil {
 						logger.Info("workflow: sequential tool failed",
 							"scope", "workflow",
@@ -677,15 +710,11 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 						}
 						continue
 					}
-					if toolOutput.streamingUnavailable {
-						streamingUnavailable = true
-					}
 					logger.Debug("workflow: sequential tool completed",
 						"scope", "workflow",
 						"toolIndex", i,
 						"toolName", tc.ToolName,
-						"toolCallID", tc.ToolCallID,
-						"streamingUnavailable", toolOutput.streamingUnavailable)
+						"toolCallID", tc.ToolCallID)
 					toolResults[i] = agentToolResult{
 						message: toolOutput.msg,
 						failed:  toolOutput.failed,
@@ -743,6 +772,22 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 				"historySizeBytesLimit", agentWorkflowHistorySizeBytes,
 			)
 
+			// Root workflow: detach stream pollers, wait for all handlers, capture stream state.
+			// This ensures in-flight subscribers receive all items before the new run takes over.
+			if isRoot {
+				stream.DetachPollers()
+				if awaitErr := workflow.Await(ctx, func() bool {
+					return workflow.AllHandlersFinished(ctx)
+				}); awaitErr != nil {
+					return nil, awaitErr
+				}
+				streamState, stErr := stream.GetState(streamPublisherTTL)
+				if stErr != nil {
+					return nil, fmt.Errorf("workflow: stream get state for CAN: %w", stErr)
+				}
+				input.StreamState = streamState
+			}
+
 			input.State = &AgentWorkflowState{
 				Iteration: iter + 1,
 				Messages:  messages,
@@ -784,7 +829,6 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 		}
 	}
 
-	// Log summary only; avoid full content to prevent leaking sensitive data
 	logger.Info("workflow: agent run completed", "scope", "workflow", "contentLen", len(lastContent))
 
 	telemetry.Run.CompletedAt = workflow.Now(ctx)
@@ -794,6 +838,7 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 		AgentName: agentName,
 		Model:     model,
 		Metadata:  map[string]any{},
+		RunID:     input.RunID,
 		LLMUsage:  llmUsage,
 		Telemetry: telemetry,
 	}
@@ -812,6 +857,7 @@ func (rt *TemporalRuntime) newAgentToolCallInput(
 	input AgentWorkflowInput,
 	activityIDSuffix, messageID string,
 	iteration int,
+	streamWorkflowID string,
 	emitAgentEvent func(workflow.Context, events.AgentEvent) error,
 	parallelSlot string,
 ) agentToolCallInput {
@@ -826,35 +872,38 @@ func (rt *TemporalRuntime) newAgentToolCallInput(
 	if parallelSlot != "" {
 		activityScope = activityIDSuffix + "_" + parallelSlot
 	}
+	authorizeActivityID := "AgentToolAuthorizeActivity_" + activityScope
+	approvalActivityID := "AgentToolApprovalActivity_" + activityScope
+	executeActivityID := "AgentToolExecuteActivity_" + activityScope
 	policies := rt.executionPolicies()
 	return agentToolCallInput{
-		wfCtx:     wfCtx,
-		input:     input,
-		messageID: messageID,
-		iteration: iteration,
+		wfCtx:            wfCtx,
+		input:            input,
+		messageID:        messageID,
+		iteration:        iteration,
+		streamWorkflowID: streamWorkflowID,
 		emitEvent: func(ev events.AgentEvent) error {
 			return emitAgentEvent(wfCtx, ev)
 		},
 		authorizeCtx: workflow.WithActivityOptions(wfCtx, execActivityOptions(
-			policies.ToolAuth, "AgentToolAuthorizeActivity_"+activityScope, false)),
+			policies.ToolAuth, authorizeActivityID, false)),
 		approvalCtx: workflow.WithActivityOptions(wfCtx, workflow.ActivityOptions{
-			ActivityID:          "AgentToolApprovalActivity_" + activityScope,
+			ActivityID:          approvalActivityID,
 			StartToCloseTimeout: approvalTaskTimeout,
 			RetryPolicy:         retryPolicy(agentToolApprovalActivityMaxAttempts),
 		}),
-		activityScope: activityScope,
-		policies:      policies,
+		authorizeActivityID: authorizeActivityID,
+		approvalActivityID:  approvalActivityID,
+		executeActivityID:   executeActivityID,
+		policies:            policies,
 	}
 }
 
 // executeAgentToolCall runs authorize → approval → execute or sub-agent delegation for one tool call,
 // emits tool stream events, and returns the tool role message for the conversation.
-// The second return is true when approval returned ApprovalStatusUnavailable (caller should set streamingUnavailable).
-func (rt *TemporalRuntime) executeAgentToolCall(input agentToolCallInput, tc ToolCallRequest, streamingUnavailable bool) (*agentToolCallOutput, error) {
+func (rt *TemporalRuntime) executeAgentToolCall(input agentToolCallInput, tc ToolCallRequest) (*agentToolCallOutput, error) {
 	logger := workflow.GetLogger(input.wfCtx)
 	agentName := rt.AgentSpec.Name
-	eventWorkflowID := input.input.EventWorkflowID
-	eventTaskQueue := input.input.EventTaskQueue
 
 	emitToolEndThenResult := func(toolCallID, content string) error {
 		if emitErr := input.emitEvent(events.NewAgentToolCallEndEvent(toolCallID)); emitErr != nil {
@@ -901,40 +950,52 @@ func (rt *TemporalRuntime) executeAgentToolCall(input agentToolCallInput, tc Too
 				ToolName:   tc.ToolName,
 				ToolCallID: tc.ToolCallID,
 			},
-			failed:               false,
-			streamingUnavailable: false,
 		}, nil
 	}
 
 	approvalStatus := types.ApprovalStatusApproved
-	markStreamingUnavailable := false
 	if tc.NeedsApproval {
 		logger.Info("workflow: tool requires approval", "scope", "workflow", "toolName", tc.ToolName, "argCount", len(tc.Args))
-		if streamingUnavailable {
-			approvalStatus = types.ApprovalStatusUnavailable
-		} else {
-			var status types.ApprovalStatus
-			approvalInput := AgentToolApprovalInput{
-				AgentName:        agentName,
-				ToolCallID:       tc.ToolCallID,
-				ToolName:         tc.ToolName,
-				ToolDisplayName:  tc.ToolDisplayName,
-				Args:             tc.Args,
-				EventWorkflowID:  eventWorkflowID,
-				EventTaskQueue:   eventTaskQueue,
-				LocalChannelName: input.input.LocalChannelName,
-				AgentFingerprint: input.input.AgentFingerprint,
+		var status types.ApprovalStatus
+		approvalInput := AgentToolApprovalInput{
+			AgentName:        agentName,
+			ToolCallID:       tc.ToolCallID,
+			ToolName:         tc.ToolName,
+			ToolDisplayName:  tc.ToolDisplayName,
+			Args:             tc.Args,
+			StreamWorkflowID: input.streamWorkflowID,
+			AgentFingerprint: input.input.AgentFingerprint,
+		}
+		if route, ok := input.input.SubAgentRoutes[tc.ToolName]; ok {
+			approvalInput.SubAgentName = route.Name
+		}
+		// Track this approval as pending so QueryIsApprovalPending reflects the current state.
+		// Events/reconnect subscribers query this to skip CUSTOM events for already-resolved approvals.
+		if input.pendingApprovals != nil {
+			input.pendingApprovals[tc.ToolCallID] = &pendingApproval{
+				ActivityID: input.approvalActivityID,
 			}
-			if route, ok := input.input.SubAgentRoutes[tc.ToolName]; ok {
-				approvalInput.SubAgentName = route.Name
-			}
-			if err := workflow.ExecuteActivity(input.approvalCtx, rt.AgentToolApprovalActivity, approvalInput).Get(input.approvalCtx, &status); err != nil {
+		}
+		err := workflow.ExecuteActivity(input.approvalCtx, rt.AgentToolApprovalActivity, approvalInput).Get(input.approvalCtx, &status)
+		// Keep the map entry on cancel so AgentWorkflow's defer cleanup can CompleteActivityByID.
+		// Delete on success, timeout, or other non-cancel errors (activity already terminal or unused).
+		if input.pendingApprovals != nil && !temporal.IsCanceledError(err) {
+			delete(input.pendingApprovals, tc.ToolCallID)
+		}
+		if err != nil {
+			// StartToClose timeout (ApprovalTimeout): skip the tool via switch below.
+			if temporal.IsTimeoutError(err) {
+				logger.Warn("workflow: approval timed out, continuing without running the tool",
+					"scope", "workflow", "toolName", tc.ToolName, "toolCallID", tc.ToolCallID, "error", err)
+				approvalStatus = types.ApprovalStatusTimedOut
+			} else {
 				return nil, err
 			}
+		} else {
 			approvalStatus = status
-			if approvalStatus == types.ApprovalStatusUnavailable {
-				markStreamingUnavailable = true
-			}
+		}
+		if approvalStatus == types.ApprovalStatusUnavailable {
+			logger.Warn("workflow: approval unavailable, treating as rejected", "scope", "workflow", "toolName", tc.ToolName)
 		}
 	}
 
@@ -972,7 +1033,7 @@ func (rt *TemporalRuntime) executeAgentToolCall(input agentToolCallInput, tc Too
 			}
 			toolPolicy := rt.toolExecutionPolicy(tc.ToolKind, input.policies)
 			execCtx := workflow.WithActivityOptions(input.wfCtx, execActivityOptions(
-				toolPolicy, "AgentToolExecuteActivity_"+input.activityScope, true))
+				toolPolicy, input.executeActivityID, true))
 			errExec := workflow.ExecuteActivity(execCtx, rt.AgentToolExecuteActivity, execInput).Get(execCtx, &result)
 			if errExec != nil {
 				content = "Tool execution failed: " + errExec.Error()
@@ -985,6 +1046,8 @@ func (rt *TemporalRuntime) executeAgentToolCall(input agentToolCallInput, tc Too
 		content = msgToolRejected
 	case types.ApprovalStatusUnavailable:
 		content = msgToolApprovalUnavailable
+	case types.ApprovalStatusTimedOut:
+		content = msgToolApprovalTimedOut
 	default:
 		return nil, fmt.Errorf("workflow: unexpected approval status %q for tool %q", approvalStatus, tc.ToolName)
 	}
@@ -998,8 +1061,7 @@ func (rt *TemporalRuntime) executeAgentToolCall(input agentToolCallInput, tc Too
 			ToolName:   tc.ToolName,
 			ToolCallID: tc.ToolCallID,
 		},
-		failed:               failed,
-		streamingUnavailable: markStreamingUnavailable,
+		failed: failed,
 	}, nil
 }
 
@@ -1028,28 +1090,22 @@ func startLongActivityHeartbeats(ctx context.Context) (stop func()) {
 	}
 }
 
-// publishAgentEventToStream delivers one event to the run’s local stream (event workflow update or in-memory bus).
-func (rt *TemporalRuntime) publishAgentEventToStream(ctx context.Context, agentName, localChannelName, eventWorkflowID, eventTaskQueue string, ev events.AgentEvent) {
-	if ev == nil || strings.TrimSpace(localChannelName) == "" {
-		return
+// newActivityStreamClient creates a workflowstreams client for publishing events from an activity.
+// Returns nil when streamWorkflowID is empty (non-streaming, non-approval run without a stream).
+// The workflow always populates StreamWorkflowID in AgentLLMInput and AgentToolApprovalInput
+// (root → own workflow ID; sub-agent → root workflow ID), so this path is only reached
+// when the activity is invoked outside a workflow context (e.g., standalone tests).
+func (rt *TemporalRuntime) newActivityStreamClient(ctx context.Context, streamWorkflowID string) *workflowstreams.Client {
+	if streamWorkflowID == "" {
+		return nil
 	}
-	eventBytes, _ := ev.ToJSON()
-	upd := &AgentEventUpdate{
-		AgentName:        strings.TrimSpace(agentName),
-		LocalChannelName: localChannelName,
-		EventJSON:        json.RawMessage(eventBytes),
-	}
-	if eventWorkflowID != "" {
-		_ = rt.sendAgentEventWorkflowUpdate(ctx, eventWorkflowID, eventTaskQueue, upd, client.WorkflowUpdateStageAccepted, updateWorkflowEventRPCTimeout)
-	} else if rt.eventbus != nil {
-		data, _ := json.Marshal(ev)
-		_ = rt.eventbus.Publish(ctx, localChannelName, data)
-	}
+	return newStreamClient(rt.temporalClient, streamWorkflowID)
 }
 
 // AgentLLMStreamActivity streams LLM response tokens. Event order: optional reasoning block
 // (REASONING_*), then TEXT_MESSAGE_START → TEXT_MESSAGE_CONTENT* → TEXT_MESSAGE_END.
 // When input.ConversationID is set, fetches messages from conversation and prepends to workflow messages.
+// Events are published to the WorkflowStream via workflowstreams.Client with batched signals.
 func (rt *TemporalRuntime) AgentLLMStreamActivity(ctx context.Context, input AgentLLMInput) (*AgentLLMResult, error) {
 	tools, err := rt.fetchTools(ctx)
 	if err != nil {
@@ -1073,8 +1129,34 @@ func (rt *TemporalRuntime) AgentLLMStreamActivity(ctx context.Context, input Age
 		messages = append(convMessages, messages...)
 	}
 
+	// Create stream client for token-level event publishing.
+	sc := rt.newActivityStreamClient(ctx, input.StreamWorkflowID)
+	if sc != nil {
+		defer func() {
+			// Final flush: ensures any buffered tokens are delivered before the activity returns.
+			if closeErr := sc.Close(ctx); closeErr != nil {
+				actLog.Warn(ctx, "stream flush on activity exit", "error", closeErr)
+			}
+		}()
+
+		// On retry (Attempt > 1), publish a retry signal so the forwarder discards any partial
+		// tokens that the prior failed attempt already delivered to subscribers. Must be sent
+		// before any content events so subscribers can react before new tokens arrive.
+		if info := activity.GetInfo(ctx); info.Attempt > 1 && input.MessageID != "" {
+			actLog.Warn(ctx, "activity: LLM stream retrying, signalling stale token discard",
+				"scope", "activity", "messageID", input.MessageID, "attempt", info.Attempt)
+			retryBytes, _ := json.Marshal(streamRetrySignal{MessageID: input.MessageID})
+			sc.Topic(streamTopicRetry).Publish(json.RawMessage(retryBytes), true)
+		}
+	}
+
 	emit := func(ev events.AgentEvent) {
-		rt.publishAgentEventToStream(ctx, agentName, input.LocalChannelName, input.EventWorkflowID, input.EventTaskQueue, ev)
+		if sc == nil || ev == nil {
+			return
+		}
+		eventBytes, _ := ev.ToJSON()
+		// forceFlush=false: batch tokens; the final Close() above flushes the remainder.
+		sc.Topic(streamTopicEvents).Publish(json.RawMessage(eventBytes), false)
 	}
 
 	executeLLMInput := base.ExecuteLLMInput{
@@ -1095,7 +1177,11 @@ func (rt *TemporalRuntime) AgentLLMStreamActivity(ctx context.Context, input Age
 	if err != nil {
 		return nil, err
 	}
-	return baseLLMResultToActivity(result), nil
+	out := baseLLMResultToActivity(result)
+	if attempt := activity.GetInfo(ctx).Attempt; attempt > 1 {
+		out.RetryCount = attempt - 1
+	}
+	return out, nil
 }
 
 // AgentRetrieverActivity runs all configured retrievers in parallel using input.UserPrompt as the query,
@@ -1164,6 +1250,7 @@ func (rt *TemporalRuntime) AgentMemoryStoreActivity(ctx context.Context, input A
 
 // AgentLLMActivity calls the LLM and returns content plus any tool calls.
 // When input.ConversationID is set, fetches from store and adds assistant message on completion.
+// Events (e.g. reasoning) are published to the WorkflowStream when StreamWorkflowID is set.
 func (rt *TemporalRuntime) AgentLLMActivity(ctx context.Context, input AgentLLMInput) (*AgentLLMResult, error) {
 	tools, err := rt.fetchTools(ctx)
 	if err != nil {
@@ -1184,8 +1271,25 @@ func (rt *TemporalRuntime) AgentLLMActivity(ctx context.Context, input AgentLLMI
 		messages = append(convMessages, messages...)
 	}
 
+	sc := rt.newActivityStreamClient(ctx, input.StreamWorkflowID)
+	if sc != nil {
+		defer func() { _ = sc.Close(ctx) }()
+
+		// On retry, discard partial events from the prior failed attempt on the subscriber side.
+		if info := activity.GetInfo(ctx); info.Attempt > 1 && input.MessageID != "" {
+			actLog.Warn(ctx, "activity: LLM retrying, signalling stale token discard",
+				"scope", "activity", "messageID", input.MessageID, "attempt", info.Attempt)
+			retryBytes, _ := json.Marshal(streamRetrySignal{MessageID: input.MessageID})
+			sc.Topic(streamTopicRetry).Publish(json.RawMessage(retryBytes), true)
+		}
+	}
+
 	emit := func(ev events.AgentEvent) {
-		rt.publishAgentEventToStream(ctx, agentName, input.LocalChannelName, input.EventWorkflowID, input.EventTaskQueue, ev)
+		if sc == nil || ev == nil {
+			return
+		}
+		eventBytes, _ := ev.ToJSON()
+		sc.Topic(streamTopicEvents).Publish(json.RawMessage(eventBytes), true)
 	}
 
 	executeLLMInput := base.ExecuteLLMInput{
@@ -1206,26 +1310,72 @@ func (rt *TemporalRuntime) AgentLLMActivity(ctx context.Context, input AgentLLMI
 	if err != nil {
 		return nil, err
 	}
-	return baseLLMResultToActivity(result), nil
+	out := baseLLMResultToActivity(result)
+	if attempt := activity.GetInfo(ctx).Attempt; attempt > 1 {
+		out.RetryCount = attempt - 1
+	}
+	return out, nil
+}
+
+// AgentWorkflowCleanupActivity cancels leftover pending approval activities by ID.
+// Invoked from AgentWorkflow defer via a disconnected context when the workflow exits with
+// pendingApprovals still populated (typically cancel while waiting for user approval).
+// Already-resolved / not-found activities are ignored; other errors are returned for retry.
+func (rt *TemporalRuntime) AgentWorkflowCleanupActivity(ctx context.Context, input AgentWorkflowCleanupInput) error {
+	if len(input.ApprovalActivityIDs) == 0 {
+		return nil
+	}
+	if rt.temporalClient == nil {
+		return fmt.Errorf("activity: AgentWorkflowCleanupActivity requires a Temporal client")
+	}
+	info := activity.GetInfo(ctx)
+	logger := activity.GetLogger(ctx)
+	for _, activityID := range input.ApprovalActivityIDs {
+		if activityID == "" {
+			continue
+		}
+		// CompleteActivityByID with CanceledError reports activity task canceled (not Rejected).
+		err := rt.temporalClient.CompleteActivityByID(
+			ctx,
+			info.Namespace,
+			info.WorkflowExecution.ID,
+			info.WorkflowExecution.RunID,
+			activityID,
+			nil,
+			temporal.NewCanceledError("workflow cancelled while approval pending"),
+		)
+		if err != nil {
+			if isNotFoundError(err) {
+				logger.Debug("activity: cleanup approval already resolved",
+					"scope", "activity",
+					"activityID", activityID)
+				continue
+			}
+			return fmt.Errorf("activity: cleanup CompleteActivityByID %q: %w", activityID, err)
+		}
+		logger.Debug("activity: cleanup cancelled pending approval",
+			"scope", "activity",
+			"activityID", activityID)
+	}
+	return nil
 }
 
 // AgentToolApprovalActivity blocks until the driver completes it via CompleteActivity.
-// Publishes a CUSTOM (tool_approval / delegation) event to the local agent_event channel (Run and Stream).
-// When EventWorkflowID is set, UpdateWorkflow uses WorkflowUpdateStageCompleted and updateWorkflowApprovalRPCTimeout
-// so the event handler has returned before ErrResultPending; RPC timeout maps to ApprovalStatusUnavailable.
+// Publishes a CUSTOM (tool_approval / delegation) event to the WorkflowStream so the client
+// can display the approval UI and call OnApproval with the task token.
+// StreamWorkflowID is the workflow whose stream receives the approval event (root or sub-agent root).
 func (rt *TemporalRuntime) AgentToolApprovalActivity(ctx context.Context, input AgentToolApprovalInput) (types.ApprovalStatus, error) {
 	if err := rt.verifyAgentFingerprint(ctx, input.AgentFingerprint, nil); err != nil {
 		return types.ApprovalStatusNone, err
 	}
 	logger := activity.GetLogger(ctx)
-	logger.Debug("activity: tool approval started", "scope", "activity", "tool", input.ToolName, "remoteEventPipeline", input.EventWorkflowID != "")
+	logger.Debug("activity: tool approval started", "scope", "activity", "tool", input.ToolName)
 
 	info := activity.GetInfo(ctx)
 	taskTokenB64 := base64.StdEncoding.EncodeToString(info.TaskToken)
 
 	agentEventName := events.AgentCustomEventNameToolApproval
-	subAgentName := input.SubAgentName
-	if subAgentName != "" {
+	if input.SubAgentName != "" {
 		agentEventName = events.AgentCustomEventNameSubAgentDelegation
 	}
 
@@ -1247,78 +1397,40 @@ func (rt *TemporalRuntime) AgentToolApprovalActivity(ctx context.Context, input 
 		logger.Debug("activity: approval is sub-agent delegation",
 			"scope", "activity",
 			"tool", input.ToolName,
-			"subAgent", subAgentName,
+			"subAgent", input.SubAgentName,
 			"mainAgent", rt.AgentSpec.Name)
 		ev = events.NewAgentCustomEvent(string(agentEventName), events.AgentCustomEventDelegationValue{
 			AgentName:     input.AgentName,
-			SubAgentName:  subAgentName,
+			SubAgentName:  input.SubAgentName,
+			ToolCallID:    input.ToolCallID,
 			Args:          input.Args,
 			ApprovalToken: taskTokenB64,
 		})
 	}
 
-	// Route via event workflow when eventWorkflowID is set (TemporalRuntime.enableRemoteWorkers)
-	if input.EventWorkflowID != "" {
-		eventBytes, _ := ev.ToJSON()
-		upd := &AgentEventUpdate{
-			AgentName:        rt.AgentSpec.Name,
-			LocalChannelName: input.LocalChannelName,
-			EventJSON:        json.RawMessage(eventBytes),
-		}
-		if err := rt.sendAgentEventWorkflowUpdate(ctx, input.EventWorkflowID, input.EventTaskQueue, upd, client.WorkflowUpdateStageCompleted, updateWorkflowApprovalRPCTimeout); err != nil {
-			return types.ApprovalStatusUnavailable, nil
-		}
-		logger.Debug("activity: approval sent to event pipeline", "scope", "activity", "eventPipelineID", input.EventWorkflowID, "tool", input.ToolName)
-	} else {
-		if rt.eventbus == nil {
-			return types.ApprovalStatusNone, fmt.Errorf("agentChannel required when eventWorkflowID is empty")
-		}
-		data, err := json.Marshal(ev)
-		if err != nil {
-			return types.ApprovalStatusNone, err
-		}
-		if err := rt.eventbus.Publish(ctx, input.LocalChannelName, data); err != nil {
-			return types.ApprovalStatusUnavailable, nil
-		}
-		logger.Debug("activity: approval published to local channel", "scope", "activity", "channel", input.LocalChannelName, "tool", input.ToolName)
+	eventBytes, err := ev.ToJSON()
+	if err != nil {
+		return types.ApprovalStatusNone, fmt.Errorf("activity: marshal approval event: %w", err)
 	}
-	logger.Debug("activity: approval pending driver completion", "scope", "activity", "tool", input.ToolName)
+
+	// Publish the approval event to the stream so the subscriber (client) can display the approval UI.
+	sc := rt.newActivityStreamClient(ctx, input.StreamWorkflowID)
+	if sc == nil {
+		return types.ApprovalStatusUnavailable, nil
+	}
+	// forceFlush=true: approval events must reach the subscriber immediately so the user sees the prompt.
+	sc.Topic(streamTopicEvents).Publish(json.RawMessage(eventBytes), true)
+	if closeErr := sc.Close(ctx); closeErr != nil {
+		// Flush failed: the approval event may not reach the subscriber.
+		// Return Unavailable so the workflow skips approval rather than hanging indefinitely.
+		logger.Warn("activity: approval event flush failed, returning unavailable",
+			"scope", "activity", "tool", input.ToolName, "error", closeErr)
+		return types.ApprovalStatusUnavailable, nil
+	}
+
+	logger.Debug("activity: approval event published, pending driver completion",
+		"scope", "activity", "tool", input.ToolName)
 	return types.ApprovalStatusPending, activity.ErrResultPending
-}
-
-// SendAgentEventUpdateActivity sends event: via UpdateWithStartWorkflow when eventWorkflowID is set; else in-memory agentChannel.
-// Returns StreamUnavailable without error when delivery fails but the workflow should continue (dead stream / pipeline).
-// Returns a non-nil error for configuration or internal failures (fatal to the workflow).
-func (rt *TemporalRuntime) SendAgentEventUpdateActivity(ctx context.Context, in SendAgentEventActivityInput) (SendAgentEventResult, error) {
-	logger := activity.GetLogger(ctx)
-	upd := in.Update
-	logger.Debug("activity: send event update started", "scope", "activity", "eventPipelineID", in.EventWorkflowID)
-
-	if upd == nil || upd.EventJSON == nil {
-		return SendAgentEventResult{}, nil
-	}
-
-	if upd.EventJSON != nil {
-		logger.Debug("activity: send event update", "scope", "activity", "eventType", string(in.EventType), "agent", upd.AgentName)
-	}
-
-	// Route via event workflow when eventWorkflowID is set (TemporalRuntime.enableRemoteWorkers)
-	if in.EventWorkflowID != "" {
-		if err := rt.sendAgentEventWorkflowUpdate(ctx, in.EventWorkflowID, in.EventTaskQueue, upd, client.WorkflowUpdateStageAccepted, updateWorkflowEventRPCTimeout); err != nil {
-			return SendAgentEventResult{StreamUnavailable: true}, nil
-		}
-		logger.Debug("activity: event sent to pipeline", "scope", "activity", "eventPipelineID", in.EventWorkflowID, "agent", upd.AgentName)
-	} else {
-		if rt.eventbus == nil {
-			return SendAgentEventResult{}, fmt.Errorf("agentChannel required when eventWorkflowID is empty")
-		}
-		if err := rt.eventbus.Publish(ctx, upd.LocalChannelName, []byte(upd.EventJSON)); err != nil {
-			return SendAgentEventResult{StreamUnavailable: true}, nil
-		}
-		logger.Debug("activity: event sent to local channel", "scope", "activity", "channel", upd.LocalChannelName, "agent", upd.AgentName)
-	}
-	logger.Debug("activity: send event update completed", "scope", "activity", "agent", upd.AgentName)
-	return SendAgentEventResult{}, nil
 }
 
 // AddConversationMessagesActivity adds messages to the conversation memory.
@@ -1400,6 +1512,33 @@ func (rt *TemporalRuntime) AgentToolAuthorizeActivity(ctx context.Context, input
 	return AgentToolAuthorizeResult{Allowed: authResult.Allowed, Reason: authResult.Reason}, nil
 }
 
+// PublishStreamEventActivity publishes one agent event to a remote WorkflowStream.
+// Used by sub-agent workflows to forward their events to the root workflow's stream so that
+// the subscribing client sees a unified event sequence across the delegation tree.
+// A new workflowstreams.Client is created per call with forceFlush=true to deliver immediately;
+// the overhead is comparable to the prior SendAgentEventUpdateActivity approach.
+func (rt *TemporalRuntime) PublishStreamEventActivity(ctx context.Context, in PublishStreamEventInput) error {
+	if len(in.EventJSON) == 0 || in.StreamWorkflowID == "" {
+		return nil
+	}
+	logger := activity.GetLogger(ctx)
+	evType, _ := events.EventTypeFromJSON(in.EventJSON)
+	logger.Debug("activity: publish stream event", "scope", "activity",
+		"streamWorkflowID", in.StreamWorkflowID, "eventType", evType)
+
+	sc := newStreamClient(rt.temporalClient, in.StreamWorkflowID)
+	// forceFlush=true sends immediately without waiting for the batch interval.
+	sc.Topic(streamTopicEvents).Publish(json.RawMessage(in.EventJSON), true)
+	if err := sc.Close(ctx); err != nil {
+		logger.Warn("activity: publish stream event flush failed", "scope", "activity",
+			"streamWorkflowID", in.StreamWorkflowID, "eventType", evType, "error", err)
+		// Non-fatal: event loss is preferable to failing the workflow tool round.
+	}
+	return nil
+}
+
+// delegateToSubAgent runs a child AgentWorkflow for one sub-agent tool call and returns its text content.
+// RootWorkflowID is propagated so the child workflow's events reach the root's WorkflowStream.
 func (rt *TemporalRuntime) delegateToSubAgent(ctx workflow.Context, input AgentWorkflowInput, tc ToolCallRequest, route SubAgentRoute, emitEvent func(events.AgentEvent) error) (string, error) {
 	logger := workflow.GetLogger(ctx)
 	if strings.TrimSpace(route.TaskQueue) == "" {
@@ -1434,12 +1573,18 @@ func (rt *TemporalRuntime) delegateToSubAgent(ctx workflow.Context, input AgentW
 		return "", err
 	}
 
+	// rootWorkflowIDForChild is the stream owner for the child's events.
+	// If this (the parent) is the root, use the own workflow ID.
+	// If this is already a sub-agent, propagate its root ID unchanged.
+	rootWorkflowIDForChild := input.RootWorkflowID
+	if rootWorkflowIDForChild == "" {
+		rootWorkflowIDForChild = workflow.GetInfo(ctx).WorkflowExecution.ID
+	}
+
 	childInput := AgentWorkflowInput{
 		UserPrompt:       query,
 		RunID:            childSuffix,
-		EventWorkflowID:  input.EventWorkflowID,
-		EventTaskQueue:   input.EventTaskQueue,
-		LocalChannelName: input.LocalChannelName,
+		RootWorkflowID:   rootWorkflowIDForChild,
 		StreamingEnabled: input.StreamingEnabled,
 		ConversationID:   "",
 		AgentFingerprint: route.AgentFingerprint,
@@ -1447,6 +1592,7 @@ func (rt *TemporalRuntime) delegateToSubAgent(ctx workflow.Context, input AgentW
 		MemoryScope:      base.SubAgentScope(input.MemoryScope, subAgentID),
 		SubAgentDepth:    input.SubAgentDepth + 1,
 		SubAgentRoutes:   route.ChildRoutes,
+		MaxSubAgentDepth: input.MaxSubAgentDepth,
 	}
 
 	parentID := workflow.GetInfo(ctx).WorkflowExecution.ID
@@ -1557,6 +1703,21 @@ func execActivityOptions(policy agentrt.ExecutionPolicy, activityID string, with
 		opts.HeartbeatTimeout = agentLongActivityHeartbeatTimeout
 	}
 	return opts
+}
+
+// pendingApprovalActivityIDs returns non-empty ActivityIDs from pendingApprovals.
+func pendingApprovalActivityIDs(pendingApprovals map[string]*pendingApproval) []string {
+	if len(pendingApprovals) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(pendingApprovals))
+	for _, p := range pendingApprovals {
+		if p == nil || p.ActivityID == "" {
+			continue
+		}
+		ids = append(ids, p.ActivityID)
+	}
+	return ids
 }
 
 // retryPolicy builds a Temporal *RetryPolicy with SDK default backoff.

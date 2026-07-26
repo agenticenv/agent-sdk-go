@@ -1,5 +1,6 @@
-// agent_with_run_async demonstrates RunAsync: non-blocking result channel with
-// WithApprovalHandler for tool approvals (same as Run).
+// agent_with_nonblocking_run demonstrates non-blocking Agent.Run: start the run,
+// poll AgentRun.Status while waiting, optionally Cancel after a few polls, wait on
+// Done(), then Get. Uses WithApprovalHandler for tools that require approval.
 package main
 
 import (
@@ -10,6 +11,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	config "github.com/agenticenv/agent-sdk-go/examples"
 	"github.com/agenticenv/agent-sdk-go/examples/shared"
@@ -43,8 +45,8 @@ func main() {
 	}()
 
 	opts := []agent.Option{
-		agent.WithName("agent-with-run-async"),
-		agent.WithDescription("RunAsync demo: WithApprovalHandler, outcome on resultCh"),
+		agent.WithName("agent-with-nonblocking-run"),
+		agent.WithDescription("Non-blocking Run demo: Status/Cancel/Done/Get, WithApprovalHandler"),
 		agent.WithSystemPrompt("You are a helpful assistant. Use the echo or calculator tool when asked."),
 		agent.WithLLMClient(llmClient),
 		agent.WithToolRegistry(reg),
@@ -66,24 +68,55 @@ func main() {
 	}
 
 	ctx := context.Background()
-	resultCh, err := a.RunAsync(ctx, prompt, nil)
+
+	// Run returns an AgentRun handle immediately; the work continues in the background.
+	// Persist runID before waiting when crash-durability matters.
+	agentRun, err := a.Run(ctx, prompt, nil)
 	if err != nil {
-		log.Fatalf("RunAsync: %v", err)
+		log.Fatalf("Run: %v", err)
 	}
-
+	runID := agentRun.ID()
 	fmt.Println("user:", prompt)
-	res := <-resultCh
+	fmt.Println(shared.RunIDLine(runID))
 
-	if res.Error != nil {
-		log.Printf("run failed: %v", res.Error)
-		return
+	// Non-blocking pattern: select on Done (or other work), poll Status, optionally Cancel.
+	// Cancelling ctx on Get only unblocks Get — it does not cancel the agent run
+	// (use agentRun.Cancel for that).
+	fmt.Println("waiting for run to finish (Done channel)...")
+	polls := 0
+	cancelled := false
+	for {
+		select {
+		case <-agentRun.Done():
+			result, err := agentRun.Get(ctx)
+			if err != nil {
+				st, _ := agentRun.Status(ctx)
+				log.Printf("run finished with error (status=%s): %v", st, err)
+				return
+			}
+			st, _ := agentRun.Status(ctx)
+			fmt.Printf("agent (status=%s): %s\n", st, result.Content)
+			shared.PrintRunFooters(result)
+			return
+		case <-time.After(5 * time.Second):
+			polls++
+			st, err := agentRun.Status(ctx)
+			if err != nil {
+				log.Printf("Status: %v", err)
+				continue
+			}
+			fmt.Printf("still running (poll %d), status=%s\n", polls, st)
+
+			// After several polls (~30s), demonstrate Cancel — gives time to approve at the prompt first.
+			if !cancelled && polls >= 5 {
+				fmt.Println("cancelling run via AgentRun.Cancel...")
+				if err := agentRun.Cancel(ctx); err != nil {
+					log.Printf("Cancel: %v", err)
+				}
+				cancelled = true
+			}
+		}
 	}
-	if res.Result == nil {
-		log.Print("run finished with no result payload")
-		return
-	}
-	fmt.Println("agent:", res.Result.Content)
-	shared.PrintRunFooters(res.Result)
 }
 
 func makeApprovalHandler(lineCh <-chan string) agent.ApprovalHandler {

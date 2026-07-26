@@ -1,9 +1,9 @@
 ---
 title: "Logs"
-description: "Control stdout and stderr output routing and set LOG_LEVEL across any example"
+description: "Control stdout and stderr output routing with LOG_ENABLE and LOG_LEVEL across any example"
 ---
 
-All examples route user-facing output to **stdout** and SDK internal logs to **stderr**. Control verbosity with `LOG_LEVEL` without changing code.
+All examples route user-facing output to **stdout** and SDK internal logs to **stderr**. SDK logging is off by default (`LOG_ENABLE=false`); set `LOG_ENABLE=true` and `LOG_LEVEL` when debugging.
 
 Source: [`examples/logs/`](https://github.com/agenticenv/agent-sdk-go/tree/main/examples/logs)
 
@@ -12,21 +12,22 @@ Source: [`examples/logs/`](https://github.com/agenticenv/agent-sdk-go/tree/main/
 | Output | Destination |
 |---|---|
 | User prompt and assistant reply | stdout |
-| SDK internal logs | stderr |
+| SDK internal logs | stderr (when `LOG_ENABLE=true`) |
 
 ## Usage
 
 From `examples/`:
 
 ```bash
-LOG_LEVEL=debug go run ./simple_agent "Hello"
-go run ./simple_agent "Hello" 2>debug.log
-go run ./simple_agent "Hello" 2>/dev/null   # suppress SDK logs
+go run ./simple_agent "Hello"                                    # default: no SDK logs
+LOG_ENABLE=true LOG_LEVEL=debug go run ./simple_agent "Hello"    # enable for debugging
+LOG_ENABLE=true LOG_LEVEL=info go run ./simple_agent "Hello" 2>debug.log
 ```
 
 | Variable | Default | Description |
 |---|---|---|
-| `LOG_LEVEL` | `error` | `debug`, `info`, `warn`, `error` |
+| `LOG_ENABLE` | `false` | `false` → `NoopLogger` (no SDK logs); `true` → real logger at `LOG_LEVEL` |
+| `LOG_LEVEL` | `error` | `debug`, `info`, `warn`, `error` — ignored when `LOG_ENABLE=false` |
 
 Optional run footers: `SHOW_LLM_USAGE=true`, `SHOW_TELEMETRY=true` — see [Running Examples](/examples/running-examples).
 

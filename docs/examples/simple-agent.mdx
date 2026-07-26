@@ -10,7 +10,7 @@ Source: [`examples/simple_agent/`](https://github.com/agenticenv/agent-sdk-go/tr
 ## What it demonstrates
 
 - `NewAgent` with `WithLLMClient` and `WithSystemPrompt`
-- Blocking `Run()` returning `AgentRunResult`
+- Blocking `Run()` → `Get()` returning `AgentRunResult`
 - Optional token usage footer via `SHOW_LLM_USAGE=true`
 
 ## Run
@@ -38,7 +38,14 @@ if err != nil {
 }
 defer a.Close()
 
-result, err := a.Run(ctx, prompt, nil)
+agentRun, err := a.Run(ctx, prompt, nil)
+if err != nil {
+    log.Fatal(err)
+}
+result, err := agentRun.Get(ctx)
+if err != nil {
+    log.Fatal(err)
+}
 fmt.Println(result.Content)
 ```
 
@@ -63,6 +70,10 @@ The LLM response varies; the optional usage footer appears only when `SHOW_LLM_U
 
   <Card title="Quickstart" icon="bolt" href="/getting-started/quickstart" horizontal>
     Build an agent in your own module
+  </Card>
+
+  <Card title="Run" icon="play" href="/getting-started/run" horizontal>
+    AgentRun — Get, Done, Status, Cancel
   </Card>
 
   <Card title="Tools" icon="wrench" href="/examples/tools" horizontal>

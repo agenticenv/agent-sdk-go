@@ -38,8 +38,9 @@
             "pages": [
               "getting-started/quickstart",
               "getting-started/llm-providers",
-              "getting-started/streaming",
               "getting-started/configuration",
+              "getting-started/run",
+              "getting-started/streaming",
               "getting-started/cli"
             ]
           },
@@ -73,10 +74,11 @@
           {
             "group": "Advanced",
             "pages": [
+              "advanced/durable-execution",
+              "advanced/distributed-execution",
               "advanced/dynamic-capabilities",
               "advanced/deterministic-execution",
               "advanced/code-execution",
-              "advanced/worker-separation",
               "advanced/multiple-agents",
               "advanced/timeouts-and-modes"
             ]
@@ -126,7 +128,7 @@
             "pages": [
               "examples/simple-agent",
               "examples/temporal-client",
-              "examples/run-async",
+              "examples/nonblocking-run",
               "examples/concurrent-runs",
               "examples/json-response",
               "examples/reasoning"
@@ -191,7 +193,8 @@
             "group": "Durable & Distributed",
             "pages": [
               "examples/durable-agent",
-              "examples/agent-worker"
+              "examples/agent-worker",
+              "examples/reconnect"
             ]
           }
         ]

@@ -5,10 +5,8 @@ package runtime
 
 import (
 	"context"
-	"errors"
 	"time"
 
-	"github.com/agenticenv/agent-sdk-go/internal/eventbus"
 	"github.com/agenticenv/agent-sdk-go/internal/events"
 	"github.com/agenticenv/agent-sdk-go/internal/hooks"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
@@ -16,36 +14,123 @@ import (
 	"github.com/agenticenv/agent-sdk-go/pkg/memory"
 )
 
-//go:generate mockgen -destination=./mocks/mock_runtime.go -package=mocks github.com/agenticenv/agent-sdk-go/internal/runtime Runtime
+//go:generate mockgen -destination=./mocks/mock_runtime.go -package=mocks github.com/agenticenv/agent-sdk-go/internal/runtime Runtime,RunHandle,StreamHandle
 //go:generate mockgen -destination=./mocks/mock_worker_runtime.go -package=mocks github.com/agenticenv/agent-sdk-go/internal/runtime WorkerRuntime
-//go:generate mockgen -destination=./mocks/mock_event_bus_runtime.go -package=mocks github.com/agenticenv/agent-sdk-go/internal/runtime EventBusRuntime
 
-// ErrApprovalNotSupported is returned by Runtime.Approve when the runtime does not use token-based approval.
-var ErrApprovalNotSupported = errors.New("runtime: approval not supported")
-
-// Runtime executes agent runs against a backend.
+// Runtime runs agent workloads against a backend.
+//
+// Per-run lifecycle (status, cancel, wait-for-result, event subscription) lives on the
+// handles returned by [Runtime.Run] / [Runtime.GetRunHandle] and
+// [Runtime.Stream] / [Runtime.GetStreamHandle] — not on Runtime itself.
+// Runtime starts or reconnects to runs, resolves out-of-band approvals, and releases
+// shared resources.
 type Runtime interface {
-	// Execute runs one execution and returns the result. The agent package supplies approval via ExecuteRequest when needed.
-	// Use WithTimeout or a context with deadline to avoid blocking.
-	// When using conversation, pass the conversation ID on the request; agent and worker must use the same ID.
-	// Agent identity lives on the runtime [AgentSpec] configured at construction.
-	Execute(ctx context.Context, req *ExecuteRequest) (*types.AgentRunResult, error)
+	// Run starts one blocking-style agent run and returns a [RunHandle] immediately.
+	// The run continues asynchronously; use [RunHandle.Get] or [RunHandle.Done] to wait for
+	// completion, and [RunHandle.Status]/[RunHandle.Cancel] for lifecycle control.
+	// The runtime mints the run ID exposed by [RunHandle.ID]. When using conversation, set
+	// [RunRequest.ConversationID]; agent and worker must use the same ID. Agent identity
+	// lives on the runtime [AgentSpec] configured at construction. The agent package supplies
+	// approval via [RunRequest] when needed.
+	Run(ctx context.Context, req *RunRequest) (RunHandle, error)
 
-	// ExecuteStream starts the run and returns a channel of AgentEvent. Streams RUN_* lifecycle,
-	// streaming assistant/tool/reasoning events, and CUSTOM approvals until RUN_FINISHED or RUN_ERROR ends the stream.
-	// Delegated workflows may emit their own RUN_FINISHED; semantics for "root" completion are defined in pkg/agent.
-	// After the terminal lifecycle event the channel may stay open briefly, then closes.
-	// For approvals (tool or delegation), receive CUSTOM (AgentEventTypeCustom) events and use the agent
-	// package approval path (e.g. OnApproval with the token from the custom payload).
-	// When using conversation, pass the conversation ID on the request.
-	ExecuteStream(ctx context.Context, req *ExecuteRequest) (<-chan events.AgentEvent, error)
+	// GetRunHandle returns a [RunHandle] for an existing run identified by runID
+	// (e.g. after a process restart). Use this instead of [Runtime.Run] when the run
+	// was already started. Live same-process reuse is handled at the agent layer
+	// (run registry); this method is for runtime-level reconnect.
+	// Returns [ErrRunNotFound] when runID is unknown or the runtime cannot recover
+	// a handle (e.g. LocalRuntime has no durable run tracking).
+	// Returns [ErrRunAlreadyCompleted] when the run has already finished.
+	GetRunHandle(ctx context.Context, runID string) (RunHandle, error)
+
+	// Stream starts one streaming agent run and returns a [StreamHandle] immediately.
+	// It does not subscribe to events; call [StreamHandle.Events] on the returned handle.
+	// The runtime mints the run ID exposed by [StreamHandle.ID]. For approvals (tool or
+	// delegation), subscribe via [StreamHandle.Events] and handle CUSTOM events. When using
+	// conversation, set [RunRequest.ConversationID] on the request.
+	Stream(ctx context.Context, req *RunRequest) (StreamHandle, error)
+
+	// GetStreamHandle returns a [StreamHandle] for an existing streaming run identified by
+	// runID (e.g. after a process restart). Use this instead of [Runtime.Stream]
+	// when the run was already started; then call [StreamHandle.Events] (optionally with
+	// a non-zero fromOffset) to subscribe. Live same-process reuse is handled at the
+	// agent layer (stream registry); this method is for runtime-level reconnect.
+	// Returns [ErrStreamNotFound] when runID is unknown or the runtime cannot recover
+	// a stream handle (e.g. LocalRuntime has no durable stream tracking).
+	// Returns [ErrRunAlreadyCompleted] when the run has already finished.
+	// Returns [ErrStreamOffsetNotSupported] when the runtime cannot replay at the requested offset.
+	GetStreamHandle(ctx context.Context, runID string) (StreamHandle, error)
 
 	// Approve completes a pending tool approval when the runtime uses out-of-band approval
-	// (e.g. Temporal CompleteActivity). Returns ErrApprovalNotSupported if not applicable.
+	// (e.g. Temporal CompleteActivity). Returns [ErrApprovalAlreadyResolved] when the token
+	// was already completed.
 	Approve(ctx context.Context, approvalToken string, status types.ApprovalStatus) error
 
-	// Close closes the runtime and releases resources.
+	// Close releases runtime resources (connections, workers, background goroutines).
 	Close()
+}
+
+// RunHandle is the per-run control surface returned by [Runtime.Run] or
+// [Runtime.GetRunHandle]. Status, Cancel, Get, and Done operate on this run only —
+// callers never pass a runID back into Runtime for those operations.
+type RunHandle interface {
+	// ID returns the unique run identifier, stable across process restarts when the
+	// backend supports reconnect (e.g. Temporal workflow ID).
+	ID() string
+
+	// Status returns the current [types.RunStatus] of this run.
+	// Returns [ErrRunNotFound] when the underlying run is no longer known.
+	Status(ctx context.Context) (types.RunStatus, error)
+
+	// Cancel requests cancellation of this run.
+	// Returns [ErrRunAlreadyCompleted] when the run has already finished.
+	// Returns [ErrRunNotFound] when the underlying run is no longer known.
+	Cancel(ctx context.Context) error
+
+	// Get blocks until the run finishes and returns the result.
+	// Cancelling ctx unblocks Get but does NOT cancel the agent run itself —
+	// use [RunHandle.Cancel] for that.
+	Get(ctx context.Context) (*types.AgentRunResult, error)
+
+	// Done returns a channel that is closed when the run finishes (success or failure).
+	// Safe to call multiple times; always returns the same channel.
+	Done() <-chan struct{}
+}
+
+// StreamHandle is the per-run control surface returned by [Runtime.Stream] or
+// [Runtime.GetStreamHandle]. Status, Cancel, Get, Done, and Events operate on this run
+// only — callers never pass a runID back into Runtime for those operations.
+type StreamHandle interface {
+	// ID returns the unique run identifier, stable across process restarts when the
+	// backend supports reconnect (e.g. Temporal workflow ID).
+	ID() string
+
+	// Status returns the current [types.RunStatus] of this run.
+	// Returns [ErrRunNotFound] when the underlying run is no longer known.
+	Status(ctx context.Context) (types.RunStatus, error)
+
+	// Cancel requests cancellation of this run.
+	// Returns [ErrRunAlreadyCompleted] when the run has already finished.
+	// Returns [ErrRunNotFound] when the underlying run is no longer known.
+	Cancel(ctx context.Context) error
+
+	// Get blocks until the stream run finishes and returns the result.
+	// Cancelling ctx unblocks Get but does NOT cancel the agent run itself —
+	// use [StreamHandle.Cancel] for that.
+	Get(ctx context.Context) (*types.AgentRunResult, error)
+
+	// Done returns a channel that is closed when the stream run finishes (success or failure).
+	// Safe to call multiple times; always returns the same channel.
+	Done() <-chan struct{}
+
+	// Events subscribes to this run's event stream starting at fromOffset.
+	// fromOffset == 0 means from the beginning of the run (first-time subscriber).
+	// fromOffset > 0 resumes after a crash or reconnect (Temporal only; LocalRuntime
+	// returns [ErrStreamOffsetNotSupported] for fromOffset > 0).
+	// Returns [ErrRunAlreadyCompleted] if the run has already finished.
+	// Returns [ErrRunNotFound] if the run is unknown.
+	// The channel is closed after the terminal lifecycle event (RUN_FINISHED / RUN_ERROR).
+	Events(ctx context.Context, fromOffset int64) (<-chan events.AgentEvent, error)
 }
 
 // WorkerRuntime is [Runtime] plus optional in-process task-queue polling (e.g. Temporal worker).
@@ -57,16 +142,6 @@ type WorkerRuntime interface {
 	Start(ctx context.Context) error
 	// Stop stops polling and releases worker resources.
 	Stop()
-}
-
-// EventBusRuntime extends [Runtime] with in-process event bus access for sub-agent delegation and
-// streaming fan-in. SDK backends (e.g. Temporal) implement it; [pkg/agent] asserts to it when wiring
-// the agent tree. Custom [Runtime] implementations need only implement [Runtime] unless they participate
-// in that fan-in.
-type EventBusRuntime interface {
-	Runtime
-	SetEventBus(eventbus eventbus.EventBus)
-	GetEventBus() eventbus.EventBus
 }
 
 // SubAgentToolParamQuery is the tool/JSON parameter name for the query sent to a sub-agent.
@@ -142,23 +217,23 @@ type AgentLimits struct {
 	ApprovalTimeout time.Duration
 }
 
-// ExecuteRequest carries one execution request from Agent to Runtime.
-type ExecuteRequest struct {
+// RunRequest carries one run request from Agent to Runtime.
+// Run identity is not on the request; the runtime mints it and returns it via the handle's ID().
+type RunRequest struct {
 	UserPrompt string `json:"user_prompt"`
-	// RunOptions is the per-call options forwarded from pkg/agent (e.g. conversation session). May be nil.
-	// Runtimes must use [base.GetConversationID] to safely extract the conversation ID rather than
-	// accessing the nested fields directly, so the nil-check is centralised.
-	RunOptions       *types.AgentRunOptions `json:"run_options,omitempty"`
-	StreamingEnabled bool                   `json:"streaming_enabled"`
-	// EventTypes filters streamed events; empty means default (implementation-defined, often all types).
+	// ConversationID is the conversation session for this run. Empty means no conversation.
+	// Agent and worker must use the same ID when conversation is enabled.
+	ConversationID string `json:"conversation_id,omitempty"`
+	// EnableLLMStream requests token-level LLM streaming (Agent.Stream typically sets true;
+	// Agent.Run sets false). Distinct from agent-event streaming on [StreamHandle.Events].
+	EnableLLMStream bool `json:"enable_llm_stream"`
+	// EventTypes filters streamed agent events; empty means default (implementation-defined, often all types).
 	EventTypes       []events.AgentEventType `json:"event_types,omitempty"`
 	SubAgents        []*SubAgentSpec         `json:"sub_agents,omitempty"`
 	MaxSubAgentDepth int                     `json:"max_sub_agent_depth"`
 
 	// Tools is the registry-resolved tool list for this run.
 	Tools []interfaces.Tool `json:"-"`
-
-	ApprovalHandler types.ApprovalHandler `json:"approval_handler"`
 }
 
 // ExecutionPolicy is the resolved runtime shape for one agent loop operation (local [executeWithPolicy] or Temporal activity).
@@ -189,7 +264,7 @@ type ExecutionPolicies struct {
 }
 
 // ExecutionConfig is a partial override for timeout and retry budget on one agent loop operation.
-// Zero Timeout or Retries mean "use SDK default" at resolve time; see [ResolveExecPolicy].
+// Zero Timeout or MaxAttempts mean "use SDK default" at resolve time; see [ResolveExecutionPolicies].
 type ExecutionConfig struct {
 	Timeout     time.Duration
 	MaxAttempts int

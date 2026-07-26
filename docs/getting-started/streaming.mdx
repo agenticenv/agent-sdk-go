@@ -1,34 +1,78 @@
 ---
 title: "Streaming"
-description: "Enable token streaming and handle lifecycle events with Stream() and the AgentEvent channel"
+description: "Stream live tokens and lifecycle events from an agent run"
 ---
 
 Use streaming when your application needs live output — chat UIs, progress indicators, or AG-UI-compatible frontends.
 
-| Method | Returns | Blocking |
-|---|---|---|
-| `Run` | `*AgentRunResult` | Yes — waits for completion |
-| `RunAsync` | `<-chan AgentRunAsyncResult` | No — one result arrives on the channel when the run finishes |
-| `Stream` | `<-chan AgentEvent` | No — events arrive as the run progresses |
+[`Agent.Stream`](https://pkg.go.dev/github.com/agenticenv/agent-sdk-go/pkg/agent#Agent.Stream) returns an [`AgentStream`](https://pkg.go.dev/github.com/agenticenv/agent-sdk-go/pkg/agent#AgentStream) handle. Call `Events` for the live channel. For a final result without live tokens, use [Run](/getting-started/run) instead.
 
-See [Quickstart](/getting-started/quickstart) for a blocking `Run` example.
+## AgentStream methods
+
+| Method | Purpose |
+|---|---|
+| `ID()` | Stable run id — available immediately; persist before consuming events for crash-recovery on Temporal |
+| `Status(ctx)` | Current lifecycle status (`running`, `completed`, `failed`, `cancelled`, …) |
+| `Cancel(ctx)` | Request cancellation of the **agent run** (same effect as cancelling the `Stream` context) |
+| `Done()` | Channel closed when the run finishes (success or failure) |
+| `Get(ctx)` | Block until finished; return the result. Cancelling `ctx` only unblocks `Get` — use `Cancel` or cancel `Stream`'s ctx to stop the run |
+| `Events(ctx, …)` | Event channel; cancelling this `ctx` stops the **subscriber only** (Temporal). Optional [`WithOffset`](/examples/reconnect) to resume after reconnect |
+
+```go
+// Cancelling streamCtx cancels the agent run. Use a separate eventsCtx if you need
+// to drop the subscriber without stopping the run (reconnect / crash simulation).
+streamCtx := ctx
+agentStream, err := a.Stream(streamCtx, prompt, nil)
+if err != nil {
+    return err
+}
+_ = agentStream.ID()
+
+st, _ := agentStream.Status(ctx)
+fmt.Println("status:", st)
+
+eventCh, err := agentStream.Events(ctx)
+if err != nil {
+    return err
+}
+for ev := range eventCh {
+    // handle events
+}
+
+// Optional: wait for completion / read result after the channel closes
+<-agentStream.Done()
+result, err := agentStream.Get(ctx)
+```
+
+`Status` / `Cancel` / `Done` / `Get` match [`AgentRun`](/getting-started/run#agentrun-methods). Streaming adds `Events`.
 
 ## Enable streaming
 
-Pass [`WithStream(true)`](/getting-started/configuration) at agent creation:
+Create an agent, then call `Stream`. `Stream` enables LLM token deltas and delivers AG-UI lifecycle events:
+
+LLM token deltas (`TEXT_MESSAGE_CONTENT`) are emitted only when the underlying [`LLMClient`](/getting-started/llm-providers) reports [`IsStreamSupported()`](https://pkg.go.dev/github.com/agenticenv/agent-sdk-go/pkg/interfaces#LLMClient) as true (OpenAI, Anthropic, Gemini, DeepSeek, and Ollama do). If the provider does not support streaming, you still get lifecycle and tool events — the assistant text arrives as a complete message rather than partial deltas.
 
 ```go
 a, err := agent.NewAgent(
     agent.WithLLMClient(llmClient),
     agent.WithSystemPrompt("You are a helpful assistant."),
-    agent.WithStream(true),
 )
 ```
 
-Then call `Stream` instead of `Run`:
+Then call `Stream`:
 
 ```go
-eventCh, err := a.Stream(ctx, "What's 17 * 23?", nil)
+// runID is available synchronously before any event arrives.
+// Persist it alongside your correlation key (conversationID, sessionID) before
+// consuming events — this is what GetAgentStream needs after a process crash.
+agentStream, err := a.Stream(ctx, "What's 17 * 23?", nil)
+if err != nil {
+    return err
+}
+runID := agentStream.ID()
+_ = runID // store runID in your DB/cache here
+
+eventCh, err := agentStream.Events(ctx)
 if err != nil {
     return err
 }
@@ -59,6 +103,42 @@ for ev := range eventCh {
 <Warning>
 Always check `if ev == nil { continue }` before calling `ev.Type()`. The channel can deliver a nil sentinel to signal the end of a batch.
 </Warning>
+
+## Event guarantees
+
+On all runtimes, the event channel is guaranteed to close only after a terminal `RUN_FINISHED` or `RUN_ERROR` event is delivered when the run itself ends. This holds even on **Temporal** if:
+
+- Your process crashes during streaming
+- The stream connection fails transiently
+- You cancel the **Events** context (subscriber disconnect) — the agent run continues; reconnect with `GetAgentStream`
+
+Cancelling the **Stream** context cancels the agent run and surfaces a terminal event on active subscribers.
+
+If you reconnect via `GetAgentStream` with a saved offset, you will not miss the terminal event (offsets may redeliver — discard duplicates at or below the saved offset).
+
+For **in-process** streaming, a stream error (rare) will still deliver a terminal event before channel close.
+
+<Note>
+When using Temporal for crash-recovery, always save both the run ID and offset before processing each event. If your process crashes between reading an event and saving its offset, only that one event will replay on reconnect.
+</Note>
+
+## Disable LLM token streaming
+
+By default, `Stream` enables **LLM token streaming** — the model emits partial text as `TEXT_MESSAGE_CONTENT` deltas. Lifecycle events (tools, approvals, `RUN_FINISHED`, …) still stream either way.
+
+To turn off token deltas and receive a single complete assistant message instead, set `DisableTokenStreaming` on [`AgentStreamOptions`](https://pkg.go.dev/github.com/agenticenv/agent-sdk-go/pkg/agent#AgentStreamOptions):
+
+```go
+agentStream, err := a.Stream(ctx, prompt, &agent.AgentStreamOptions{
+    DisableTokenStreaming: true,
+})
+if err != nil {
+    return err
+}
+eventCh, err := agentStream.Events(ctx)
+```
+
+Use this when you want AG-UI / tool lifecycle events without partial token delivery (for example, lower provider stream overhead or a UI that only renders the final message).
 
 ## Event types
 
@@ -122,12 +202,11 @@ for ev := range eventCh {
     if ev == nil {
         continue
     }
-    if finished, ok := ev.(*agent.AgentRunFinishedEvent); ok && finished.Result != nil {
-        if finished.Result.LLMUsage != nil {
-            fmt.Printf("tokens: input=%d output=%d total=%d\n",
-                finished.Result.LLMUsage.PromptTokens,
-                finished.Result.LLMUsage.CompletionTokens,
-                finished.Result.LLMUsage.TotalTokens,
+    if ev.Type() == agent.AgentEventTypeRunFinished {
+        if fe, ok := ev.(*agent.AgentRunFinishedEvent); ok && fe.Result != nil {
+            fmt.Printf("Tokens: %d prompt, %d completion\n",
+                fe.Result.LLMUsage.PromptTokens,
+                fe.Result.LLMUsage.CompletionTokens,
             )
         }
     }
@@ -136,55 +215,66 @@ for ev := range eventCh {
 
 See [Token Usage](/features/token-usage) for field details.
 
-## RunAsync
+## Reconnect with GetAgentStream
 
-`RunAsync` starts the run in a goroutine and returns a channel that delivers one [`AgentRunAsyncResult`](/getting-started/quickstart) when the run completes. Use it when you want a final result without blocking the caller, but do not need live token events.
+On the [Temporal runtime](/runtimes/temporal), persist `agentStream.ID()` and each event’s offset **before** handling the event. After a process crash, reconnect and resume — the workflow keeps running server-side:
 
 ```go
-a, err := agent.NewAgent(
-    agent.WithLLMClient(llmClient),
-    agent.WithApprovalHandler(func(ctx context.Context, req *agent.ApprovalRequest) {
-        _ = req.Respond(agent.ApprovalStatusApproved)
-    }),
-)
+// During initial stream
+for ev := range eventCh {
+    if ob, ok := ev.(interface{ Offset() (int64, bool) }); ok {
+        if off, has := ob.Offset(); has {
+            db.SaveOffset(runID, off) // before handling the event
+        }
+    }
+    handleEvent(ev)
+}
 
-resultCh, err := a.RunAsync(ctx, "Summarize this document", nil)
+// After crash/restart
+savedRunID, savedOffset := db.LoadSavedRun()
+s, err := a.GetAgentStream(ctx, savedRunID)
 if err != nil {
-    return err
+    if errors.Is(err, agent.ErrRunAlreadyCompleted) {
+        // Workflow finished while disconnected — load outcome from
+        // conversation/memory, or start a new run.
+        return nil
+    }
+    return err // including ErrStreamNotFound
 }
-
-res := <-resultCh
-if res.Error != nil {
-    return res.Error
-}
-fmt.Println(res.Result.Content)
+eventCh, err := s.Events(ctx, agent.WithOffset(savedOffset))
+// Continue consuming from exactly where you left off
 ```
 
-Handle tool approvals with [`WithApprovalHandler`](/features/approvals) — the same callback as `Run`.
+The offset is opaque and is attached only to events that support reconnect (lifecycle, text, tools, custom events all carry it).
+
+Cancelling `GetAgentStream` or `Events` does not stop the run — use `AgentStream.Cancel` for that. After reconnect, `WithTimeout` (if set) starts **fresh**. Full cancel/timeout rules: [Timeouts & Modes](/advanced/timeouts-and-modes#what-each-context-does).
+
+`LocalRuntime` does not support crash reconnect — non-zero offsets return `ErrStreamOffsetNotSupported`. Full protocol: [Durable Execution](/advanced/durable-execution#client-side-stream-recovery). Runnable demo: [Reconnect](/examples/reconnect).
 
 ## Streaming with conversation history
 
-Pass `ConversationOptions` to share history across turns while streaming. The same session ID links messages across calls:
+Pass `ConversationOptions` on [`AgentStreamOptions`](https://pkg.go.dev/github.com/agenticenv/agent-sdk-go/pkg/agent#AgentStreamOptions) to share history across turns while streaming:
 
 ```go
 conv := inmem.NewConversation(inmem.WithMaxSize(100))
 
 a, err := agent.NewAgent(
     agent.WithLLMClient(llmClient),
-    agent.WithStream(true),
     agent.WithConversation(conversation.Config{Conversation: conv, Size: 20}),
 )
 
-opts := &agent.AgentRunOptions{
+opts := &agent.AgentStreamOptions{
     ConversationOptions: &agent.ConversationOptions{ID: "session-1"},
 }
 
 // First turn
-eventCh, _ := a.Stream(ctx, "My name is Alice.", opts)
+agentStream, _ := a.Stream(ctx, "My name is Alice.", opts)
+eventCh, _ := agentStream.Events(ctx)
 for ev := range eventCh { /* handle */ }
 
 // Second turn — agent remembers the session
-eventCh, _ = a.Stream(ctx, "What's my name?", opts)
+agentStream, _ = a.Stream(ctx, "What's my name?", opts)
+eventCh, _ = agentStream.Events(ctx)
 for ev := range eventCh { /* handle */ }
 ```
 
@@ -194,10 +284,6 @@ See [Conversation](/features/conversation) for backend options and lifecycle man
 
 Stream events follow the [AG-UI open protocol](https://docs.ag-ui.com). Serialize any event with `event.ToJSON()` and forward over SSE or WebSocket to a compatible frontend. See [AG-UI Protocol](/features/ag-ui-protocol).
 
-## Temporal streaming notes
-
-On the Temporal runtime, the agent run is durable but live stream delivery is not backfilled — see [Temporal runtime](/runtimes/temporal#streaming-and-approvals).
-
 ## Examples
 
 <CardGroup cols={2}>
@@ -206,7 +292,16 @@ On the Temporal runtime, the agent run is durable but live stream delivery is no
     Partial tokens, tool events, and RUN_FINISHED handling
   </Card>
 
-  <Card title="RunAsync example" icon="play" href="/examples/run-async" horizontal>
-    Non-blocking run with approval handler
+  <Card title="Reconnect" icon="rotate" href="/examples/reconnect" horizontal>
+    Resume a stream from a saved offset after a crash
   </Card>
+
+  <Card title="AG-UI" icon="browser" href="/examples/agui" horizontal>
+    SSE server + CopilotKit UI over AG-UI events
+  </Card>
+
+  <Card title="Run" icon="play" href="/getting-started/run" horizontal>
+    AgentRun — Get, Done, Status, Cancel
+  </Card>
+
 </CardGroup>

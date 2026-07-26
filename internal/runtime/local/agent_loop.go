@@ -36,6 +36,9 @@ type AgentLoopInput struct {
 	// Sub-agents receive the parent's ChannelName so their events go directly to the parent stream.
 	// Empty = no event fanout.
 	ChannelName string
+	// EventTypes filters which events are published to ChannelName (same semantics as Temporal).
+	// Empty = publish nothing; ["*"] = all types; a specific list = only those types.
+	EventTypes []events.AgentEventType
 	// ApprovalHandler is called when a tool requires human approval. May be nil (approval → unavailable).
 	ApprovalHandler types.ApprovalHandler
 	// SubAgentRoutes maps sub-agent tool name → local route. Built by the local runtime from
@@ -114,7 +117,21 @@ func (rt *LocalRuntime) RunAgentLoop(ctx context.Context, input AgentLoopInput) 
 	}
 
 	// Internal emit: publish events to the eventbus channel for this run.
+	// EventTypes acts as a publish filter: empty = no events; ["*"] = all; otherwise only listed types.
 	emit := func(ev events.AgentEvent) {
+		if ev == nil || len(input.EventTypes) == 0 {
+			return
+		}
+		allowed := false
+		for _, et := range input.EventTypes {
+			if et == events.AgentEventAll || et == ev.Type() {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return
+		}
 		rt.publishEventToChannel(ctx, input.ChannelName, ev)
 	}
 
@@ -655,6 +672,7 @@ func (rt *LocalRuntime) executeSingleTool(
 						RunID:            uuid.New().String(),
 						StreamingEnabled: input.StreamingEnabled,
 						ChannelName:      input.ChannelName,
+						EventTypes:       input.EventTypes,
 						ApprovalHandler:  input.ApprovalHandler,
 						MemoryScope:      base.SubAgentScope(input.MemoryScope, delegationName),
 						SubAgentRoutes:   subAgentRoute.children,

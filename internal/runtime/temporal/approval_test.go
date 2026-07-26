@@ -144,3 +144,56 @@ func TestPrepareApprovalFromCustomEvent_ParseError(t *testing.T) {
 		t.Fatal("expected parse error for invalid value shape")
 	}
 }
+
+// TestDelegationEventContainsToolCallID verifies that the ToolCallID field is present
+// in AgentCustomEventDelegationValue and round-trips through JSON correctly.
+func TestDelegationEventContainsToolCallID(t *testing.T) {
+	ev := events.NewAgentCustomEvent(string(events.AgentCustomEventNameSubAgentDelegation),
+		events.AgentCustomEventDelegationValue{
+			AgentName:     "parent",
+			SubAgentName:  "child",
+			ToolCallID:    "tc-deleg-99",
+			ApprovalToken: "tok",
+		})
+
+	raw, err := ev.ToJSON()
+	if err != nil {
+		t.Fatalf("ToJSON: %v", err)
+	}
+	decoded, err := events.EventFromJSON(raw)
+	if err != nil {
+		t.Fatalf("EventFromJSON: %v", err)
+	}
+	ce, ok := decoded.(*events.AgentCustomEvent)
+	if !ok {
+		t.Fatalf("expected *AgentCustomEvent, got %T", decoded)
+	}
+	val, err := events.ParseCustomEventDelegation(ce)
+	if err != nil {
+		t.Fatalf("ParseCustomEventDelegation: %v", err)
+	}
+	if val.ToolCallID != "tc-deleg-99" {
+		t.Errorf("ToolCallID = %q, want tc-deleg-99", val.ToolCallID)
+	}
+}
+
+// TestIsNotFoundError covers the string-matching heuristic for Temporal not-found errors.
+func TestIsNotFoundError(t *testing.T) {
+	cases := []struct {
+		err  error
+		want bool
+	}{
+		{nil, false},
+		{errors.New("NOT_FOUND: activity task not found"), true},
+		{errors.New("NotFound: resource gone"), true},
+		{errors.New("activity task not found"), true},
+		{errors.New("permission denied"), false},
+		{errors.New("internal server error"), false},
+	}
+	for _, tc := range cases {
+		got := isNotFoundError(tc.err)
+		if got != tc.want {
+			t.Errorf("isNotFoundError(%v) = %v, want %v", tc.err, got, tc.want)
+		}
+	}
+}

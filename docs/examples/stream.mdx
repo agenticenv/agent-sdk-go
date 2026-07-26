@@ -3,13 +3,13 @@ title: "Stream"
 description: "Enable streaming and handle text deltas and tool lifecycle events on an AgentEvent channel"
 ---
 
-Agent configured with `WithStream(true)` that emits lifecycle events as the loop runs — text deltas, tool calls, run finished.
+Agent that calls `Stream` and emits lifecycle events as the loop runs — text deltas, tool calls, run finished.
 
 Source: [`examples/agent_with_stream/`](https://github.com/agenticenv/agent-sdk-go/tree/main/examples/agent_with_stream)
 
 ## What it demonstrates
 
-- `Stream()` returning `<-chan AgentEvent`
+- `Stream()` returning an `AgentStream` handle; `Events()` for the event channel
 - Handling `TEXT_MESSAGE_CONTENT`, tool lifecycle events, and `RUN_FINISHED`
 - Built-in tools with auto-approval
 
@@ -24,17 +24,21 @@ go run ./agent_with_stream "What is 15 + 27?"
 
 ## Key code
 
-Enable streaming at construction, then consume the event channel:
-
 ```go
 a, err := agent.NewAgent(
     agent.WithLLMClient(llmClient),
-    agent.WithStream(true),
     agent.WithToolRegistry(reg),
     agent.WithToolApprovalPolicy(agent.AutoToolApprovalPolicy()),
 )
 
-eventCh, err := a.Stream(ctx, prompt, nil)
+// runID is available synchronously — save it for reconnect before consuming events.
+agentStream, err := a.Stream(ctx, prompt, nil)
+if err != nil {
+    log.Fatal(err)
+}
+runID := agentStream.ID()
+_ = runID // persist alongside your session key when crash-durability matters
+eventCh, err := agentStream.Events(ctx)
 if err != nil {
     log.Fatal(err)
 }

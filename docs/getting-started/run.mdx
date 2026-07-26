@@ -1,0 +1,113 @@
+---
+title: "Run"
+description: "Start an agent and manage execution synchronously or asynchronously"
+---
+
+Use [`Agent.Run`](https://pkg.go.dev/github.com/agenticenv/agent-sdk-go/pkg/agent#Agent.Run) when you want a final result without live token deltas. It returns an [`AgentRun`](https://pkg.go.dev/github.com/agenticenv/agent-sdk-go/pkg/agent#AgentRun) handle immediately; the work continues in the background until you wait with `Get` or `Done`.
+
+## AgentRun methods
+
+| Method | Purpose |
+|---|---|
+| `ID()` | Stable run id — available immediately; persist before waiting when crash-durability matters |
+| `Status(ctx)` | Current lifecycle status (`running`, `completed`, `failed`, `cancelled`, …) |
+| `Cancel(ctx)` | Request cancellation of the **agent run** (not the same as cancelling a `Get` context) |
+| `Done()` | Channel closed when the run finishes (success or failure) |
+| `Get(ctx)` | Block until finished; return the result. Cancelling `ctx` only unblocks `Get` — use `Cancel` to stop the run |
+
+## Wait for the result
+
+Call `Get` right after `Run` — it waits until the agent finishes:
+
+```go
+agentRun, err := a.Run(ctx, "Hello! What can you help me with?", nil)
+if err != nil {
+    return err
+}
+result, err := agentRun.Get(ctx)
+if err != nil {
+    return err
+}
+fmt.Println(result.Content)
+```
+
+Full walkthrough: [Quickstart](/getting-started/quickstart). Runnable example: [Simple Agent](/examples/simple-agent).
+
+## Non-blocking Run
+
+Wait on `Done()` (or multiplex with other work), poll `Status`, optionally `Cancel`, then `Get`:
+
+```go
+agentRun, err := a.Run(ctx, "Summarize this document", nil)
+if err != nil {
+    return err
+}
+_ = agentRun.ID() // persist before waiting when crash-durability matters
+
+polls := 0
+for {
+    select {
+    case <-agentRun.Done():
+        result, err := agentRun.Get(ctx)
+        if err != nil {
+            return err
+        }
+        fmt.Println(result.Content)
+        return nil
+    case <-time.After(5 * time.Second):
+        polls++
+        st, _ := agentRun.Status(ctx)
+        fmt.Println("still running, status:", st)
+        if polls >= 2 {
+            _ = agentRun.Cancel(ctx) // then Done closes and Get returns
+        }
+    }
+}
+```
+
+Cancelling the `Get` context only unblocks the waiter — use `AgentRun.Cancel` to cancel the agent run itself.
+
+Full example with approvals: [Non-blocking Run](/examples/nonblocking-run).
+
+## Reconnect with GetAgentRun
+
+On the [Temporal runtime](/runtimes/temporal), persist `agentRun.ID()` before waiting. After a process crash, reconnect and wait again — the workflow keeps running server-side:
+
+```go
+run, err := a.GetAgentRun(ctx, savedRunID)
+if err != nil {
+    if errors.Is(err, agent.ErrRunAlreadyCompleted) {
+        // Workflow finished while disconnected — load outcome from
+        // conversation/memory, or start a new run.
+        return nil
+    }
+    return err // including ErrRunNotFound
+}
+result, err := run.Get(ctx) // or <-run.Done() then Get
+```
+
+Cancelling the `GetAgentRun` or `Get` context does not cancel the workflow — use `AgentRun.Cancel` for that. After reconnect, `WithTimeout` (if set) starts **fresh** — it is not the remaining time from the original `Run`. Full cancel/timeout rules: [Timeouts & Modes](/advanced/timeouts-and-modes#what-each-context-does).
+
+`LocalRuntime` cannot reconnect after a crash (`ErrRunNotFound`). Full protocol: [Durable Execution](/advanced/durable-execution#client-side-run-recovery).
+
+## Approvals on Run
+
+Use [`WithApprovalHandler`](/features/approvals) for interactive tool approval during `Run` (same as a blocking `Run` + `Get`). Stream-based approval uses CUSTOM events on `AgentStream` — see [Approvals](/features/approvals).
+
+## Examples
+
+<CardGroup cols={2}>
+
+  <Card title="Simple Agent" icon="play" href="/examples/simple-agent" horizontal>
+    Blocking Run + Get
+  </Card>
+
+  <Card title="Non-blocking Run" icon="play" href="/examples/nonblocking-run" horizontal>
+    Status, Cancel, Done, Get, and approvals
+  </Card>
+
+  <Card title="Streaming" icon="wave-square" href="/getting-started/streaming" horizontal>
+    AgentStream, Events, and live tokens
+  </Card>
+
+</CardGroup>

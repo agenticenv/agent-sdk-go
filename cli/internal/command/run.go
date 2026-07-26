@@ -44,7 +44,7 @@ func (c *RunCmd) Run(cfg *config.Config) error {
 	}
 	defer built.Close()
 
-	result, err := built.Agent.Run(context.Background(), prompt, &sdkagent.AgentRunOptions{
+	agentRun, err := built.Agent.Run(context.Background(), prompt, &sdkagent.AgentRunOptions{
 		ConversationOptions: &sdkagent.ConversationOptions{
 			ID: "agctl-run",
 		},
@@ -52,6 +52,11 @@ func (c *RunCmd) Run(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
+	result, err := agentRun.Get(context.Background())
+	if err != nil {
+		return err
+	}
+
 	if result != nil && strings.TrimSpace(result.Content) != "" {
 		fmt.Println(result.Content)
 	}

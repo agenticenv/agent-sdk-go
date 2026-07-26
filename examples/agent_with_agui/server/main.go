@@ -56,7 +56,6 @@ func main() {
 		agent.WithDescription("Streaming demo for AG-UI / CopilotKit"),
 		agent.WithSystemPrompt("You are a helpful assistant. Be concise."),
 		agent.WithLLMClient(llmClient),
-		agent.WithStream(true),
 		agent.WithLLMSampling(&agent.LLMSampling{
 			MaxTokens: 4096,
 			Reasoning: &interfaces.LLMReasoning{
@@ -80,14 +79,14 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
-	mux.HandleFunc("/agui", streamHandler(a))
+	mux.HandleFunc("/agui", agentStreamr(a))
 
 	addr := ":" + port
 	log.Printf("AG-UI SSE agent listening on http://localhost%s/agui (POST JSON body)", addr)
 	log.Fatal(http.ListenAndServe(addr, mux))
 }
 
-func streamHandler(a *agent.Agent) http.HandlerFunc {
+func agentStreamr(a *agent.Agent) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		setCORS(w)
 		if r.Method == http.MethodOptions {
@@ -127,7 +126,14 @@ func streamHandler(a *agent.Agent) http.HandlerFunc {
 		w.Header().Set("Connection", "keep-alive")
 
 		ctx := r.Context()
-		ch, err := a.Stream(ctx, prompt, nil)
+		// runID is available synchronously before the first event; the AG-UI client sees
+		// it via the RUN_STARTED event's RunID field on the stream itself.
+		agentStream, err := a.Stream(ctx, prompt, nil)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		ch, err := agentStream.Events(ctx)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

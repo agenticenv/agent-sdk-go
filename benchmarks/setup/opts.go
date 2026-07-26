@@ -9,7 +9,6 @@ import (
 )
 
 // RootOptions returns agent options shared by the benchmark root agent and root worker.
-// enableRemoteWorkers is agent-only (EnableRemoteWorkers).
 func RootOptions(
 	cfg *Config,
 	llm interfaces.LLMClient,
@@ -17,7 +16,6 @@ func RootOptions(
 	name, systemPrompt string,
 	subAgents []*agent.Agent,
 	taskQueue string,
-	enableRemoteWorkers bool,
 ) []agent.Option {
 	if lgr == nil {
 		lgr = logger.NoopLogger()
@@ -46,9 +44,6 @@ func RootOptions(
 			Namespace: cfg.Temporal.Namespace,
 			TaskQueue: taskQueue,
 		}))
-	}
-	if enableRemoteWorkers {
-		opts = append(opts, agent.EnableRemoteWorkers())
 	}
 	return opts
 }

@@ -45,9 +45,13 @@ func main() {
 
 	prompt := setup.UserPrompt()
 	fmt.Printf("entry=config (WithObservabilityConfig: OTLP traces, metrics, logs)\nuser: %s\n", prompt)
-	result, err := a.Run(context.Background(), prompt, nil)
+	agentRun, err := a.Run(context.Background(), prompt, nil)
 	if err != nil {
 		log.Printf("run failed: %v", err)
+		return
+	}
+	result, err := agentRun.Get(context.Background())
+	if err != nil {
 		return
 	}
 	fmt.Printf("assistant: %s\n", result.Content)

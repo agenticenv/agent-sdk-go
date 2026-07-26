@@ -3,21 +3,20 @@ package agent
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
-	"time"
 
 	"github.com/golang/mock/gomock"
 
-	"github.com/agenticenv/agent-sdk-go/internal/eventbus"
-	"github.com/agenticenv/agent-sdk-go/internal/events"
 	"github.com/agenticenv/agent-sdk-go/internal/runtime"
 	rtmocks "github.com/agenticenv/agent-sdk-go/internal/runtime/mocks"
+	"github.com/agenticenv/agent-sdk-go/internal/store"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
 	"github.com/agenticenv/agent-sdk-go/pkg/conversation"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
+	ifacemocks "github.com/agenticenv/agent-sdk-go/pkg/interfaces/mocks"
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
 	"github.com/agenticenv/agent-sdk-go/pkg/observability"
+	temporalmocks "go.temporal.io/sdk/mocks"
 )
 
 func testAgentWithRuntime(rt runtime.Runtime) *Agent {
@@ -34,6 +33,8 @@ func testAgentWithRuntime(rt runtime.Runtime) *Agent {
 	return &Agent{
 		agentConfig: cfg,
 		runtime:     rt,
+		runs:        store.NewKV[string, *agentRun](),
+		streams:     store.NewKV[string, *agentStream](),
 	}
 }
 
@@ -44,148 +45,146 @@ func mustTestRegistries(t *testing.T, cfg *agentConfig) {
 	}
 }
 
-func TestAgent_Run_ForwardsRequestAndReturnsResponse(t *testing.T) {
+func closedDoneChan() <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+
+// testLLM returns a MockLLMClient with default expectations for build/config tests.
+func testLLM(t *testing.T) *ifacemocks.MockLLMClient {
+	t.Helper()
 	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-	mockRT := rtmocks.NewMockRuntime(ctrl)
-	mockRT.EXPECT().Execute(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, req *runtime.ExecuteRequest) (*types.AgentRunResult, error) {
-		if req.StreamingEnabled {
-			t.Error("Run must set StreamingEnabled false")
-		}
-		if req.UserPrompt != "hello" {
-			t.Errorf("UserPrompt = %q", req.UserPrompt)
-		}
-		name := "TestAgent"
-		return &types.AgentRunResult{Content: "reply", AgentName: name, Model: "m1"}, nil
-	})
-
-	a := testAgentWithRuntime(mockRT)
-	resp, err := a.Run(context.Background(), "hello", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.Content != "reply" || resp.Model != "m1" || resp.AgentName != "TestAgent" {
-		t.Fatalf("response = %+v", resp)
-	}
+	m := ifacemocks.NewMockLLMClient(ctrl)
+	m.EXPECT().GetModel().Return("stub").AnyTimes()
+	m.EXPECT().GetProvider().Return(interfaces.LLMProviderOpenAI).AnyTimes()
+	m.EXPECT().IsStreamSupported().Return(false).AnyTimes()
+	m.EXPECT().Generate(gomock.Any(), gomock.Any()).Return(&interfaces.LLMResponse{}, nil).AnyTimes()
+	m.EXPECT().GenerateStream(gomock.Any(), gomock.Any()).Return(nil, errors.New("stub")).AnyTimes()
+	return m
 }
 
-func TestAgent_Stream_SetsStreamingEnabled(t *testing.T) {
+// testStreamLLM is like [testLLM] but reports IsStreamSupported true (A2A streaming paths).
+func testStreamLLM(t *testing.T) *ifacemocks.MockLLMClient {
+	t.Helper()
 	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-	mockRT := rtmocks.NewMockRuntime(ctrl)
-	var streamReq *runtime.ExecuteRequest
-	mockRT.EXPECT().ExecuteStream(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, req *runtime.ExecuteRequest) (<-chan events.AgentEvent, error) {
-		streamReq = req
-		ch := make(chan events.AgentEvent, 2)
-		ch <- events.NewAgentRunFinishedEvent("", "", &types.AgentRunResult{AgentName: "TestAgent", Content: "done"})
-		close(ch)
-		var recv <-chan events.AgentEvent = ch
-		return recv, nil
-	})
-
-	a := testAgentWithRuntime(mockRT)
-	ch, err := a.Stream(context.Background(), "prompt", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		for range ch {
-		}
-	}()
-	if streamReq == nil || !streamReq.StreamingEnabled {
-		t.Fatalf("Stream request = %+v", streamReq)
-	}
-	if streamReq.UserPrompt != "prompt" {
-		t.Errorf("UserPrompt = %q", streamReq.UserPrompt)
-	}
-	if ch == nil {
-		t.Fatal("Stream returned nil channel")
-	}
-	ev := <-ch
-	if ev == nil {
-		t.Fatal("nil event")
-	}
-	if ev.Type() != events.AgentEventTypeRunFinished {
-		t.Fatalf("want RunFinished, got type %v", ev.Type())
-	}
-	fin, ok := ev.(*events.AgentRunFinishedEvent)
-	if !ok || fin == nil {
-		t.Fatalf("event not *AgentRunFinishedEvent: %+v", ev)
-	}
-	result := fin.Result
-	if result == nil {
-		t.Fatalf("Result is nil")
-	}
-	if result.Content != "done" {
-		t.Fatalf("result.Content = %q", result.Content)
-	}
+	m := ifacemocks.NewMockLLMClient(ctrl)
+	m.EXPECT().GetModel().Return("stream-model").AnyTimes()
+	m.EXPECT().GetProvider().Return(interfaces.LLMProviderOpenAI).AnyTimes()
+	m.EXPECT().IsStreamSupported().Return(true).AnyTimes()
+	m.EXPECT().Generate(gomock.Any(), gomock.Any()).Return(&interfaces.LLMResponse{}, nil).AnyTimes()
+	m.EXPECT().GenerateStream(gomock.Any(), gomock.Any()).Return(nil, errors.New("unused")).AnyTimes()
+	return m
 }
 
-func TestAgent_RunAsync_DeliversResult(t *testing.T) {
+// testTool returns a MockTool with default expectations for config/registry tests.
+func testTool(t *testing.T, name string) *ifacemocks.MockTool {
+	t.Helper()
+	return testToolMeta(t, name, "Mock", "mock", interfaces.JSONSchema{})
+}
+
+// testToolMeta is like [testTool] with explicit display name, description, and parameters.
+func testToolMeta(t *testing.T, name, display, desc string, params interfaces.JSONSchema) *ifacemocks.MockTool {
+	t.Helper()
 	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-	mockRT := rtmocks.NewMockRuntime(ctrl)
-	mockRT.EXPECT().Execute(gomock.Any(), gomock.Any()).Return(&types.AgentRunResult{Content: "mock", AgentName: "TestAgent", Model: "stub"}, nil)
-
-	a := testAgentWithRuntime(mockRT)
-	resCh, err := a.RunAsync(context.Background(), "async", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case r := <-resCh:
-		if r.Error != nil {
-			t.Fatal(r.Error)
-		}
-		if r.Result == nil || r.Result.Content != "mock" {
-			t.Fatalf("result = %+v", r)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("timeout waiting for RunAsync result")
-	}
+	m := ifacemocks.NewMockTool(ctrl)
+	m.EXPECT().Name().Return(name).AnyTimes()
+	m.EXPECT().DisplayName().Return(display).AnyTimes()
+	m.EXPECT().Description().Return(desc).AnyTimes()
+	m.EXPECT().Parameters().Return(params).AnyTimes()
+	m.EXPECT().Execute(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+	return m
 }
 
-func TestAgent_Stream_CustomStreamFn(t *testing.T) {
+// testMCPClient returns a MockMCPClient with default expectations for registry tests.
+func testMCPClient(t *testing.T, name string) *ifacemocks.MockMCPClient {
+	t.Helper()
 	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-	mockRT := rtmocks.NewMockRuntime(ctrl)
-	mockRT.EXPECT().ExecuteStream(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, req *runtime.ExecuteRequest) (<-chan events.AgentEvent, error) {
-		ch := make(chan events.AgentEvent, 1)
-		ch <- events.NewAgentTextMessageContentEvent("", "partial")
-		close(ch)
-		return ch, nil
-	})
-
-	a := testAgentWithRuntime(mockRT)
-	ch, err := a.Stream(context.Background(), "x", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ev := <-ch
-	if ev == nil || ev.Type() != events.AgentEventTypeTextMessageContent {
-		ev, ok := ev.(*events.AgentTextMessageContentEvent)
-		if !ok {
-			t.Fatalf("ev = %+v", ev)
-		}
-		if ev.Delta != "partial" {
-			t.Fatalf("ev = %+v", ev)
-		}
-		t.Fatalf("ev = %+v", ev)
-	}
+	m := ifacemocks.NewMockMCPClient(ctrl)
+	m.EXPECT().Name().Return(name).AnyTimes()
+	m.EXPECT().Ping(gomock.Any()).Return(nil).AnyTimes()
+	m.EXPECT().ListTools(gomock.Any()).Return(nil, nil).AnyTimes()
+	m.EXPECT().CallTool(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+	m.EXPECT().Close().Return(nil).AnyTimes()
+	return m
 }
 
-// stubLLM is a minimal [interfaces.LLMClient] for config/runtime unit tests.
-type stubLLM struct{}
+// toolWithApproval combines generated Tool + ToolApproval mocks (mockgen emits them separately).
+type toolWithApproval struct {
+	*ifacemocks.MockTool
+	*ifacemocks.MockToolApproval
+}
 
-func (stubLLM) Generate(ctx context.Context, req *interfaces.LLMRequest) (*interfaces.LLMResponse, error) {
-	return &interfaces.LLMResponse{}, nil
+// testToolWithApproval returns a Tool that also implements ToolApproval.
+func testToolWithApproval(t *testing.T, name string, needApproval bool) *toolWithApproval {
+	t.Helper()
+	ctrl := gomock.NewController(t)
+	tool := ifacemocks.NewMockTool(ctrl)
+	appr := ifacemocks.NewMockToolApproval(ctrl)
+	tool.EXPECT().Name().Return(name).AnyTimes()
+	tool.EXPECT().DisplayName().Return("Mock").AnyTimes()
+	tool.EXPECT().Description().Return("mock").AnyTimes()
+	tool.EXPECT().Parameters().Return(interfaces.JSONSchema{}).AnyTimes()
+	tool.EXPECT().Execute(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+	appr.EXPECT().ApprovalRequired().Return(needApproval).AnyTimes()
+	return &toolWithApproval{MockTool: tool, MockToolApproval: appr}
 }
-func (stubLLM) GenerateStream(ctx context.Context, req *interfaces.LLMRequest) (interfaces.LLMStream, error) {
-	return nil, errors.New("stub")
+
+// testRetriever returns a MockRetriever with default expectations.
+func testRetriever(t *testing.T, name string) *ifacemocks.MockRetriever {
+	t.Helper()
+	ctrl := gomock.NewController(t)
+	m := ifacemocks.NewMockRetriever(ctrl)
+	m.EXPECT().Name().Return(name).AnyTimes()
+	m.EXPECT().Search(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+	return m
 }
-func (stubLLM) GetModel() string                    { return "stub" }
-func (stubLLM) GetProvider() interfaces.LLMProvider { return interfaces.LLMProviderOpenAI }
-func (stubLLM) IsStreamSupported() bool             { return false }
+
+// testA2AClient returns a MockA2AClient with default expectations.
+func testA2AClient(t *testing.T, name string, skills []interfaces.A2ASkillSpec) *ifacemocks.MockA2AClient {
+	t.Helper()
+	ctrl := gomock.NewController(t)
+	m := ifacemocks.NewMockA2AClient(ctrl)
+	m.EXPECT().Name().Return(name).AnyTimes()
+	m.EXPECT().Ping(gomock.Any()).Return(nil).AnyTimes()
+	m.EXPECT().ResolveCard(gomock.Any()).Return(interfaces.A2AAgentCard{Name: name}, nil).AnyTimes()
+	m.EXPECT().ListSkills(gomock.Any()).Return(skills, nil).AnyTimes()
+	m.EXPECT().SendMessage(gomock.Any(), gomock.Any()).Return(interfaces.A2ASendMessageResult{}, nil).AnyTimes()
+	m.EXPECT().Close().Return(nil).AnyTimes()
+	return m
+}
+
+// testMemory returns a MockMemory with default expectations.
+func testMemory(t *testing.T) *ifacemocks.MockMemory {
+	t.Helper()
+	ctrl := gomock.NewController(t)
+	m := ifacemocks.NewMockMemory(ctrl)
+	m.EXPECT().Store(gomock.Any(), gomock.Any(), gomock.Any()).Return("", nil).AnyTimes()
+	m.EXPECT().Load(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+	m.EXPECT().Clear(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	return m
+}
+
+// testLogs returns a MockLogs (Shutdown may be called).
+func testLogs(t *testing.T) *ifacemocks.MockLogs {
+	t.Helper()
+	ctrl := gomock.NewController(t)
+	m := ifacemocks.NewMockLogs(ctrl)
+	m.EXPECT().Shutdown(gomock.Any()).Return(nil).AnyTimes()
+	return m
+}
+
+// testTracer returns a MockTracer for injection/precedence tests (methods unused).
+func testTracer(t *testing.T) *ifacemocks.MockTracer {
+	t.Helper()
+	return ifacemocks.NewMockTracer(gomock.NewController(t))
+}
+
+// testMetrics returns a MockMetrics for injection/precedence tests (methods unused).
+func testMetrics(t *testing.T) *ifacemocks.MockMetrics {
+	t.Helper()
+	return ifacemocks.NewMockMetrics(gomock.NewController(t))
+}
 
 func TestCopyApprovalArgs(t *testing.T) {
 	if copyApprovalArgs(nil) != nil {
@@ -206,53 +205,9 @@ func TestCopyApprovalArgs(t *testing.T) {
 	}
 }
 
-func TestConversationIDFromOpts(t *testing.T) {
-	if got := conversationIDFromOpts(nil); got != "" {
-		t.Errorf("nil opts: got %q", got)
-	}
-	if got := conversationIDFromOpts(&AgentRunOptions{}); got != "" {
-		t.Errorf("nil ConversationOptions: got %q", got)
-	}
-	opts := &AgentRunOptions{ConversationOptions: &ConversationOptions{ID: "session-1"}}
-	if got := conversationIDFromOpts(opts); got != "session-1" {
-		t.Errorf("got %q, want session-1", got)
-	}
-}
-
-func TestAgent_Run_ForwardsRunOptions(t *testing.T) {
+func TestAgent_ValidateConversationID(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
-	mockRT := rtmocks.NewMockRuntime(ctrl)
-
-	opts := &AgentRunOptions{ConversationOptions: &ConversationOptions{ID: "conv-1"}}
-	mockRT.EXPECT().Execute(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, req *runtime.ExecuteRequest) (*types.AgentRunResult, error) {
-		if req.RunOptions == nil || req.RunOptions.ConversationOptions == nil {
-			t.Fatal("Run must forward RunOptions with ConversationOptions")
-		}
-		if req.RunOptions.ConversationOptions.ID != "conv-1" {
-			t.Errorf("ConversationOptions.ID = %q", req.RunOptions.ConversationOptions.ID)
-		}
-		return &types.AgentRunResult{Content: "ok"}, nil
-	})
-
-	a := testAgentWithRuntime(mockRT)
-	a.conversationConfig = &conversation.Config{Conversation: &mockConversation{}}
-	_, err := a.Run(context.Background(), "hello", opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestAgent_Stream_RejectsMissingConversationID(t *testing.T) {
-	a := testAgentWithRuntime(&stubRuntime{})
-	a.conversationConfig = &conversation.Config{Conversation: &mockConversation{}}
-	_, err := a.Stream(context.Background(), "prompt", nil)
-	if err == nil {
-		t.Fatal("expected error when conversation configured but opts nil")
-	}
-}
-
-func TestAgent_ValidateConversationID(t *testing.T) {
 	l := logger.DefaultLogger("error")
 	a := &Agent{agentConfig: agentConfig{logger: l}}
 
@@ -263,7 +218,7 @@ func TestAgent_ValidateConversationID(t *testing.T) {
 		t.Error("non-empty conversationID with no conversation should error")
 	}
 
-	a.conversationConfig = &conversation.Config{Conversation: &mockConversation{}}
+	a.conversationConfig = &conversation.Config{Conversation: ifacemocks.NewMockConversation(ctrl)}
 	if err := a.validateConversationID(""); err == nil {
 		t.Error("empty conversationID with conversation should error")
 	}
@@ -272,36 +227,15 @@ func TestAgent_ValidateConversationID(t *testing.T) {
 	}
 }
 
-type mockConversation struct{}
-
-func (m *mockConversation) AddMessage(ctx context.Context, id string, msg interfaces.Message) error {
-	return nil
-}
-func (m *mockConversation) ListMessages(ctx context.Context, id string, opts ...interfaces.ListMessagesOption) ([]interfaces.Message, error) {
-	return nil, nil
-}
-func (m *mockConversation) Clear(ctx context.Context, id string) error { return nil }
-func (m *mockConversation) IsDistributed() bool                        { return false }
-
-// stubRuntime is a minimal Runtime implementation for tests.
-type stubRuntime struct{}
-
-func (s *stubRuntime) Execute(_ context.Context, _ *runtime.ExecuteRequest) (*types.AgentRunResult, error) {
-	return nil, nil
-}
-func (s *stubRuntime) ExecuteStream(_ context.Context, _ *runtime.ExecuteRequest) (<-chan events.AgentEvent, error) {
-	return nil, nil
-}
-func (s *stubRuntime) Approve(_ context.Context, _ string, _ types.ApprovalStatus) error { return nil }
-func (s *stubRuntime) Close()                                                            {}
-
 func TestBuildSubAgentSpecs_flat(t *testing.T) {
-	childRT := &stubRuntime{}
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	childRT := rtmocks.NewMockRuntime(ctrl)
 	child := &Agent{agentConfig: agentConfig{Name: "Child"}, runtime: childRT}
 	mustTestRegistries(t, &child.agentConfig)
 	parentReg := NewSubAgentRegistry()
 	_ = parentReg.Register(child)
-	parent := &Agent{agentConfig: agentConfig{Name: "Parent", subAgentRegistry: parentReg}, runtime: &stubRuntime{}}
+	parent := &Agent{agentConfig: agentConfig{Name: "Parent", subAgentRegistry: parentReg}, runtime: rtmocks.NewMockRuntime(ctrl)}
 	mustTestRegistries(t, &parent.agentConfig)
 
 	got, err := parent.resolveSubAgentSpecs(context.Background())
@@ -331,17 +265,19 @@ func TestBuildSubAgentSpecs_flat(t *testing.T) {
 }
 
 func TestBuildSubAgentSpecs_nested(t *testing.T) {
-	leafRT := &stubRuntime{}
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	leafRT := rtmocks.NewMockRuntime(ctrl)
 	leaf := &Agent{agentConfig: agentConfig{Name: "Leaf"}, runtime: leafRT}
 	mustTestRegistries(t, &leaf.agentConfig)
-	midRT := &stubRuntime{}
+	midRT := rtmocks.NewMockRuntime(ctrl)
 	midReg := NewSubAgentRegistry()
 	_ = midReg.Register(leaf)
 	mid := &Agent{agentConfig: agentConfig{Name: "Mid", subAgentRegistry: midReg}, runtime: midRT}
 	mustTestRegistries(t, &mid.agentConfig)
 	rootReg := NewSubAgentRegistry()
 	_ = rootReg.Register(mid)
-	root := &Agent{agentConfig: agentConfig{Name: "Root", subAgentRegistry: rootReg}, runtime: &stubRuntime{}}
+	root := &Agent{agentConfig: agentConfig{Name: "Root", subAgentRegistry: rootReg}, runtime: rtmocks.NewMockRuntime(ctrl)}
 	mustTestRegistries(t, &root.agentConfig)
 
 	got, err := root.resolveSubAgentSpecs(context.Background())
@@ -391,42 +327,23 @@ func TestBuildSubAgentSpecs_noRuntimeStillBuilds(t *testing.T) {
 	}
 }
 
-func TestBuildAgent_DisableLocalWorkerWithStreamRequiresEnableRemoteWorkers(t *testing.T) {
-	_, err := buildAgent([]Option{
+// TestBuildAgent_DisableLocalWorker_Succeeds verifies that DisableLocalWorker builds
+// successfully on Temporal. Streaming subscribes to the workflow's WorkflowStream via a
+// plain Temporal client (see internal/runtime/temporal Stream), which has no
+// dependency on whether the agent process itself embeds a worker.
+func TestBuildAgent_DisableLocalWorker_Succeeds(t *testing.T) {
+	tc := temporalmocks.NewClient(t)
+	a, err := buildAgent([]Option{
 		WithName("x"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
+		WithTemporalClient(tc, "q"),
+		WithLLMClient(testLLM(t)),
 		DisableLocalWorker(),
-		WithStream(true),
 	})
-	if err == nil || !strings.Contains(err.Error(), "EnableRemoteWorkers") {
-		t.Fatalf("got %v", err)
+	if err != nil {
+		t.Fatalf("expected success, got %v", err)
 	}
-}
-
-func TestAgent_Run_RequiresApprovalHandlerWhenToolsNeedApproval(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-	mockRT := rtmocks.NewMockRuntime(ctrl)
-
-	a := &Agent{
-		agentConfig: agentConfig{
-			Name:    "A",
-			logger:  logger.DefaultLogger("error"),
-			tracer:  observability.DefaultNoopTracer,
-			metrics: observability.DefaultNoopMetrics,
-			tools: []interfaces.Tool{
-				mockToolWithApproval{mockTool: mockTool{name: "need"}, needApproval: true},
-			},
-		},
-		runtime: mockRT,
-	}
-	if err := a.buildToolRegistry(); err != nil {
-		t.Fatal(err)
-	}
-	_, err := a.Run(context.Background(), "hi", nil)
-	if err == nil || !strings.Contains(err.Error(), "WithApprovalHandler") {
-		t.Fatalf("got %v", err)
+	if a == nil {
+		t.Fatal("expected non-nil agent")
 	}
 }
 
@@ -442,31 +359,9 @@ func TestAgent_OnApproval(t *testing.T) {
 	}
 }
 
-func TestWireInMemoryEventChannelToSubAgents(t *testing.T) {
+func TestToolsList_picksUpRegistryChange(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
-	bus := eventbus.NewInmem(logger.DefaultLogger("error"))
-
-	parentRT := rtmocks.NewMockEventBusRuntime(ctrl)
-	parentRT.EXPECT().SetEventBus(bus)
-
-	childRT := rtmocks.NewMockEventBusRuntime(ctrl)
-	childRT.EXPECT().SetEventBus(bus)
-
-	child := &Agent{
-		agentConfig: agentConfig{Name: "Child", taskQueue: "q-c"},
-		runtime:     childRT,
-	}
-	parentReg := NewSubAgentRegistry()
-	_ = parentReg.Register(child)
-	parent := &Agent{
-		agentConfig: agentConfig{Name: "Parent", taskQueue: "q-p", subAgentRegistry: parentReg},
-		runtime:     parentRT,
-	}
-	shareEventBusWithSubAgent(bus, parent)
-}
-
-func TestToolsList_picksUpRegistryChange(t *testing.T) {
 	child := &Agent{agentConfig: agentConfig{Name: "Child"}}
 	mustTestRegistries(t, &child.agentConfig)
 	parentReg := NewSubAgentRegistry()
@@ -477,7 +372,7 @@ func TestToolsList_picksUpRegistryChange(t *testing.T) {
 			subAgentRegistry: parentReg,
 			logger:           NoopLogger(),
 		},
-		runtime: &stubRuntime{},
+		runtime: rtmocks.NewMockRuntime(ctrl),
 	}
 	if err := parent.buildMCPRegistry(); err != nil {
 		t.Fatal(err)
@@ -485,7 +380,7 @@ func TestToolsList_picksUpRegistryChange(t *testing.T) {
 	if err := parent.buildA2ARegistry(); err != nil {
 		t.Fatal(err)
 	}
-	_ = parent.toolRegistry.Register(mockTool{name: "echo"})
+	_ = parent.toolRegistry.Register(testTool(t, "echo"))
 
 	tools1, err := parent.resolveTools(context.Background())
 	if err != nil {
@@ -519,8 +414,8 @@ func TestToolsList_stableOrder(t *testing.T) {
 	c := &agentConfig{
 		toolRegistry: NewToolRegistry(),
 	}
-	_ = c.toolRegistry.Register(mockTool{name: "b"})
-	_ = c.toolRegistry.Register(mockTool{name: "a"})
+	_ = c.toolRegistry.Register(testTool(t, "b"))
+	_ = c.toolRegistry.Register(testTool(t, "a"))
 	tools1, err := c.resolveTools(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -580,53 +475,5 @@ func TestAgent_RegistryAccessors(t *testing.T) {
 	}
 	if a.SubAgentRegistry() != subReg {
 		t.Fatal("SubAgentRegistry accessor should return configured registry")
-	}
-}
-
-func TestAgent_Run_resolvesToolsPerRun(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-	mockRT := rtmocks.NewMockRuntime(ctrl)
-
-	reg := NewToolRegistry()
-	if err := reg.Register(mockTool{name: "first"}); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg := agentConfig{
-		Name:               "TestAgent",
-		toolRegistry:       reg,
-		logger:             logger.DefaultLogger("error"),
-		maxSubAgentDepth:   2,
-		tracer:             observability.DefaultNoopTracer,
-		metrics:            observability.DefaultNoopMetrics,
-		toolApprovalPolicy: AutoToolApprovalPolicy(),
-	}
-	mustTestRegistries(t, &cfg)
-	a := &Agent{agentConfig: cfg, runtime: mockRT}
-
-	var toolCounts []int
-	gomock.InOrder(
-		mockRT.EXPECT().Execute(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, req *runtime.ExecuteRequest) (*types.AgentRunResult, error) {
-			toolCounts = append(toolCounts, len(req.Tools))
-			return &types.AgentRunResult{Content: "ok"}, nil
-		}),
-		mockRT.EXPECT().Execute(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, req *runtime.ExecuteRequest) (*types.AgentRunResult, error) {
-			toolCounts = append(toolCounts, len(req.Tools))
-			return &types.AgentRunResult{Content: "ok"}, nil
-		}),
-	)
-
-	if _, err := a.Run(context.Background(), "one", nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := a.ToolRegistry().Register(mockTool{name: "second"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := a.Run(context.Background(), "two", nil); err != nil {
-		t.Fatal(err)
-	}
-	if len(toolCounts) != 2 || toolCounts[0] != 1 || toolCounts[1] != 2 {
-		t.Fatalf("tool counts per run = %v, want [1 2]", toolCounts)
 	}
 }

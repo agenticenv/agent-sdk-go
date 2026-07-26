@@ -11,10 +11,10 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/agenticenv/agent-sdk-go/internal/eventbus"
 	"github.com/agenticenv/agent-sdk-go/internal/events"
 	"github.com/agenticenv/agent-sdk-go/internal/runtime"
 	"github.com/agenticenv/agent-sdk-go/internal/runtime/base"
+	"github.com/agenticenv/agent-sdk-go/internal/store"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
@@ -22,15 +22,13 @@ import (
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/contrib/workflowstreams"
 	"go.temporal.io/sdk/interceptor"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
 )
 
-var (
-	_ runtime.WorkerRuntime   = (*TemporalRuntime)(nil)
-	_ runtime.EventBusRuntime = (*TemporalRuntime)(nil) // embeds [runtime.Runtime]
-)
+var _ runtime.WorkerRuntime = (*TemporalRuntime)(nil)
 
 const (
 	// workersCheckTimeout is how long hasWorkers polls for pollers before giving up.
@@ -47,8 +45,10 @@ var ErrAgentFingerprintMismatch = errors.New("temporal: agent fingerprint mismat
 // ToolsResolver resolves per-run tools from registries at activity entry (worker runtime).
 type ToolsResolver func(ctx context.Context) ([]interfaces.Tool, error)
 
-// TemporalRuntime implements [runtime.WorkerRuntime] and [runtime.EventBusRuntime] using
-// Temporal workflows and activities as the execution backend.
+// TemporalRuntime implements [runtime.WorkerRuntime] using Temporal workflows and
+// activities as the execution backend. Agent event delivery goes through the
+// workflowstreams WorkflowStream (see stream.go), not an in-process event bus
+// (LocalRuntime shares its bus onto nested local sub-agent runtimes instead).
 // It embeds [base.Runtime] for the common agent fields (AgentSpec, AgentConfig, Tracer, Metrics,
 // ToolExecutionMode) and holds all Temporal-specific connection and fingerprint state as flat fields.
 type TemporalRuntime struct {
@@ -60,12 +60,14 @@ type TemporalRuntime struct {
 	taskQueue          string
 	instanceId         string
 	ownsTemporalClient bool
-	// enableRemoteWorkers: start event worker + event workflow in Execute/ExecuteStream (client agent runtime).
-	enableRemoteWorkers bool
 	// remoteWorker: true for NewAgentWorker (polls activities); false for client Agent runtime.
 	remoteWorker bool
 
 	logger logger.Logger
+
+	// approvalHandler is the Run-path approval callback (agent WithApprovalHandler).
+	// Nil when unset. Stream uses CUSTOM events + Approve/OnApproval instead.
+	approvalHandler types.ApprovalHandler
 
 	// Fingerprint inputs captured at construction; per-run digest from [computeAgentFingerprintFromRuntime].
 	policyFingerprint        string
@@ -77,7 +79,6 @@ type TemporalRuntime struct {
 	retrieverFingerprint string
 	hooksFingerprint     string
 
-	// Temporal-specific flags
 	// disableLocalWorker mirrors pkg/agent DisableLocalWorker: when false, the client embeds a worker
 	// so Execute/ExecuteStream skip DescribeTaskQueue poller checks.
 	disableLocalWorker bool
@@ -88,21 +89,12 @@ type TemporalRuntime struct {
 	// resolveTools resolves tools from registries at activity time (worker runtime).
 	resolveToolsFn ToolsResolver
 
-	eventbus eventbus.EventBus
-	runMu    sync.Mutex
-	// activeRunWorkflowIDs tracks all in-flight run workflow IDs. Multiple concurrent runs are allowed;
-	// each run gets a unique workflow ID (agent-run-{name}-{uuid}). Protected by runMu.
-	activeRunWorkflowIDs map[string]struct{}
-	// activeEventWorkflowID is the shared per-agent event pipeline workflow. All concurrent runs route
-	// their streaming events through the same pipeline. Set once (lazily) and protected by runMu.
-	activeEventWorkflowID string
-	// eventWorkflowIDOnce + suffix make agent-event-<name>-<uuid> unique per TemporalRuntime so
-	// multiple agents in one process do not collide; lazy start still uses the same ID for that runtime.
-	eventWorkflowIDOnce   sync.Once
-	eventWorkflowIDSuffix string
-
-	eventWorker   worker.Worker
-	eventWorkerMu sync.Mutex
+	// activeRuns tracks in-flight Run handles by Temporal workflowID (agent-run-{name}-{runID}).
+	// Thread-safe via store.KV. Used by Close and same-runtime GetRunHandle reuse.
+	activeRuns *store.KV[string, *runHandle]
+	// activeStreams tracks in-flight Stream handles by Temporal workflowID (agent-stream-{name}-{runID}).
+	// Thread-safe via store.KV. Used by Close and same-runtime GetStreamHandle reuse.
+	activeStreams *store.KV[string, *streamHandle]
 
 	agentWorker   worker.Worker
 	agentWorkerMu sync.Mutex
@@ -124,7 +116,6 @@ func NewTemporalRuntime(opts ...Option) (*TemporalRuntime, error) {
 			slog.String("name", rt.AgentSpec.Name),
 			slog.String("taskQueue", rt.taskQueue))
 	}
-	rt.eventbus = eventbus.NewInmem(rt.logger)
 	return rt, nil
 }
 
@@ -156,21 +147,9 @@ func (rt *TemporalRuntime) verifyAgentFingerprint(ctx context.Context, callerFin
 	return nil
 }
 
-// SetEventBus replaces the in-process event bus. Sub-agent runtimes are wired to the parent
-// agent's bus so delegation and approval events fan in correctly.
-func (rt *TemporalRuntime) SetEventBus(eventbus eventbus.EventBus) {
-	rt.eventbus = eventbus
-}
-
-// GetEventBus returns the event bus for the runtime.
-func (rt *TemporalRuntime) GetEventBus() eventbus.EventBus {
-	return rt.eventbus
-}
-
 // Start starts the worker (blocks until Stop is called).
 func (rt *TemporalRuntime) Start(ctx context.Context) error {
 	rt.logger.Info(ctx, "runtime worker starting", slog.String("scope", "runtime"), slog.String("taskQueue", rt.taskQueue))
-	// createAgentWorker creates and registers a Temporal worker for the agent's run workflow and activities.
 
 	rt.agentWorkerMu.Lock()
 	defer rt.agentWorkerMu.Unlock()
@@ -200,7 +179,9 @@ func (rt *TemporalRuntime) Start(ctx context.Context) error {
 	w.RegisterActivityWithOptions(rt.AgentToolAuthorizeActivity, activity.RegisterOptions{Name: "AgentToolAuthorizeActivity"})
 	w.RegisterActivityWithOptions(rt.AgentToolApprovalActivity, activity.RegisterOptions{Name: "AgentToolApprovalActivity"})
 	w.RegisterActivityWithOptions(rt.AgentToolExecuteActivity, activity.RegisterOptions{Name: "AgentToolExecuteActivity"})
-	w.RegisterActivityWithOptions(rt.SendAgentEventUpdateActivity, activity.RegisterOptions{Name: "SendAgentEventUpdateActivity"})
+	w.RegisterActivityWithOptions(rt.AgentWorkflowCleanupActivity, activity.RegisterOptions{Name: "AgentWorkflowCleanupActivity"})
+	// PublishStreamEventActivity: used by sub-agent workflows to forward events to the root WorkflowStream.
+	w.RegisterActivityWithOptions(rt.PublishStreamEventActivity, activity.RegisterOptions{Name: "PublishStreamEventActivity"})
 	w.RegisterActivityWithOptions(rt.AddConversationMessagesActivity, activity.RegisterOptions{Name: "AddConversationMessagesActivity"})
 	rt.agentWorker = w
 	if startErr := rt.agentWorker.Start(); startErr != nil {
@@ -211,7 +192,7 @@ func (rt *TemporalRuntime) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop stops the Temporal worker(s). Called when the agent package stops an embedded worker or closes the runtime.
+// Stop stops the Temporal worker(s).
 func (rt *TemporalRuntime) Stop() {
 	ctx := context.Background()
 	if rt.remoteWorker {
@@ -230,38 +211,68 @@ func (rt *TemporalRuntime) Stop() {
 	}
 }
 
+// stopWorkflow cancels a workflow; if cancel fails, terminates it.
+// reason is recorded on TerminateWorkflow only.
+func (rt *TemporalRuntime) stopWorkflow(ctx context.Context, workflowID, reason string) {
+	if rt.temporalClient == nil || workflowID == "" {
+		return
+	}
+	rt.logger.Debug(ctx, "runtime cancelling workflow",
+		slog.String("scope", "runtime"),
+		slog.String("workflowID", workflowID))
+	if err := rt.temporalClient.CancelWorkflow(ctx, workflowID, ""); err != nil {
+		rt.logger.Debug(ctx, "runtime cancel failed, terminating workflow",
+			slog.String("scope", "runtime"),
+			slog.String("workflowID", workflowID),
+			slog.Any("error", err))
+		_ = rt.temporalClient.TerminateWorkflow(ctx, workflowID, "", reason)
+	}
+}
+
+// getRunResult waits for a workflow to finish and returns its AgentRunResult.
+func (rt *TemporalRuntime) getRunResult(ctx context.Context, workflowID string) (*types.AgentRunResult, error) {
+	if rt.temporalClient == nil {
+		return nil, fmt.Errorf("temporal: getRunResult requires a Temporal client")
+	}
+	if workflowID == "" {
+		return nil, fmt.Errorf("temporal: getRunResult requires workflowID")
+	}
+	run := rt.temporalClient.GetWorkflow(ctx, workflowID, "")
+	var result *types.AgentRunResult
+	err := run.Get(ctx, &result)
+	return result, err
+}
+
+// getRunStatus describes a workflow and maps it to [types.RunStatus].
+// Returns [types.ErrRunNotFound] when the workflow is unknown.
+func (rt *TemporalRuntime) getRunStatus(ctx context.Context, workflowID string) (types.RunStatus, error) {
+	if rt.temporalClient == nil {
+		return "", fmt.Errorf("temporal: getRunStatus requires a Temporal client")
+	}
+	if workflowID == "" {
+		return "", fmt.Errorf("temporal: getRunStatus requires workflowID")
+	}
+	desc, err := rt.temporalClient.DescribeWorkflowExecution(ctx, workflowID, "")
+	if err != nil {
+		if isNotFoundError(err) {
+			return "", types.ErrRunNotFound
+		}
+		return "", err
+	}
+	return temporalStatusToRunStatus(desc.WorkflowExecutionInfo.GetStatus()), nil
+}
+
 func (rt *TemporalRuntime) Close() {
 	rt.logger.Info(context.Background(), "runtime closing", slog.String("scope", "runtime"), slog.String("name", rt.AgentSpec.Name))
-
-	rt.runMu.Lock()
-	activeIDs := make([]string, 0, len(rt.activeRunWorkflowIDs))
-	for id := range rt.activeRunWorkflowIDs {
-		activeIDs = append(activeIDs, id)
-	}
-	eventWorkflowID := rt.activeEventWorkflowID
-	rt.runMu.Unlock()
 
 	ctx := context.Background()
 
 	if rt.temporalClient != nil {
-		ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		termCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		defer cancel()
-		for _, workflowID := range activeIDs {
-			rt.logger.Debug(ctx, "runtime terminating active run", slog.String("scope", "runtime"), slog.String("workflowID", workflowID))
-			_ = rt.temporalClient.TerminateWorkflow(ctx, workflowID, "", "agent closed")
+		for _, workflowID := range rt.getActiveWorkflowIDs() {
+			rt.stopWorkflow(termCtx, workflowID, "agent closed")
 		}
-		if eventWorkflowID != "" {
-			rt.logger.Debug(ctx, "runtime signaling event pipeline to complete", slog.String("scope", "runtime"), slog.String("eventWorkflowID", eventWorkflowID))
-			_ = rt.temporalClient.SignalWorkflow(ctx, eventWorkflowID, "", eventWorkflowCompleteSignal, nil)
-			// Wait for event workflow to complete gracefully (worker must stay running to process the signal)
-			run := rt.temporalClient.GetWorkflow(ctx, eventWorkflowID, "")
-			_ = run.Get(ctx, nil)
-		}
-	}
-
-	if rt.eventWorker != nil {
-		rt.logger.Debug(ctx, "runtime stopping event worker", slog.String("scope", "runtime"))
-		rt.eventWorker.Stop()
 	}
 
 	if rt.agentWorker != nil {
@@ -276,6 +287,24 @@ func (rt *TemporalRuntime) Close() {
 	rt.logger.Info(ctx, "runtime closed", slog.String("scope", "runtime"), slog.String("name", rt.AgentSpec.Name))
 }
 
+func (rt *TemporalRuntime) getActiveWorkflowIDs() []string {
+	n := 0
+	if rt.activeRuns != nil {
+		n += rt.activeRuns.Len()
+	}
+	if rt.activeStreams != nil {
+		n += rt.activeStreams.Len()
+	}
+	ids := make([]string, 0, n)
+	if rt.activeRuns != nil {
+		ids = append(ids, rt.activeRuns.Keys()...)
+	}
+	if rt.activeStreams != nil {
+		ids = append(ids, rt.activeStreams.Keys()...)
+	}
+	return ids
+}
+
 func (rt *TemporalRuntime) Approve(ctx context.Context, approvalToken string, status types.ApprovalStatus) error {
 	if status != types.ApprovalStatusApproved && status != types.ApprovalStatusRejected {
 		return fmt.Errorf("invalid approval status: %s", status)
@@ -284,7 +313,13 @@ func (rt *TemporalRuntime) Approve(ctx context.Context, approvalToken string, st
 	if err != nil {
 		return fmt.Errorf("invalid approval token: %w", err)
 	}
-	return rt.temporalClient.CompleteActivity(ctx, taskToken, status, nil)
+	if err := rt.temporalClient.CompleteActivity(ctx, taskToken, status, nil); err != nil {
+		if isNotFoundError(err) {
+			return types.ErrApprovalAlreadyResolved
+		}
+		return err
+	}
+	return nil
 }
 
 func agentNameFromRuntime(rt *TemporalRuntime) string {
@@ -294,18 +329,34 @@ func agentNameFromRuntime(rt *TemporalRuntime) string {
 	return rt.AgentSpec.Name
 }
 
-func (rt *TemporalRuntime) Execute(ctx context.Context, req *runtime.ExecuteRequest) (*types.AgentRunResult, error) {
-	rt.logger.Debug(ctx, "runtime run dispatch", slog.String("scope", "runtime"), slog.String("agent", agentNameFromRuntime(rt)), slog.Int("inputLen", len(req.UserPrompt)))
-
-	runCtx := ctx
-	d := rt.AgentConfig.Limits.Timeout
-	if _, ok := ctx.Deadline(); !ok && d > 0 {
-		var cancel context.CancelFunc
-		runCtx, cancel = context.WithTimeout(ctx, d)
-		defer cancel()
+// Run starts the agent workflow and returns a [runtime.RunHandle] immediately.
+// Use [runtime.RunHandle.Get] or [runtime.RunHandle.Done] to wait for completion.
+// When rt.approvalHandler is set, after ExecuteWorkflow succeeds a background goroutine
+// subscribes to the WorkflowStream for CUSTOM approval events and completes them via CompleteActivity.
+func (rt *TemporalRuntime) Run(ctx context.Context, req *runtime.RunRequest) (runtime.RunHandle, error) {
+	if req == nil {
+		return nil, fmt.Errorf("temporal: nil RunRequest")
 	}
 
-	conversationID := base.GetConversationID(req)
+	rt.logger.Debug(ctx, "runtime run dispatch",
+		slog.String("scope", "runtime"),
+		slog.String("agent", agentNameFromRuntime(rt)),
+		slog.Int("inputLen", len(req.UserPrompt)))
+
+	runCtx, runCancel := context.WithCancel(ctx)
+	if d := rt.AgentConfig.Limits.Timeout; d > 0 {
+		if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+			var timeoutCancel context.CancelFunc
+			runCtx, timeoutCancel = context.WithTimeout(runCtx, d)
+			prev := runCancel
+			runCancel = func() {
+				timeoutCancel()
+				prev()
+			}
+		}
+	}
+
+	conversationID := req.ConversationID
 	memoryScope, memErr := rt.ResolveMemoryScope(runCtx)
 	if memErr != nil {
 		rt.logger.Warn(runCtx, "runtime memory scope resolve failed, continuing with empty scope",
@@ -324,54 +375,34 @@ func (rt *TemporalRuntime) Execute(ctx context.Context, req *runtime.ExecuteRequ
 	}
 	workflowID := rt.getWorkflowID(runID, agentNameFromRuntime(rt), false)
 
-	rt.logger.Debug(runCtx, "runtime identifiers", slog.String("scope", "runtime"), slog.String("runID", runID), slog.String("threadID", threadID), slog.String("workflowID", workflowID))
+	rt.logger.Debug(runCtx, "runtime identifiers",
+		slog.String("scope", "runtime"),
+		slog.String("runID", runID),
+		slog.String("threadID", threadID),
+		slog.String("workflowID", workflowID))
 
-	cleanup := rt.beginRun(workflowID)
-	defer cleanup()
+	eventTypes := []events.AgentEventType{}
+	if rt.approvalHandler != nil {
+		eventTypes = []events.AgentEventType{events.AgentEventTypeCustom}
+	}
 
-	var err error
 	wfInput := AgentWorkflowInput{
 		UserPrompt:       req.UserPrompt,
 		RunID:            runID,
 		StreamingEnabled: false,
-		EventWorkflowID:  "",
-		LocalChannelName: eventChannelName(workflowID),
+		RootWorkflowID:   "",
 		ConversationID:   conversationID,
 		MemoryScope:      memoryScope,
 		AgentFingerprint: computeAgentFingerprintFromRuntime(rt, req.Tools),
-		EventTypes:       []events.AgentEventType{},
+		EventTypes:       eventTypes,
 		SubAgentDepth:    0,
 		SubAgentRoutes:   buildSubAgentRoutes(req.SubAgents),
 		MaxSubAgentDepth: req.MaxSubAgentDepth,
 	}
 
-	if rt.enableRemoteWorkers {
-		if err := rt.createEventWorker(); err != nil {
-			rt.logger.Error(runCtx, "runtime event worker creation failed", slog.String("scope", "runtime"), slog.String("taskQueue", rt.taskQueue), slog.Any("error", err))
-			return nil, err
-		}
-		wfInput.EventWorkflowID, wfInput.EventTaskQueue, err = rt.resolveEventPipeline(runCtx, agentNameFromRuntime(rt))
-		if err != nil {
-			rt.logger.Error(runCtx, "runtime event pipeline resolution failed", slog.String("scope", "runtime"), slog.String("agent", agentNameFromRuntime(rt)), slog.Any("error", err))
-			return nil, err
-		}
-	}
-
-	var eventCh <-chan events.AgentEvent
-	var closeEvent func() error
-	if req.ApprovalHandler != nil {
-		wfInput.EventTypes = []events.AgentEventType{events.AgentEventTypeCustom}
-		eventCh, closeEvent, err = rt.subscribeToAgentEvents(runCtx, wfInput.LocalChannelName)
-		if err != nil {
-			rt.logger.Error(runCtx, "runtime event subscribe failed", slog.String("scope", "runtime"), slog.String("workflowID", workflowID), slog.Any("error", err))
-			return nil, err
-		}
-		defer func() { _ = closeEvent() }()
-	}
-
 	if !rt.skipHasWorkersPrecheck() {
-		hasWorkers := rt.hasWorkers(runCtx, rt.taskQueue)
-		if !hasWorkers {
+		if !rt.hasWorkers(runCtx, rt.taskQueue) {
+			runCancel()
 			rt.logger.Warn(runCtx, "no workers on task queue", slog.String("scope", "runtime"), slog.String("taskQueue", rt.taskQueue))
 			return nil, fmt.Errorf("no workers available on task queue %s", rt.taskQueue)
 		}
@@ -383,59 +414,146 @@ func (rt *TemporalRuntime) Execute(ctx context.Context, req *runtime.ExecuteRequ
 	rt.logger.Debug(runCtx, "runtime workflow execute",
 		slog.String("scope", "runtime"),
 		slog.String("workflowID", workflowID),
-		slog.Bool("streamingEnabled", wfInput.StreamingEnabled),
-		slog.Bool("hasEventPipeline", wfInput.EventWorkflowID != ""))
+		slog.Bool("hasApprovalHandler", rt.approvalHandler != nil))
 
-	workfowRun, err := rt.temporalClient.ExecuteWorkflow(runCtx, client.StartWorkflowOptions{
+	_, err := rt.temporalClient.ExecuteWorkflow(runCtx, client.StartWorkflowOptions{
 		ID:        workflowID,
 		TaskQueue: rt.taskQueue,
 	}, rt.AgentWorkflow, wfInput)
 	if err != nil {
-		rt.logger.Error(runCtx, "runtime workflow start failed", slog.String("scope", "runtime"), slog.String("workflowID", workflowID), slog.Any("error", err))
+		runCancel()
+		rt.logger.Error(runCtx, "runtime workflow start failed",
+			slog.String("scope", "runtime"),
+			slog.String("workflowID", workflowID),
+			slog.Any("error", err))
 		return nil, err
 	}
 
-	resultCh := make(chan *types.AgentRunResult, 1)
-	wfErrCh := make(chan error, 1)
+	var streamClient *workflowstreams.Client
+	var subscribeCancel context.CancelFunc
+	var approvalEventCh <-chan events.AgentEvent
+	if rt.approvalHandler != nil {
+		streamClient, approvalEventCh, subscribeCancel = rt.subscribeApprovalEvents(runCtx, workflowID)
+	}
+
+	handle := newRunHandle(runID, workflowID, rt, runCancel, func() {
+		rt.activeRuns.Delete(workflowID)
+	})
+	rt.activeRuns.Set(workflowID, handle)
+	go rt.driveRun(runCtx, runCancel, workflowID, handle, approvalEventCh, streamClient, subscribeCancel)
+	return handle, nil
+}
+
+// subscribeApprovalEvents starts a WorkflowStream subscription for CUSTOM approval events
+// after the workflow exists. Caller owns streamClient / subscribeCancel cleanup (via driveRun).
+func (rt *TemporalRuntime) subscribeApprovalEvents(
+	runCtx context.Context,
+	workflowID string,
+) (*workflowstreams.Client, <-chan events.AgentEvent, context.CancelFunc) {
+	streamClient := newStreamClient(rt.temporalClient, workflowID)
+	subscribeCtx, subscribeCancel := context.WithCancel(runCtx)
+
+	approvalCh := make(chan events.AgentEvent, 16)
 	go func() {
-		var result *types.AgentRunResult
-		err = workfowRun.Get(runCtx, &result)
-		if err != nil {
-			wfErrCh <- err
-			return
+		defer close(approvalCh)
+		for item, err := range streamClient.Subscribe(subscribeCtx, newStreamSubscribeOptions(0, []string{streamTopicEvents})) {
+			if err != nil {
+				return
+			}
+			ev, decErr := decodeStreamItem(item)
+			if decErr != nil {
+				rt.logger.Warn(subscribeCtx, "runtime approval event decode skipped",
+					slog.String("scope", "runtime"), slog.Any("error", decErr))
+				continue
+			}
+			if ev.Type() != events.AgentEventTypeCustom {
+				continue
+			}
+			// Skip already-resolved approvals (e.g. GetRunHandle reconnect replaying from offset 0).
+			if toolCallID, ok := approvalToolCallIDOf(ev); ok {
+				if !rt.isPendingApproval(subscribeCtx, workflowID, toolCallID) {
+					rt.logger.Debug(subscribeCtx, "runtime: skipping already-resolved approval",
+						slog.String("scope", "runtime"),
+						slog.String("workflowID", workflowID),
+						slog.String("toolCallID", toolCallID))
+					continue
+				}
+			}
+			select {
+			case approvalCh <- ev:
+			case <-subscribeCtx.Done():
+				return
+			}
 		}
-		resultCh <- result
+	}()
+	return streamClient, approvalCh, subscribeCancel
+}
+
+type approvalResponse struct {
+	approvalToken string
+	status        types.ApprovalStatus
+}
+
+// driveRun watches the run until [runHandle.Done], delivering approvals when configured.
+// On runCtx cancellation (timeout/cancel), cancels the workflow (terminate if cancel fails)
+// so the handle's await can finish.
+func (rt *TemporalRuntime) driveRun(
+	runCtx context.Context,
+	runCancel context.CancelFunc,
+	workflowID string,
+	handle *runHandle,
+	approvalEventCh <-chan events.AgentEvent,
+	streamClient *workflowstreams.Client,
+	subscribeCancel context.CancelFunc,
+) {
+	defer runCancel()
+	defer func() {
+		if subscribeCancel != nil {
+			subscribeCancel()
+		}
+		if streamClient != nil {
+			_ = streamClient.Close(context.Background())
+		}
 	}()
 
-	type approvalResponse struct {
-		approvalToken string
-		status        types.ApprovalStatus
-	}
 	approvalResponseCh := make(chan approvalResponse, 16)
-
-	rt.logger.Debug(runCtx, "runtime waiting for run result", slog.String("scope", "runtime"), slog.String("workflowID", workflowID))
+	rt.logger.Debug(runCtx, "runtime watching run",
+		slog.String("scope", "runtime"),
+		slog.String("workflowID", workflowID))
 
 	for {
 		select {
-		case r := <-resultCh:
-			rt.logger.Debug(runCtx, "runtime run completed",
-				slog.String("scope", "runtime"),
-				slog.String("agentName", r.AgentName),
-				slog.String("model", r.Model),
-				slog.Int("contentLen", len(r.Content)))
-			return r, nil
-		case err := <-wfErrCh:
-			rt.logger.Error(runCtx, "runtime run failed", slog.String("scope", "runtime"), slog.String("workflowID", workflowID), slog.Any("error", err))
-			return nil, err
-		case <-runCtx.Done():
-			rt.logger.Debug(runCtx, "runtime run cancelled", slog.String("scope", "runtime"), slog.String("workflowID", workflowID), slog.Any("error", runCtx.Err()))
-			termCtx, termCancel := context.WithTimeout(context.Background(), 15*time.Second)
-			defer termCancel()
-			if rt.temporalClient != nil {
-				_ = rt.temporalClient.TerminateWorkflow(termCtx, workflowID, "", "run timeout")
+		case <-handle.Done():
+			res, err := handle.Get(context.Background())
+			if err != nil {
+				rt.logger.Error(runCtx, "runtime run completed with error",
+					slog.String("scope", "runtime"),
+					slog.String("runID", handle.ID()),
+					slog.String("workflowID", workflowID),
+					slog.Any("error", err))
+			} else if res != nil {
+				rt.logger.Debug(runCtx, "runtime run completed",
+					slog.String("scope", "runtime"),
+					slog.String("agentName", res.AgentName),
+					slog.String("model", res.Model),
+					slog.Int("contentLen", len(res.Content)))
 			}
-			return nil, runCtx.Err()
-		case ev := <-eventCh:
+			return
+		case <-runCtx.Done():
+			rt.logger.Debug(runCtx, "runtime run cancelled",
+				slog.String("scope", "runtime"),
+				slog.String("workflowID", workflowID),
+				slog.Any("error", runCtx.Err()))
+			stopCtx, stopCancel := context.WithTimeout(context.Background(), 15*time.Second)
+			rt.stopWorkflow(stopCtx, workflowID, "run cancelled")
+			stopCancel()
+			<-handle.Done()
+			return
+		case ev, ok := <-approvalEventCh:
+			if !ok {
+				approvalEventCh = nil
+				continue
+			}
 			if ev == nil || ev.Type() != events.AgentEventTypeCustom {
 				continue
 			}
@@ -448,7 +566,8 @@ func (rt *TemporalRuntime) Execute(ctx context.Context, req *runtime.ExecuteRequ
 				if errors.Is(err, ErrNotApprovalCustomEvent) {
 					continue
 				}
-				rt.logger.Error(runCtx, "runtime approval custom event decode failed", slog.String("scope", "runtime"), slog.Any("error", err))
+				rt.logger.Error(runCtx, "runtime approval custom event decode failed",
+					slog.String("scope", "runtime"), slog.Any("error", err))
 				continue
 			}
 			apprReq.Respond = func(status types.ApprovalStatus) error {
@@ -456,24 +575,123 @@ func (rt *TemporalRuntime) Execute(ctx context.Context, req *runtime.ExecuteRequ
 					return errors.New("invalid approval status")
 				}
 				approvalResponseCh <- approvalResponse{approvalToken: token, status: status}
+				// TODO: Respond always returns nil today (async OnApproval in driveRun). Later, surface
+				// types.ErrApprovalAlreadyResolved (and other OnApproval errors) to the handler so a
+				// second UI can dismiss the prompt. Dual-process GetRunHandle is unsupported; document
+				// that only the owner process should handle approvals.
 				return nil
 			}
 			approvalCtx, cancel := context.WithTimeout(runCtx, rt.AgentConfig.Limits.ApprovalTimeout)
-			req.ApprovalHandler(approvalCtx, apprReq)
+			rt.approvalHandler(approvalCtx, apprReq)
 			cancel()
 		case resp := <-approvalResponseCh:
 			if err := rt.OnApproval(runCtx, resp.approvalToken, resp.status); err != nil {
-				rt.logger.Error(runCtx, "runtime approval completion failed", slog.String("scope", "runtime"), slog.Any("error", err))
-				return nil, err
+				if errors.Is(err, types.ErrApprovalAlreadyResolved) {
+					rt.logger.Debug(runCtx, "runtime approval already resolved",
+						slog.String("scope", "runtime"))
+					continue
+				}
+				rt.logger.Error(runCtx, "runtime approval completion failed; approval activity will time out",
+					slog.String("scope", "runtime"), slog.Any("error", err))
+				continue
 			}
 		}
 	}
 }
 
-func (rt *TemporalRuntime) ExecuteStream(ctx context.Context, req *runtime.ExecuteRequest) (<-chan events.AgentEvent, error) {
-	rt.logger.Debug(ctx, "runtime stream run dispatch", slog.String("scope", "runtime"), slog.String("agent", agentNameFromRuntime(rt)), slog.Int("inputLen", len(req.UserPrompt)))
+// GetRunHandle reconnects to an existing non-stream agent run by runID.
+//
+// It derives the Temporal workflow ID (agent-run-…), describes the execution, and returns a
+// [runtime.RunHandle]. Same-runtime: if the run is already in activeRuns, that handle is returned.
+// Otherwise it re-attaches driveRun on an independent ctx (Background + Limits.Timeout) — the
+// caller's ctx is only used for status/describe and does not CancelWorkflow when cancelled.
+// Stop the run with [runtime.RunHandle.Cancel]. Approvals reattach when approvalHandler is set
+// (QueryIsApprovalPending skips already-resolved CUSTOM events).
+// Crash reconnect assumes the same agent config (see version/fingerprint TODO below).
+//
+// Returns [types.ErrRunNotFound] when runID is empty or the workflow is unknown.
+// Returns [types.ErrRunAlreadyCompleted] when the workflow is already terminal.
+func (rt *TemporalRuntime) GetRunHandle(ctx context.Context, runID string) (runtime.RunHandle, error) {
+	if strings.TrimSpace(runID) == "" {
+		return nil, types.ErrRunNotFound
+	}
+	if rt.temporalClient == nil {
+		return nil, fmt.Errorf("temporal: GetRunHandle requires a Temporal client")
+	}
 
-	conversationID := base.GetConversationID(req)
+	workflowID := rt.getWorkflowID(runID, agentNameFromRuntime(rt), false)
+	rt.logger.Debug(ctx, "runtime get run handle",
+		slog.String("scope", "runtime"),
+		slog.String("runID", runID),
+		slog.String("workflowID", workflowID))
+
+	status, err := rt.getRunStatus(ctx, workflowID)
+	if err != nil {
+		return nil, err
+	}
+	if status.IsTerminal() {
+		return nil, types.ErrRunAlreadyCompleted
+	}
+	// TODO: On reconnect, compare the running workflow's agent version/fingerprint to this
+	// runtime's agent. If they differ (redeploy/config change), reject GetRunHandle instead of
+	// attaching driveRun/approvals. Crash reconnect assumes the same agent config; a version
+	// mismatch should force a new run rather than a half-working reconnect.
+	handle, ok := rt.activeRuns.Get(workflowID)
+	if ok {
+		return handle, nil
+	}
+
+	// Reattach driveRun with an independent run ctx. Do not use the caller's ctx here —
+	// GetRunHandle/Get reconnect waiters often share a short deadline that must not
+	// CancelWorkflow. Run(ctx) already bound the original run to the Run ctx.
+	runCtx, runCancel := rt.newDriveContext(context.Background())
+
+	var streamClient *workflowstreams.Client
+	var subscribeCancel context.CancelFunc
+	var approvalEventCh <-chan events.AgentEvent
+	if rt.approvalHandler != nil {
+		streamClient, approvalEventCh, subscribeCancel = rt.subscribeApprovalEvents(runCtx, workflowID)
+	}
+
+	handle = newRunHandle(runID, workflowID, rt, runCancel, func() {
+		rt.activeRuns.Delete(workflowID)
+	})
+	rt.activeRuns.Set(workflowID, handle)
+	go rt.driveRun(runCtx, runCancel, workflowID, handle, approvalEventCh, streamClient, subscribeCancel)
+	return handle, nil
+}
+
+// Stream starts the agent Temporal workflow and returns a [runtime.StreamHandle] immediately.
+//
+// It does not open the event subscription here — call [runtime.StreamHandle.Events] (optionally
+// with fromOffset > 0 to reconnect). The handle owns Status/Cancel/Events for this runID.
+// Same-runtime reuse goes through activeStreams (see [TemporalRuntime.GetStreamHandle]).
+//
+// Cancelling ctx cancels the agent run (same idea as [TemporalRuntime.Run]). Cancelling the
+// context passed to [runtime.StreamHandle.Events] only stops that subscriber — it does not
+// cancel the Temporal workflow. Use a separate Events ctx for reconnect / "subscriber gone".
+// Agent Limits.Timeout still applies when the Stream ctx has no deadline.
+//
+// Identifiers: runID is minted here; workflowID uses the stream naming convention
+// (agent-stream-…); threadID prefers ConversationID for synthetic RUN_STARTED/FINISHED.
+// Registers in activeStreams; cleanup deletes the entry from awaitCompletion when the
+// workflow finishes. Cancel/timeout stop the workflow via driveStream.
+func (rt *TemporalRuntime) Stream(ctx context.Context, req *runtime.RunRequest) (runtime.StreamHandle, error) {
+	if req == nil {
+		return nil, fmt.Errorf("temporal: nil RunRequest")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	rt.logger.Debug(ctx, "runtime stream run dispatch",
+		slog.String("scope", "runtime"),
+		slog.String("agent", agentNameFromRuntime(rt)),
+		slog.Int("inputLen", len(req.UserPrompt)))
+
+	runCtx, runCancel := rt.newDriveContext(ctx)
+
+	conversationID := req.ConversationID
 	memoryScope, memErr := rt.ResolveMemoryScope(ctx)
 	if memErr != nil {
 		rt.logger.Warn(ctx, "runtime memory scope resolve failed, continuing with empty scope",
@@ -481,8 +699,9 @@ func (rt *TemporalRuntime) ExecuteStream(ctx context.Context, req *runtime.Execu
 			slog.Any("error", memErr))
 		memoryScope = interfaces.MemoryScope{}
 	}
-	runID := uuid.New().String()
 
+	runID := uuid.New().String()
+	// threadID labels synthetic lifecycle events; fall back to instance then runID.
 	threadID := conversationID
 	if threadID == "" {
 		threadID = rt.instanceId
@@ -490,43 +709,25 @@ func (rt *TemporalRuntime) ExecuteStream(ctx context.Context, req *runtime.Execu
 			threadID = runID
 		}
 	}
+	// isStream=true → durable stream workflow ID (distinct from Run's non-stream ID).
 	workflowID := rt.getWorkflowID(runID, agentNameFromRuntime(rt), true)
 
-	rt.logger.Debug(ctx, "runtime identifiers", slog.String("scope", "runtime"), slog.String("runID", runID), slog.String("threadID", threadID), slog.String("workflowID", workflowID))
-
-	cleanup := rt.beginRun(workflowID)
-	streamStarted := false
-	defer func() {
-		if !streamStarted {
-			cleanup()
-		}
-	}()
-
-	var err error
-	var eventWorkflowID, eventTaskQueue string
-	if rt.enableRemoteWorkers {
-		if err := rt.createEventWorker(); err != nil {
-			rt.logger.Error(ctx, "runtime event worker creation failed", slog.String("scope", "runtime"), slog.String("taskQueue", rt.taskQueue), slog.Any("error", err))
-			return nil, err
-		}
-		eventWorkflowID, eventTaskQueue, err = rt.resolveEventPipeline(ctx, agentNameFromRuntime(rt))
-		if err != nil {
-			rt.logger.Error(ctx, "runtime event pipeline resolution failed", slog.String("scope", "runtime"), slog.String("agent", agentNameFromRuntime(rt)), slog.Any("error", err))
-			return nil, err
-		}
-	}
+	rt.logger.Debug(ctx, "runtime identifiers",
+		slog.String("scope", "runtime"),
+		slog.String("runID", runID),
+		slog.String("threadID", threadID),
+		slog.String("workflowID", workflowID))
 
 	streamEventTypes := []events.AgentEventType{events.AgentEventAll}
 	if len(req.EventTypes) > 0 {
 		streamEventTypes = req.EventTypes
 	}
+
 	wfInput := AgentWorkflowInput{
 		UserPrompt:       req.UserPrompt,
 		RunID:            runID,
-		EventWorkflowID:  eventWorkflowID,
-		EventTaskQueue:   eventTaskQueue,
-		LocalChannelName: eventChannelName(workflowID),
-		StreamingEnabled: req.StreamingEnabled,
+		RootWorkflowID:   "",
+		StreamingEnabled: req.EnableLLMStream,
 		ConversationID:   conversationID,
 		MemoryScope:      memoryScope,
 		AgentFingerprint: computeAgentFingerprintFromRuntime(rt, req.Tools),
@@ -536,135 +737,217 @@ func (rt *TemporalRuntime) ExecuteStream(ctx context.Context, req *runtime.Execu
 		MaxSubAgentDepth: req.MaxSubAgentDepth,
 	}
 
-	runCtx := ctx
-	var runCancel context.CancelFunc
-	d := rt.AgentConfig.Limits.Timeout
-	if _, ok := ctx.Deadline(); !ok && d > 0 {
-		runCtx, runCancel = context.WithTimeout(ctx, d)
-	}
-	defer func() {
-		if !streamStarted && runCancel != nil {
-			runCancel()
-		}
-	}()
-
-	eventCh, closeEvent, err := rt.subscribeToAgentEvents(runCtx, wfInput.LocalChannelName)
-	if err != nil {
-		rt.logger.Error(runCtx, "runtime event subscribe failed", slog.String("scope", "runtime"), slog.String("channel", wfInput.LocalChannelName), slog.Any("error", err))
-		return nil, err
-	}
-	rt.logger.Debug(runCtx, "runtime subscribed to event stream", slog.String("scope", "runtime"), slog.String("channel", wfInput.LocalChannelName))
-	defer func() {
-		if !streamStarted && closeEvent != nil {
-			_ = closeEvent()
-		}
-	}()
-
+	// Fail fast when no pollers are on the task queue (skipped for embedded local workers).
 	if !rt.skipHasWorkersPrecheck() {
-		hasWorkers := rt.hasWorkers(ctx, rt.taskQueue)
-		if !hasWorkers {
-			rt.logger.Warn(runCtx, "no workers on task queue", slog.String("scope", "runtime"), slog.String("taskQueue", rt.taskQueue))
+		if !rt.hasWorkers(ctx, rt.taskQueue) {
+			runCancel()
+			rt.logger.Warn(ctx, "no workers on task queue", slog.String("scope", "runtime"), slog.String("taskQueue", rt.taskQueue))
 			return nil, fmt.Errorf("no workers available on task queue %s", rt.taskQueue)
 		}
-		rt.logger.Debug(runCtx, "task queue has workers (stream)", slog.String("scope", "runtime"), slog.String("taskQueue", rt.taskQueue))
+		rt.logger.Debug(ctx, "task queue has workers (stream)", slog.String("scope", "runtime"), slog.String("taskQueue", rt.taskQueue))
 	} else {
-		rt.logger.Debug(runCtx, "skipping task queue poller check", slog.String("scope", "runtime"), slog.String("taskQueue", rt.taskQueue), slog.String("reason", rt.hasWorkersPrecheckSkipReason()))
+		rt.logger.Debug(ctx, "skipping task queue poller check",
+			slog.String("scope", "runtime"),
+			slog.String("taskQueue", rt.taskQueue),
+			slog.String("reason", rt.hasWorkersPrecheckSkipReason()))
 	}
 
-	rt.logger.Debug(runCtx, "runtime workflow execute (stream)", slog.String("scope", "runtime"), slog.String("workflowID", workflowID))
+	rt.logger.Debug(ctx, "runtime workflow execute (stream)",
+		slog.String("scope", "runtime"),
+		slog.String("workflowID", workflowID))
 
-	workflowRun, err := rt.temporalClient.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
+	_, err := rt.temporalClient.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
 		ID:        workflowID,
 		TaskQueue: rt.taskQueue,
 	}, rt.AgentWorkflow, wfInput)
 	if err != nil {
-		rt.logger.Error(runCtx, "runtime workflow start failed", slog.String("scope", "runtime"), slog.String("workflowID", workflowID), slog.Any("error", err))
+		runCancel()
+		rt.logger.Error(ctx, "runtime workflow start failed",
+			slog.String("scope", "runtime"),
+			slog.String("workflowID", workflowID),
+			slog.Any("error", err))
 		return nil, err
 	}
 
-	rt.logger.Debug(runCtx, "runtime workflow started (stream)", slog.String("scope", "runtime"), slog.String("workflowID", workflowID))
+	rt.logger.Debug(ctx, "runtime workflow started (stream)",
+		slog.String("scope", "runtime"),
+		slog.String("workflowID", workflowID))
 
-	streamStarted = true
-	outCh := make(chan events.AgentEvent, 64)
-	wfErrCh := make(chan error, 1)
-	workflowResultCh := make(chan *types.AgentRunResult, 1)
-	localChannel := wfInput.LocalChannelName
-	rootName := agentNameFromRuntime(rt)
+	handle := newStreamHandle(runID, workflowID, threadID, rt, runCancel, func() {
+		rt.activeStreams.Delete(workflowID)
+	})
+	rt.activeStreams.Set(workflowID, handle)
+	go rt.driveStream(runCtx, runCancel, workflowID, handle)
+	return handle, nil
+}
 
-	// eventCh → outCh only: all RUN_* and workflow events pass through the local bus (publish then forward).
-	go func() {
-		defer close(outCh)
-		for ev := range eventCh {
-			if ev == nil {
-				continue
-			}
-			outCh <- ev
+// GetStreamHandle reconnects to an existing stream agent run by runID.
+//
+// It derives the Temporal stream workflow ID (agent-stream-…), describes the execution, and
+// returns a [runtime.StreamHandle]. Same-runtime: if the stream is already in activeStreams,
+// that handle is returned. Otherwise it registers a new handle (cleanup on awaitCompletion)
+// and starts driveStream on an independent ctx (Background + Limits.Timeout) — the caller's
+// ctx is only used for status/describe and does not CancelWorkflow when cancelled. Stop the
+// run with [runtime.StreamHandle.Cancel]. Call [runtime.StreamHandle.Events] (optionally with
+// fromOffset > 0) to subscribe.
+// Crash reconnect assumes the same agent config (see version/fingerprint TODO below).
+//
+// Returns [types.ErrStreamNotFound] when runID is empty or the workflow is unknown.
+// Returns [types.ErrRunAlreadyCompleted] when the workflow is already terminal.
+func (rt *TemporalRuntime) GetStreamHandle(ctx context.Context, runID string) (runtime.StreamHandle, error) {
+	if strings.TrimSpace(runID) == "" {
+		return nil, types.ErrStreamNotFound
+	}
+	if rt.temporalClient == nil {
+		return nil, fmt.Errorf("temporal: GetStreamHandle requires a Temporal client")
+	}
+
+	workflowID := rt.getWorkflowID(runID, agentNameFromRuntime(rt), true)
+	rt.logger.Debug(ctx, "runtime get stream handle",
+		slog.String("scope", "runtime"),
+		slog.String("runID", runID),
+		slog.String("workflowID", workflowID))
+
+	desc, err := rt.temporalClient.DescribeWorkflowExecution(ctx, workflowID, "")
+	if err != nil {
+		if isNotFoundError(err) {
+			return nil, types.ErrStreamNotFound
 		}
-	}()
+		return nil, err
+	}
+	st := temporalStatusToRunStatus(desc.WorkflowExecutionInfo.GetStatus())
+	if st.IsTerminal() {
+		return nil, types.ErrRunAlreadyCompleted
+	}
 
-	rt.publishRunEvent(localChannel, events.NewAgentRunStartedEvent(threadID, runID))
+	// TODO: On reconnect, compare the running workflow's agent version/fingerprint to this
+	// runtime's agent. If they differ (redeploy/config change), reject GetStreamHandle.
+	// Crash reconnect assumes the same agent config; a version mismatch should force a new
+	// stream rather than a half-working reconnect.
+	handle, ok := rt.activeStreams.Get(workflowID)
+	if ok {
+		return handle, nil
+	}
 
-	go func() {
-		// cleanup/endRun only after Get returns. runCtx must stay valid until then so the workflow
-		// can finish (after root complete, work remains: e.g. SendAgentEventUpdateActivity—longer
-		// when a sub-agent child workflow just ran).
-		defer cleanup()
-		var result *types.AgentRunResult
-		if err := workflowRun.Get(runCtx, &result); err != nil {
-			// Cancel the run timeout context on failure so the control goroutine and subscriber unwind.
-			if runCancel != nil {
-				runCancel()
+	// Reattach driveStream with an independent run ctx. Do not use the caller's ctx here —
+	// GetStreamHandle/Events reconnect waiters often share a short deadline that must not
+	// CancelWorkflow. Stream(ctx) already bound the original run to the Stream ctx.
+	runCtx, runCancel := rt.newDriveContext(context.Background())
+
+	// threadID for synthetic lifecycle events; ConversationID is not available on reconnect.
+	threadID := rt.instanceId
+	if threadID == "" {
+		threadID = runID
+	}
+
+	handle = newStreamHandle(runID, workflowID, threadID, rt, runCancel, func() {
+		rt.activeStreams.Delete(workflowID)
+	})
+	rt.activeStreams.Set(workflowID, handle)
+	go rt.driveStream(runCtx, runCancel, workflowID, handle)
+	return handle, nil
+}
+
+// newDriveContext returns the driveRun / driveStream context.
+// parent is typically the Run()/Stream() caller ctx (cancel parent → cancel run), or
+// context.Background() for GetRunHandle / GetStreamHandle reattach. When parent has no
+// deadline and Limits.Timeout is set, that timeout is applied.
+func (rt *TemporalRuntime) newDriveContext(parent context.Context) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	runCtx, runCancel := context.WithCancel(parent)
+	if d := rt.AgentConfig.Limits.Timeout; d > 0 {
+		if _, hasDeadline := parent.Deadline(); !hasDeadline {
+			var timeoutCancel context.CancelFunc
+			runCtx, timeoutCancel = context.WithTimeout(runCtx, d)
+			prev := runCancel
+			runCancel = func() {
+				timeoutCancel()
+				prev()
 			}
-			wfErrCh <- err
-			return
 		}
-		// On success, do not cancel runCtx here. Get can return before in-flight streaming events are
-		// published (async pipeline: UpdateWorkflow → event workflow → publish activity → inmem bus).
-		// Cancelling runCtx immediately races the eventCh→outCh forwarder and can surface a spurious
-		// RUN_ERROR. The control goroutine calls runCancel only after publishing root RUN_FINISHED.
-		// Non-blocking send: if workflowResultCh (buffer 1) is full, the control path has not read yet—drop.
-		select {
-		case workflowResultCh <- result:
-		default:
-		}
-	}()
+	}
+	return runCtx, runCancel
+}
 
-	go func() {
-		select {
-		case <-runCtx.Done():
-			termCtx, termCancel := context.WithTimeout(context.Background(), 15*time.Second)
-			if rt.temporalClient != nil {
-				_ = rt.temporalClient.TerminateWorkflow(termCtx, workflowID, "", "run timeout")
-			}
-			termCancel()
-			rt.publishRunEvent(localChannel, events.NewAgentRunErrorEvent("request timed out (approval expired or deadline exceeded)"))
-			_ = closeEvent()
-		case wfErr := <-wfErrCh:
-			rt.logger.Error(runCtx, "runtime stream run failed", slog.String("scope", "runtime"), slog.String("workflowID", workflowID), slog.Any("error", wfErr))
-			if errors.Is(wfErr, context.DeadlineExceeded) || errors.Is(wfErr, context.Canceled) {
-				termCtx, termCancel := context.WithTimeout(context.Background(), 15*time.Second)
-				if rt.temporalClient != nil {
-					_ = rt.temporalClient.TerminateWorkflow(termCtx, workflowID, "", "run timeout")
-				}
-				termCancel()
-			}
-			rt.publishRunEvent(localChannel, events.NewAgentRunErrorEvent(wfErr.Error()))
-			_ = closeEvent()
-		case result := <-workflowResultCh:
-			finEv := syntheticStreamCompleteEvent(result, threadID, runID, rootName)
-			rt.publishRunEvent(localChannel, finEv)
-			if runCancel != nil {
-				runCancel()
-			}
-			_ = closeEvent()
-		}
-	}()
+// driveStream watches the stream until [streamHandle.Done].
+// On runCtx cancellation (timeout/cancel), stops the workflow so await can finish.
+// No approval subscription — Stream uses Events + Approve instead of driveRun's path.
+func (rt *TemporalRuntime) driveStream(
+	runCtx context.Context,
+	runCancel context.CancelFunc,
+	workflowID string,
+	handle *streamHandle,
+) {
+	defer runCancel()
+	select {
+	case <-handle.Done():
+		return
+	case <-runCtx.Done():
+		rt.logger.Debug(runCtx, "runtime stream cancelled",
+			slog.String("scope", "runtime"),
+			slog.String("workflowID", workflowID),
+			slog.Any("error", runCtx.Err()))
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		rt.stopWorkflow(stopCtx, workflowID, "run cancelled")
+		stopCancel()
+		<-handle.Done()
+	}
+}
 
-	return outCh, nil
+// temporalStatusToRunStatus maps a Temporal workflow execution status enum to [types.RunStatus].
+func temporalStatusToRunStatus(s enumspb.WorkflowExecutionStatus) types.RunStatus {
+	switch s {
+	case enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING:
+		return types.StatusRunning
+	case enumspb.WORKFLOW_EXECUTION_STATUS_COMPLETED:
+		return types.StatusCompleted
+	case enumspb.WORKFLOW_EXECUTION_STATUS_FAILED:
+		return types.StatusFailed
+	case enumspb.WORKFLOW_EXECUTION_STATUS_CANCELED:
+		return types.StatusCancelled
+	case enumspb.WORKFLOW_EXECUTION_STATUS_TIMED_OUT:
+		return types.StatusFailed // treat timeout as failure
+	case enumspb.WORKFLOW_EXECUTION_STATUS_TERMINATED:
+		return types.StatusCancelled // treat termination as cancellation
+	default:
+		return types.StatusPending
+	}
+}
+
+// isPendingApproval queries the workflow to check whether toolCallID still has a pending approval.
+// Returns true when the query fails (fail-open: forward the event rather than silently drop it).
+func (rt *TemporalRuntime) isPendingApproval(ctx context.Context, workflowID string, toolCallID string) bool {
+	resp, err := rt.temporalClient.QueryWorkflow(ctx, workflowID, "", QueryIsApprovalPending, toolCallID)
+	if err != nil {
+		// Query failed (workflow closed, network issue, etc.) — treat as pending to avoid dropping
+		// a legitimately open approval request.
+		rt.logger.Warn(ctx, "stream: pending-approval query failed, forwarding approval event",
+			slog.String("scope", "runtime"),
+			slog.String("workflowID", workflowID),
+			slog.String("toolCallID", toolCallID),
+			slog.Any("error", err))
+		return true
+	}
+	var pending bool
+	if err := resp.Get(&pending); err != nil {
+		rt.logger.Warn(ctx, "stream: pending-approval query decode failed, forwarding approval event",
+			slog.String("scope", "runtime"),
+			slog.String("workflowID", workflowID),
+			slog.String("toolCallID", toolCallID),
+			slog.Any("error", err))
+		return true
+	}
+	return pending
 }
 
 // OnApproval completes a tool approval when using ExecuteStream. Pass the string from ev.Approval
 // (see the streaming examples) along with the chosen status.
+//
+// Returns [types.ErrApprovalAlreadyResolved] when the approval token refers to an activity that
+// has already been completed. This can happen after Events (reconnect) replays a CUSTOM event for an
+// approval that was resolved while the subscriber was disconnected. Treat it as informational.
 func (rt *TemporalRuntime) OnApproval(ctx context.Context, approvalToken string, status types.ApprovalStatus) error {
 	if status != types.ApprovalStatusApproved && status != types.ApprovalStatusRejected {
 		return fmt.Errorf("invalid approval status: %s", status)
@@ -673,29 +956,33 @@ func (rt *TemporalRuntime) OnApproval(ctx context.Context, approvalToken string,
 	if err != nil {
 		return fmt.Errorf("invalid approval token: %w", err)
 	}
-	return rt.temporalClient.CompleteActivity(ctx, taskToken, status, nil)
+	if err := rt.temporalClient.CompleteActivity(ctx, taskToken, status, nil); err != nil {
+		if isNotFoundError(err) {
+			rt.logger.Debug(ctx, "runtime: approval already resolved, returning sentinel",
+				slog.String("scope", "runtime"),
+				slog.String("status", string(status)))
+			return types.ErrApprovalAlreadyResolved
+		}
+		return err
+	}
+	return nil
 }
 
-// resolveEventPipeline returns the deterministic event workflow ID and event task queue when remote
-// workers are enabled. The AgentEventWorkflow is started lazily on the first UpdateWithStart from an activity.
-func (rt *TemporalRuntime) resolveEventPipeline(ctx context.Context, agentName string) (eventWorkflowID string, eventTaskQueue string, err error) {
-	eventWorkflowID = rt.getEventWorkflowID(agentName)
-	eventTaskQueue = getEventTaskQueue(rt.taskQueue)
-	rt.runMu.Lock()
-	if rt.activeEventWorkflowID == "" {
-		rt.activeEventWorkflowID = eventWorkflowID
-		rt.logger.Info(ctx, "runtime event pipeline (lazy start on first update)",
-			slog.String("scope", "runtime"),
-			slog.String("eventWorkflowID", eventWorkflowID),
-			slog.String("eventTaskQueue", eventTaskQueue))
+// isNotFoundError reports whether err is a Temporal "not found" service error, which is returned
+// by CompleteActivity when the task token refers to an activity that no longer exists (already
+// completed, timed out, or the workflow closed).
+func isNotFoundError(err error) bool {
+	if err == nil {
+		return false
 	}
-	rt.runMu.Unlock()
-	return eventWorkflowID, eventTaskQueue, nil
+	// Temporal SDK wraps gRPC NOT_FOUND as serviceerror.NotFoundError. Check the message as a
+	// fallback since the concrete type lives in an internal package.
+	msg := err.Error()
+	return strings.Contains(msg, "NotFound") || strings.Contains(msg, "not found") || strings.Contains(msg, "activity task not found")
 }
 
 // skipHasWorkersPrecheck is true when Execute/ExecuteStream should not poll DescribeTaskQueue for pollers
-// before starting the workflow. Only these paths call Execute/ExecuteStream (client [Agent]; remoteWorker is always false).
-// Skip when mode is autonomous, or when an embedded worker polls in-process ([DisableLocalWorker] false).
+// before starting the workflow.
 func (rt *TemporalRuntime) skipHasWorkersPrecheck() bool {
 	if rt.agentMode == string(types.AgentModeAutonomous) {
 		return true
@@ -717,8 +1004,7 @@ func (rt *TemporalRuntime) hasWorkersPrecheckSkipReason() string {
 }
 
 // hasWorkers returns true if there are pollers on the given task queue.
-// If taskQueue is empty, uses a.taskQueue.
-// Polls DescribeTaskQueue for up to workersCheckTimeout (default 15s) before returning false.
+// Polls DescribeTaskQueue for up to workersCheckTimeout before returning false.
 func (rt *TemporalRuntime) hasWorkers(ctx context.Context, taskQueue string) bool {
 	q := taskQueue
 	if q == "" {
@@ -749,100 +1035,8 @@ func (rt *TemporalRuntime) hasWorkers(ctx context.Context, taskQueue string) boo
 		case <-ctx.Done():
 			return false
 		case <-ticker.C:
-			// retry
 		}
 	}
-}
-
-// createEventWorker starts the event worker if not already running. Called when ExecuteStream or
-// approval handling is needed. Per-agent mutex allows parallel creation across different agents
-// while preventing double-creation when Execute and ExecuteStream are invoked concurrently on the same agent.
-func (rt *TemporalRuntime) createEventWorker() error {
-	rt.eventWorkerMu.Lock()
-	defer rt.eventWorkerMu.Unlock()
-	if rt.eventWorker != nil {
-		rt.logger.Debug(context.Background(), "runtime event worker already running", slog.String("scope", "runtime"), slog.String("taskQueue", rt.taskQueue))
-		return nil
-	}
-	eventQueue := getEventTaskQueue(rt.taskQueue)
-	rt.logger.Info(context.Background(), "runtime event worker starting", slog.String("scope", "runtime"), slog.String("taskQueue", eventQueue))
-
-	workerOptions := worker.Options{}
-	tracingInterceptor, err := newTemporalTracingInterceptor(rt.Tracer)
-	if err != nil {
-		rt.logger.Error(context.Background(), "failed to create tracing interceptor", slog.String("scope", "runtime"), slog.String("taskQueue", rt.taskQueue), slog.Any("error", err))
-		return err
-	}
-	if tracingInterceptor != nil {
-		workerOptions.Interceptors = []interceptor.WorkerInterceptor{tracingInterceptor}
-	}
-
-	w := worker.New(rt.temporalClient, eventQueue, workerOptions)
-	w.RegisterWorkflowWithOptions(rt.AgentEventWorkflow, workflow.RegisterOptions{Name: "AgentEventWorkflow"})
-	w.RegisterActivityWithOptions(rt.EventPublishActivity, activity.RegisterOptions{Name: "EventPublishActivity"})
-	rt.eventWorker = w
-	go func() { _ = rt.eventWorker.Start() }()
-	return nil
-}
-
-// publishRunEvent puts a run lifecycle or stream event on the local agent_event_* bus; the
-// stream reader forwards from [eventCh] to [outCh]. Publish uses [context.Background]: the run
-// [runCtx] may already be cancelled and [eventbus.Inmem.Publish] aborts when ctx is done.
-func (rt *TemporalRuntime) publishRunEvent(channel string, ev events.AgentEvent) {
-	if rt.eventbus == nil || channel == "" || ev == nil {
-		return
-	}
-	data, err := ev.ToJSON()
-	if err != nil {
-		return
-	}
-	pubCtx := context.Background()
-	if err := rt.eventbus.Publish(pubCtx, channel, data); err != nil {
-		rt.logger.Warn(pubCtx, "runtime run event publish failed", slog.String("scope", "runtime"), slog.String("channel", channel), slog.String("type", string(ev.Type())), slog.Any("error", err))
-	}
-}
-
-// syntheticStreamCompleteEvent builds a root [RUN_FINISHED] ([*events.AgentRunFinishedEvent]) from
-// workflow.Get. ExecuteStream publishes it after Get returns so the client gets a terminal result without
-// waiting only on the async event pipeline.
-func syntheticStreamCompleteEvent(result *types.AgentRunResult, threadID, runID, rootName string) events.AgentEvent {
-	if result != nil {
-		if strings.TrimSpace(result.AgentName) != "" {
-			result.AgentName = strings.TrimSpace(result.AgentName)
-		} else if strings.TrimSpace(rootName) != "" {
-			result.AgentName = strings.TrimSpace(rootName)
-		}
-	} else if strings.TrimSpace(rootName) != "" {
-		result = &types.AgentRunResult{
-			AgentName: strings.TrimSpace(rootName),
-		}
-	}
-	return events.NewAgentRunFinishedEvent(threadID, runID, result)
-}
-
-func getEventTaskQueue(taskQueue string) string {
-	return taskQueue + "-events"
-}
-
-// beginRun registers workflowID as an active run. Call the returned cleanup func (or defer it) when the run ends.
-// Multiple concurrent runs are allowed; each workflowID is unique per run (agent-run-{name}-{uuid}).
-func (rt *TemporalRuntime) beginRun(workflowID string) func() {
-	rt.runMu.Lock()
-	if rt.activeRunWorkflowIDs == nil {
-		rt.activeRunWorkflowIDs = make(map[string]struct{})
-	}
-	rt.activeRunWorkflowIDs[workflowID] = struct{}{}
-	rt.runMu.Unlock()
-	rt.logger.Debug(context.Background(), "runtime run started", slog.String("scope", "runtime"), slog.String("workflowID", workflowID))
-	return func() { rt.endRun(workflowID) }
-}
-
-// endRun removes workflowID from the active run set when a run completes. Does not touch activeEventWorkflowID (per-agent).
-func (rt *TemporalRuntime) endRun(workflowID string) {
-	rt.runMu.Lock()
-	defer rt.runMu.Unlock()
-	rt.logger.Debug(context.Background(), "runtime run finished", slog.String("scope", "runtime"), slog.String("workflowID", workflowID))
-	delete(rt.activeRunWorkflowIDs, workflowID)
 }
 
 func (rt *TemporalRuntime) getWorkflowID(runID, agentName string, isStream bool) string {
@@ -853,15 +1047,8 @@ func (rt *TemporalRuntime) getWorkflowID(runID, agentName string, isStream bool)
 	return fmt.Sprintf("agent-run-%s-%s", name, runID)
 }
 
-func (rt *TemporalRuntime) getEventWorkflowID(agentName string) string {
-	rt.eventWorkflowIDOnce.Do(func() {
-		rt.eventWorkflowIDSuffix = uuid.New().String()
-	})
-	return fmt.Sprintf("agent-event-%s-%s", sanitizeTemporalWorkflowIDSegment(agentName), rt.eventWorkflowIDSuffix)
-}
-
-// sanitizeTemporalWorkflowIDSegment maps a human-readable label (e.g. [runtime.AgentSpec] Name) to a safe
-// workflow ID segment: alphanumeric, hyphen, underscore, dot; spaces and other runes become hyphens.
+// sanitizeTemporalWorkflowIDSegment maps a human-readable label to a safe workflow ID segment:
+// alphanumeric, hyphen, underscore, dot; spaces and other runes become hyphens.
 // The result is capped at [maxAgentNameWorkflowSegmentBytes] using UTF-8-safe truncation.
 func sanitizeTemporalWorkflowIDSegment(s string) string {
 	s = strings.TrimSpace(s)

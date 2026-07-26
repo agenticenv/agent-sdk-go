@@ -527,6 +527,7 @@ func TestRunAgentLoop_ToolEventsEmittedToChannel(t *testing.T) {
 		_, _ = runLoop(ctx, rt, tools, AgentLoopInput{
 			UserPrompt:  "compute",
 			ChannelName: channel,
+			EventTypes:  []events.AgentEventType{events.AgentEventAll},
 		})
 		safeClose()
 	}()

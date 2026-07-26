@@ -30,7 +30,7 @@ func Common(
 			Namespace: namespace,
 			TaskQueue: taskQueue,
 		}),
-		// Must match agent/main.go extras (DisableLocalWorker/EnableRemoteWorkers): fingerprint includes Limits.Timeout.
+		// Must match agent/main.go extras (DisableLocalWorker): fingerprint includes Limits.Timeout.
 		agent.WithTimeout(3 * time.Minute),
 		agent.WithLLMClient(llmClient),
 		agent.WithLogger(l),

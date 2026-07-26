@@ -63,6 +63,8 @@ type Config struct {
 	Port      int
 	Namespace string
 	TaskQueue string
+	// LogEnable controls whether NewLoggerFromLogConfig returns a real logger (true) or NoopLogger (false).
+	LogEnable bool
 	LogLevel  string
 	Provider  interfaces.LLMProvider
 	APIKey    string
@@ -125,6 +127,19 @@ func getEnvInt(key string, def int) int {
 		}
 	}
 	return def
+}
+
+// getEnvBool parses true/false/1/0 (case-insensitive). Empty or invalid values use def.
+func getEnvBool(key string, def bool) bool {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return def
+	}
+	return b
 }
 
 // ToolApprovalOptions applies AutoToolApprovalPolicy when EXAMPLES_AUTO_APPROVE=true
@@ -238,6 +253,7 @@ func LoadFromEnv() *Config {
 		Port:         getEnvInt("TEMPORAL_PORT", 7233),
 		Namespace:    getEnv("TEMPORAL_NAMESPACE", "default"),
 		TaskQueue:    defaultTaskQueue(),
+		LogEnable:    getEnvBool("LOG_ENABLE", false),
 		LogLevel:     getEnv("LOG_LEVEL", "error"),
 		Provider:     interfaces.LLMProvider(getEnv("LLM_PROVIDER", "openai")),
 		APIKey:       getEnv("LLM_APIKEY", ""),
@@ -540,8 +556,12 @@ func (cfg *Config) MCPTimeout() time.Duration {
 }
 
 // NewLoggerFromLogConfig returns logger.Logger for use with the agent. Logs to stderr so
-// conversation (stdout) stays separate; set LOG_LEVEL=info or debug to see logs.
+// conversation (stdout) stays separate. Default LOG_ENABLE=false → NoopLogger.
+// Set LOG_ENABLE=true and LOG_LEVEL (e.g. info/debug) when debugging.
 func NewLoggerFromLogConfig(cfg *Config) logger.Logger {
+	if cfg != nil && !cfg.LogEnable {
+		return logger.NoopLogger()
+	}
 	level := "error"
 	if cfg != nil && cfg.LogLevel != "" {
 		level = strings.TrimSpace(cfg.LogLevel)

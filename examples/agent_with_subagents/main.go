@@ -85,7 +85,6 @@ func main() {
 		agent.WithLLMClient(llmClient),
 		agent.WithSubAgents(mathSpecialist),
 		agent.WithMaxSubAgentDepth(2),
-		agent.WithStream(true),
 		agent.WithLogger(config.NewLoggerFromLogConfig(cfg)),
 	}
 	mainAgentOpts = append(mainAgentOpts, config.ToolApprovalOptions()...)
@@ -112,10 +111,16 @@ func main() {
 	fmt.Println("All approvals (main agent delegation + sub-agent calculator) are handled here.")
 	fmt.Println()
 
-	eventCh, err := mainAgent.Stream(context.Background(), prompt, nil)
+	agentStream, err := mainAgent.Stream(context.Background(), prompt, nil)
 	if err != nil {
 		log.Fatalf("run stream failed: %v", err)
 	}
+	runID := agentStream.ID()
+	eventCh, err := agentStream.Events(context.Background())
+	if err != nil {
+		log.Fatalf("stream events: %v", err)
+	}
+	fmt.Println(shared.RunIDLine(runID))
 
 	for ev := range eventCh {
 		if ev == nil {

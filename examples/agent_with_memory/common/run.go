@@ -30,9 +30,15 @@ func ScopedContext(ctx context.Context, userID string) context.Context {
 func RunAgent(ctx context.Context, a *agent.Agent, userID, label, prompt string) *agent.AgentRunResult {
 	fmt.Printf("\n--- %s ---\n", label)
 	fmt.Println("user:", prompt)
-	result, err := a.Run(ScopedContext(ctx, userID), prompt, nil)
+	scopedCtx := ScopedContext(ctx, userID)
+	agentRun, err := a.Run(scopedCtx, prompt, nil)
 	if err != nil {
 		log.Printf("%s failed: %v", label, err)
+		return nil
+	}
+	result, err := agentRun.Get(scopedCtx)
+	if err != nil {
+		log.Printf("%s get result failed: %v", label, err)
 		return nil
 	}
 	fmt.Println("assistant:", result.Content)

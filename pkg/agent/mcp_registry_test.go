@@ -1,32 +1,14 @@
 package agent
 
 import (
-	"context"
-	"encoding/json"
 	"testing"
 
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 )
 
-type registryMockMCPClient struct {
-	name string
-}
-
-func (c *registryMockMCPClient) Name() string { return c.name }
-func (c *registryMockMCPClient) Ping(context.Context) error {
-	return nil
-}
-func (c *registryMockMCPClient) ListTools(context.Context) ([]interfaces.ToolSpec, error) {
-	return nil, nil
-}
-func (c *registryMockMCPClient) CallTool(context.Context, string, json.RawMessage) (json.RawMessage, error) {
-	return nil, nil
-}
-func (c *registryMockMCPClient) Close() error { return nil }
-
 func TestMCPRegistry_RegisterClient(t *testing.T) {
 	r := NewMCPRegistry(nil)
-	cl := &registryMockMCPClient{name: "srv"}
+	cl := testMCPClient(t, "srv")
 	if err := r.RegisterClient(cl); err != nil {
 		t.Fatal(err)
 	}
@@ -52,17 +34,17 @@ func TestMCPRegistry_RegisterConfigMissingTransport(t *testing.T) {
 
 func TestMCPRegistry_RegisterDuplicate(t *testing.T) {
 	r := NewMCPRegistry(nil)
-	cl := &registryMockMCPClient{name: "srv"}
+	cl := testMCPClient(t, "srv")
 	if err := r.RegisterClient(cl); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.RegisterClient(&registryMockMCPClient{name: "srv"}); err != ErrRegistryDuplicate {
+	if err := r.RegisterClient(testMCPClient(t, "srv")); err != ErrRegistryDuplicate {
 		t.Errorf("duplicate RegisterClient err = %v, want ErrRegistryDuplicate", err)
 	}
 }
 
 func TestNormalizeMCPRegistry_fromWithMCPClients(t *testing.T) {
-	cl := &registryMockMCPClient{name: "srv"}
+	cl := testMCPClient(t, "srv")
 	c := &agentConfig{mcpClients: []interfaces.MCPClient{cl}}
 	if err := c.buildMCPRegistry(); err != nil {
 		t.Fatal(err)

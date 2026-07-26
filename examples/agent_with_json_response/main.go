@@ -66,9 +66,13 @@ func main() {
 	}
 
 	fmt.Println("user:", prompt)
-	result, err := a.Run(context.Background(), prompt, nil)
+	agentRun, err := a.Run(context.Background(), prompt, nil)
 	if err != nil {
 		log.Fatalf("run failed: %v", err)
+	}
+	result, err := agentRun.Get(context.Background())
+	if err != nil {
+		log.Fatalf("run get result: %v", err)
 	}
 
 	var verify json.RawMessage

@@ -70,9 +70,17 @@ type AgentEvent interface {
 }
 
 // BaseEvent is AG-UI BaseEvent; RawEvent maps to JSON rawEvent when present.
+// The offset fields are NOT serialised to JSON to preserve wire compatibility with
+// the AG-UI protocol; they carry the workflowstreams global offset for reconnect
+// support (see Agent.GetAgentStream / AgentStream.Events with WithOffset) and are set by the stream forwarder after decode.
 type BaseEvent struct {
 	EventType      AgentEventType `json:"type"`
 	EventTimestamp *int64         `json:"timestamp,omitempty"`
+
+	// offset is the workflowstreams global offset at which this event was appended.
+	// hasOffset is false until SetOffset is called (zero-value is ambiguous without the flag).
+	offset    int64
+	hasOffset bool
 }
 
 func NewBaseEvent(t AgentEventType) *BaseEvent {
@@ -83,6 +91,19 @@ func NewBaseEvent(t AgentEventType) *BaseEvent {
 func (b *BaseEvent) Type() AgentEventType    { return b.EventType }
 func (b *BaseEvent) Timestamp() *int64       { return b.EventTimestamp }
 func (b *BaseEvent) ToJSON() ([]byte, error) { return json.Marshal(b) }
+
+// SetOffset records the workflowstreams global offset for this event.
+// Called by the stream forwarder after decoding a subscribed item.
+func (b *BaseEvent) SetOffset(v int64) {
+	b.offset = v
+	b.hasOffset = true
+}
+
+// Offset returns the workflowstreams offset and whether it was set.
+// Pass the returned offset to AgentStream.Events(WithOffset) to resume the stream from this point.
+func (b *BaseEvent) Offset() (int64, bool) {
+	return b.offset, b.hasOffset
+}
 
 var eventRegistry = map[AgentEventType]func() AgentEvent{
 	AgentEventTypeRunStarted:   func() AgentEvent { return &AgentRunStartedEvent{} },

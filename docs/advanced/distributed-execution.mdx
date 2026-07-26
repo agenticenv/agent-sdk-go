@@ -1,11 +1,15 @@
 ---
-title: "Worker Separation"
-description: "Run the agent client and Temporal worker in separate processes for production deployments"
+title: "Distributed Execution"
+description: "Run the agent client and worker in separate processes for independent scaling and production deployments"
 ---
 
-**The problem:** Your API or UI process needs to submit agent runs and stream results to users — but you don't want it to also host the Temporal worker that executes LLM calls and tools. Mixing both in one process couples your UI latency to compute load, limits independent scaling, and makes deploys riskier.
+<Note>
+**Temporal runtime only.** Running a separate worker process requires the [Temporal runtime](/runtimes/temporal). The `LocalRuntime` executes everything in-process and does not support `NewAgentWorker`.
+</Note>
 
-**The solution:** Split the agent client (submits runs, handles streaming and approvals in your API) and the worker (polls the task queue and executes everything else) into separate processes. Workers are stateless — Temporal holds all state — so you can scale them independently, deploy them separately, and restart them without losing in-flight runs.
+**The problem:** Your API or UI process needs to submit agent runs and stream results to users — but you don't want it to also host the worker that executes LLM calls and tools. Mixing both in one process couples your UI latency to compute load, limits independent scaling, and makes deploys riskier.
+
+**The solution:** Split the agent client (submits runs, handles streaming and approvals in your API) and the worker (polls the task queue and executes everything else) into separate processes. Workers are stateless — all state is held by the runtime — so you can scale them independently, deploy them separately, and restart them without losing in-flight runs.
 
 ## Architecture
 
@@ -20,7 +24,7 @@ graph LR
 
 | Process | Role |
 |---|---|
-| **Agent** (`NewAgent` + `DisableLocalWorker`) | Starts `Run`, `Stream`, `RunAsync`; handles approvals in your UI |
+| **Agent** (`NewAgent` + `DisableLocalWorker`) | Starts `Run` / `Stream`; handles approvals in your UI |
 | **Worker** (`NewAgentWorker`) | Polls the task queue; executes LLM calls, tools, memory, and approvals as Temporal activities |
 | **Temporal** | Durable workflow history — survives crashes and deploys |
 
@@ -70,7 +74,11 @@ if err != nil {
 }
 defer a.Close()
 
-result, err := a.Run(ctx, "Hello", nil)
+agentRun, err := a.Run(ctx, "Hello", nil)
+if err != nil {
+    log.Fatal(err)
+}
+result, err := agentRun.Get(ctx)
 ```
 
 `NewAgentWorker` requires Temporal — it cannot run with the in-process runtime alone.
@@ -95,25 +103,30 @@ The SDK uses a **fingerprint** check to detect config drift between the client t
 
 [`WithDisableFingerprintCheck`](/getting-started/configuration) bypasses the check on the **agent process only** — not allowed on `NewAgentWorker`. Use as break-glass only.
 
-## Remote workers for streaming and approvals
+## Streaming and approvals across processes
 
-When using `DisableLocalWorker` with **streaming** or **approvals** across processes, also pass [`EnableRemoteWorkers()`](/getting-started/configuration) on the agent:
+`DisableLocalWorker` works with **streaming** and **approvals** with no extra configuration:
 
 ```go
 a, _ := agent.NewAgent(
     agent.WithTemporalConfig(cfg),
     agent.WithLLMClient(llmClient),
     agent.DisableLocalWorker(),
-    agent.EnableRemoteWorkers(),
-    agent.WithStream(true),
 )
+// runID is available synchronously — persist it before consuming events.
+agentStream, _ := a.Stream(ctx, prompt, nil)
+runID := agentStream.ID()
+eventCh, _ := agentStream.Events(ctx)
+_ = runID // store alongside sessionID for GetAgentStream
+_ = eventCh
 ```
 
-This starts Temporal's remote event path for out-of-process event delivery.
+The agent process subscribes to the run's event stream directly through the Temporal client — it does not need to run a worker itself, so this works the same whether the workflow task lands on a local or remote worker. See [Streaming and approvals](/runtimes/temporal#streaming-and-approvals).
 
 **Streaming guarantees in split-process mode:**
 
-- **Live stream is not backfilled.** Tokens and tool events are delivered as produced. If your subscriber disconnects, it may miss chunks — the agent completed successfully in Temporal, but the in-flight event stream is gone.
+- **Events are durable.** Each event is published to the workflow's Temporal Workflow Stream — a durable ordered log. The workflow and event log survive worker crashes and restarts.
+- **Live delivery is not automatic backfill.** Tokens and events are forwarded to your subscriber process as they are published. If the subscriber disconnects mid-stream, it misses the gap. Call [`GetAgentStream`](/advanced/durable-execution#client-side-stream-recovery) with the last saved `runID` and offset to resume from exactly where you left off.
 - **Approvals degrade gracefully.** If an approval event cannot be delivered, the run continues rather than hanging — the tool is skipped with a clear message. This is intentional for autonomous agents; for interactive scenarios, design your UX so users are not silently blocked.
 
 ## Distributed conversation and memory
@@ -140,7 +153,12 @@ This means:
 - Kubernetes restarts and process crashes are safe — keep workers supervised and restarting
 
 <Note>
-If the **agent process** serving `Stream` crashes, the workflow continues in Temporal but your client loses the connection. Once a stream is lost, reconnecting to a specific in-flight run is not supported. For interactive apps, the recommended pattern is to block the user from sending a new prompt until the current one completes — then fetch and display the final response. For autonomous agents and batch pipelines, this is a non-issue since callers wait for completion.
+If the **agent process** serving `Stream` crashes, the run continues on the server but your subscriber loses the connection. Use [`GetAgentStream`](/advanced/durable-execution#client-side-stream-recovery) to resubscribe from the last saved offset — the durable event log retains all events from that offset onward. Persist `runID` (`stream.ID()`) and the last event offset before processing each event; on restart:
+
+```go
+agentStream, _ := a.GetAgentStream(ctx, savedRunID)
+eventCh, _ := agentStream.Events(ctx, agent.WithOffset(savedOffset))
+```
 </Note>
 
 ## Sub-agents
@@ -164,8 +182,12 @@ Example: [Agent Worker](/examples/agent-worker) · [Durable Agent](/examples/dur
 
 <CardGroup cols={2}>
 
+  <Card title="Durable Execution" icon="shield-check" href="/advanced/durable-execution" horizontal>
+    Server-side durability and client-side stream recovery
+  </Card>
+
   <Card title="Temporal Runtime" icon="server" href="/runtimes/temporal" horizontal>
-    Durable execution and fingerprint alignment
+    Durable execution architecture and fingerprint alignment
   </Card>
 
   <Card title="Multiple Agents" icon="layer-group" href="/advanced/multiple-agents" horizontal>

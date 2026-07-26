@@ -94,9 +94,14 @@ func runSingleTurn(ctx context.Context, a *agent.Agent, prompt, convID string) {
 			ID: convID,
 		},
 	}
-	result, err := a.Run(ctx, prompt, opts)
+	agentRun, err := a.Run(ctx, prompt, opts)
 	if err != nil {
 		log.Printf("run failed: %v", err)
+		return
+	}
+	result, err := agentRun.Get(ctx)
+	if err != nil {
+		log.Printf("run get result: %v", err)
 		return
 	}
 	fmt.Println("assistant:", result.Content)
@@ -123,9 +128,14 @@ func runInteractive(ctx context.Context, a *agent.Agent, convID string) {
 				ID: convID,
 			},
 		}
-		result, err := a.Run(ctx, prompt, opts)
+		agentRun, err := a.Run(ctx, prompt, opts)
 		if err != nil {
 			log.Printf("run failed: %v", err)
+			continue
+		}
+		result, err := agentRun.Get(ctx)
+		if err != nil {
+			log.Printf("run get result: %v", err)
 			continue
 		}
 		fmt.Println("assistant:", result.Content)

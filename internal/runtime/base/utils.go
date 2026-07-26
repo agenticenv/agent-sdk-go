@@ -114,13 +114,6 @@ func ApplyLLMSampling(s *types.LLMSampling, req *interfaces.LLMRequest) {
 	}
 }
 
-func GetConversationID(req *runtime.ExecuteRequest) string {
-	if req != nil && req.RunOptions != nil && req.RunOptions.ConversationOptions != nil {
-		return req.RunOptions.ConversationOptions.ID
-	}
-	return ""
-}
-
 func NewAgentTelemetry(startedAt time.Time) *types.AgentTelemetry {
 	return &types.AgentTelemetry{
 		Run: types.RunTelemetry{

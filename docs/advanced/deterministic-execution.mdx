@@ -87,7 +87,11 @@ Default tool execution timeout is **30 minutes** with up to **3 attempts** if un
 ```go
 ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
 defer cancel()
-result, err := a.Run(ctx, "Run onboarding for Alice", nil)
+agentRun, err := a.Run(ctx, "Run onboarding for Alice", nil)
+if err != nil {
+    // handle start error
+}
+result, err := agentRun.Get(ctx)
 ```
 
 If the deadline fires, `Execute` returns `context deadline exceeded` — the workflow may still be running in your engine. Use idempotent workflow IDs and a status API in your runner for recovery.

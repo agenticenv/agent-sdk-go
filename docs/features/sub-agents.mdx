@@ -46,7 +46,11 @@ if err != nil {
 }
 defer mainAgent.Close()
 
-result, err := mainAgent.Run(ctx, "What is 144 divided by 12?", nil)
+agentRun, err := mainAgent.Run(ctx, "What is 144 divided by 12?", nil)
+if err != nil {
+    return err
+}
+result, err := agentRun.Get(ctx)
 ```
 
 | Option | Description |

@@ -20,6 +20,9 @@ const (
 	ApprovalStatusRejected ApprovalStatus = "REJECTED"
 	// ApprovalStatusUnavailable means the approval request could not be delivered (e.g. event stream down). It is not a user rejection.
 	ApprovalStatusUnavailable ApprovalStatus = "UNAVAILABLE"
+	// ApprovalStatusTimedOut means the approval activity hit StartToCloseTimeout (ApprovalTimeout).
+	// The tool is not executed; the agent loop continues.
+	ApprovalStatusTimedOut ApprovalStatus = "TIMED_OUT"
 )
 
 // ApprovalSender sends an approval result. Call once per request. Safe for concurrent use—

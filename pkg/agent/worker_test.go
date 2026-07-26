@@ -12,7 +12,7 @@ import (
 )
 
 func TestNewAgentWorker_requiresTemporal(t *testing.T) {
-	_, err := NewAgentWorker(WithName("w"), WithLLMClient(stubLLM{}))
+	_, err := NewAgentWorker(WithName("w"), WithLLMClient(testLLM(t)))
 	if err == nil || !strings.Contains(err.Error(), "AgentWorker requires a Temporal backend") {
 		t.Fatalf("got %v", err)
 	}
@@ -27,7 +27,7 @@ func TestAgentWorker_Start_WhenRuntimeNotWorkerRuntime(t *testing.T) {
 			Name:      "w",
 			logger:    logger.DefaultLogger("error"),
 			taskQueue: "tq",
-			LLMClient: stubLLM{},
+			LLMClient: testLLM(t),
 		},
 		runtime: rt,
 	}

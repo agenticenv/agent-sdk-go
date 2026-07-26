@@ -60,6 +60,7 @@ func main() {
 	type result struct {
 		idx    int
 		prompt string
+		runID  string
 		res    *agent.AgentRunResult
 		err    error
 	}
@@ -72,13 +73,15 @@ func main() {
 		wg.Add(1)
 		go func(idx int, p string) {
 			defer wg.Done()
-			asyncCh, err := a.RunAsync(context.Background(), p, nil)
+			// runID is available synchronously before the run completes.
+			agentRun, err := a.Run(context.Background(), p, nil)
 			if err != nil {
 				resultCh <- result{idx: idx, prompt: p, err: err}
 				return
 			}
-			ar := <-asyncCh
-			resultCh <- result{idx: idx, prompt: p, res: ar.Result, err: ar.Error}
+			runID := agentRun.ID()
+			res, getErr := agentRun.Get(context.Background())
+			resultCh <- result{idx: idx, prompt: p, runID: runID, res: res, err: getErr}
 		}(i, prompt)
 	}
 
@@ -100,8 +103,8 @@ func main() {
 			if r.res != nil {
 				content = r.res.Content
 			}
-			fmt.Printf("[%d/%d] Q: %s\n       A: %s\n\n",
-				n, len(prompts), r.prompt, content)
+			fmt.Printf("[%d/%d] Q: %s\n       A: %s\n       %s\n\n",
+				n, len(prompts), r.prompt, content, shared.RunIDLine(r.runID))
 		}
 	}
 

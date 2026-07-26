@@ -30,7 +30,6 @@ a, err := agent.NewAgent(
     agent.WithName("my-agent"),
     agent.WithDescription("Helpful assistant exposed as an A2A server."),
     agent.WithLLMClient(llmClient),
-    agent.WithStream(true),           // advertises streaming capability in agent card
     agent.WithA2ADefaultServer(),     // binds to localhost:9999, no auth
 )
 if err != nil {

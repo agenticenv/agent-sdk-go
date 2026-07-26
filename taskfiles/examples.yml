@@ -220,7 +220,7 @@ tasks:
         - NAME: agent_with_observability/objects
         - NAME: agent_with_subagents
         - NAME: agent_with_tools/approval
-        - NAME: agent_with_run_async
+        - NAME: agent_with_nonblocking_run
         - NAME: agent_with_concurrent_runs
         - NAME: agent_with_workflows
         - NAME: agent_with_code_execution
@@ -242,6 +242,8 @@ tasks:
         - NAME: agent_with_temporal_client
         - NAME: agent_with_workflows
           ORCHESTRATION_ENGINE: temporal
+        # Single-process reconnect (embedded worker — no separate worker process)
+        - NAME: agent_with_reconnect/agent
         # TODO: enable — split worker + agent REPL
         # - NAME: durable_agent/worker
         # - NAME: durable_agent/agent

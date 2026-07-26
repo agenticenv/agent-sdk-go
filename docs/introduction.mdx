@@ -22,7 +22,8 @@ a, _ := agent.NewAgent(
 )
 defer a.Close()
 
-result, _ := a.Run(ctx, "What is the capital of France?", nil)
+agentRun, _ := a.Run(ctx, "What is the capital of France?", nil)
+result, _ := agentRun.Get(ctx)
 fmt.Println(result.Content) // Paris.
 ```
 
@@ -40,7 +41,7 @@ Go 1.26+. OpenAI API key required for the example above; Anthropic and Gemini ar
 
 - **Idiomatic Go** — functional options, typed interfaces, no reflection magic. Swap any component (LLM client, memory backend, approval policy) by passing a different option.
 - **Same code, two runtimes** — run in-process for development with no infrastructure, then add `WithTemporalConfig` for crash-proof durable execution in production. Nothing else changes.
-- **Concurrent by default** — one `Agent` instance handles parallel `Run`, `RunAsync`, and `Stream` calls; Temporal issues each a unique workflow automatically.
+- **Concurrent by default** — one `Agent` instance handles parallel `Run` and `Stream` calls; Temporal issues each a unique workflow automatically.
 - **Protocol-native integrations** — MCP tool servers, A2A agent-to-agent delegation, and AG-UI streaming events are first-class, not adapters bolted on after the fact.
 - **Middleware hooks** — intercept LLM calls, tool use, retrieval, and memory at any lifecycle point for logging, PII scrubbing, and guardrails without touching agent logic.
 - **Cache-aware requests** — LLM requests are structured for provider caching, with Anthropic prompt-cache breakpoints to reduce cost on multi-turn runs.

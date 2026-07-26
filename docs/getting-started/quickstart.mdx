@@ -62,9 +62,13 @@ func main() {
     }
     defer a.Close()
 
-    result, err := a.Run(ctx, "Hello! What can you help me with?", nil)
+    agentRun, err := a.Run(ctx, "Hello! What can you help me with?", nil)
     if err != nil {
         log.Fatalf("run agent: %v", err)
+    }
+    result, err := agentRun.Get(ctx)
+    if err != nil {
+        log.Fatalf("get result: %v", err)
     }
 
     fmt.Println("Agent:", result.AgentName)
@@ -87,7 +91,7 @@ Expected output includes the agent name, model, and assistant reply in `result.C
 |---|---|
 | `openai.NewClient` | Creates an [`interfaces.LLMClient`](/getting-started/llm-providers) for OpenAI |
 | `agent.NewAgent` | Builds the agent with your prompt and LLM client; uses in-process runtime by default |
-| `a.Run` | Executes one agent loop synchronously, returns [`*AgentRunResult`](/features/token-usage) |
+| `a.Run` | Starts a run and returns an [`AgentRun`](/getting-started/run) handle; call `Get` for [`*AgentRunResult`](/features/token-usage) |
 | `a.Close` | Stops any embedded Temporal worker and flushes OTLP exporters |
 
 <Warning>
@@ -134,6 +138,10 @@ See [Running Examples](/examples/running-examples) for environment variable deta
 
   <Card title="LLM Providers" icon="brain" href="/getting-started/llm-providers" horizontal>
     Configure OpenAI, Anthropic, Gemini, or a custom client
+  </Card>
+
+  <Card title="Run" icon="play" href="/getting-started/run" horizontal>
+    AgentRun — Get, Done, Status, Cancel, non-blocking
   </Card>
 
   <Card title="Streaming" icon="wave-square" href="/getting-started/streaming" horizontal>

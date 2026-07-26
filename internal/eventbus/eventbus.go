@@ -9,4 +9,6 @@ type EventBus interface {
 	Publish(ctx context.Context, channel string, data []byte) error
 	// Subscribe returns a receive-only channel of payloads and a close function. The caller must call close when done.
 	Subscribe(ctx context.Context, channel string) (data <-chan []byte, closeFn func() error, err error)
+	// Close releases bus resources and closes all subscriber channels. Idempotent.
+	Close()
 }

@@ -98,7 +98,11 @@ func executeRun(ctx context.Context, cfg *setup.Config, a *agent.Agent, rng *ran
 		runCtx = memory.WithContextUserID(ctx, cfg.Memory.UserID)
 	}
 	start := time.Now()
-	result, err := a.Run(runCtx, setup.RandomUserPrompt(rng), nil)
+	agentRun, runErr := a.Run(runCtx, setup.RandomUserPrompt(rng), nil)
+	if runErr != nil {
+		return runOutcome{latencyMs: float64(time.Since(start).Milliseconds()), success: false}
+	}
+	result, err := agentRun.Get(runCtx)
 	outcome := runOutcome{
 		latencyMs: float64(time.Since(start).Milliseconds()),
 		success:   err == nil,

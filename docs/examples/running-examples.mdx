@@ -29,7 +29,7 @@ Examples use `LLM_APIKEY`, `LLM_PROVIDER`, and `LLM_MODEL` from `examples/.env` 
 |---|---|---|---|
 | [Simple Agent](/examples/simple-agent) | [Quickstart](/getting-started/quickstart) | Local, Temporal | — |
 | [Temporal Client](/examples/temporal-client) | [Temporal](/runtimes/temporal) | Temporal | Temporal |
-| [Run Async](/examples/run-async) | [Approvals](/features/approvals) | Local, Temporal | — |
+| [Non-blocking Run](/examples/nonblocking-run) | [Run](/getting-started/run) | Local, Temporal | — |
 | [JSON Response](/examples/json-response) | [Response format](/features/response-format) | Local, Temporal | — |
 | [Reasoning](/examples/reasoning) | [Reasoning](/features/reasoning) | Local, Temporal | — |
 | [Tools](/examples/tools) | [Tools](/features/tools) | Local, Temporal | — |
@@ -51,7 +51,7 @@ Examples use `LLM_APIKEY`, `LLM_PROVIDER`, and `LLM_MODEL` from `examples/.env` 
 | [A2A Client](/examples/a2a-client) | [A2A](/features/a2a) | Local, Temporal | A2A server |
 | [Sub-agents](/examples/subagents) | [Sub-agents](/features/sub-agents) | Local, Temporal | — |
 | [Multiple Agents](/examples/multiple-agents) | [Multiple agents](/advanced/multiple-agents) | Temporal | Temporal |
-| [Agent Worker](/examples/agent-worker) | [Worker separation](/advanced/worker-separation) | Temporal | Temporal |
+| [Agent Worker](/examples/agent-worker) | [Distributed execution](/advanced/distributed-execution) | Temporal | Temporal |
 | [Durable Agent](/examples/durable-agent) | [Temporal](/runtimes/temporal) | Temporal | Temporal |
 
 ## Suggested order
@@ -87,7 +87,7 @@ From the repository root: `task examples:local`, `task examples:temporal`, or `t
 | Output | Destination |
 |---|---|
 | Prompt and reply | stdout |
-| SDK logs | stderr (`LOG_LEVEL`) |
+| SDK logs | stderr (`LOG_ENABLE`, `LOG_LEVEL`) |
 
 ```bash
 SHOW_LLM_USAGE=true SHOW_TELEMETRY=true go run ./simple_agent "Hello"

@@ -48,7 +48,7 @@ defer a.Close() // flushes all OTLP exporters — required
 | `Insecure` | Disable TLS — dev/trusted networks only |
 | `DisableTraces` | Skip trace export while keeping metrics/logs |
 
-Use the **same** `WithObservabilityConfig` on `NewAgent` and [`NewAgentWorker`](/advanced/worker-separation) so worker activity spans reach the same backend.
+Use the **same** `WithObservabilityConfig` on `NewAgent` and [`NewAgentWorker`](/advanced/distributed-execution) so worker activity spans reach the same backend.
 
 Observability config participates in the Temporal agent fingerprint — caller and worker must match.
 
@@ -80,7 +80,6 @@ When `WithObservabilityConfig` enables traces, any `WithTracer` value is **repla
 | Span | Emitted by |
 |---|---|
 | `agent.run` | `Agent.Run` |
-| `agent.run.async` | `Agent.RunAsync` |
 | `agent.stream` | `Agent.Stream` (dispatch phase) |
 | `agent.loop` | In-process agent loop (local runtime) |
 | `a2a.execute` | A2A server executor per request |

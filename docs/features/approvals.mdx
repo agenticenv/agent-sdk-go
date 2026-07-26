@@ -42,7 +42,7 @@ Custom tools may implement [`ToolApproval`](https://pkg.go.dev/github.com/agenti
 
 Implement [`AgentToolApprovalPolicy`](https://pkg.go.dev/github.com/agenticenv/agent-sdk-go/pkg/interfaces#AgentToolApprovalPolicy) for fully custom policy logic.
 
-## Run and RunAsync
+## Run
 
 Set [`WithApprovalHandler`](/getting-started/configuration) whenever approvals can occur:
 
@@ -56,17 +56,14 @@ a, err := agent.NewAgent(
     agent.WithLLMClient(llmClient),
 )
 
-result, err := a.Run(ctx, prompt, nil)
+agentRun, err := a.Run(ctx, prompt, nil)
+if err != nil {
+    return err
+}
+result, err := agentRun.Get(ctx)
 ```
 
-For **RunAsync**, use the same handler — `resultCh` delivers the final result after all approvals complete:
-
-```go
-resultCh, err := a.RunAsync(ctx, prompt, nil)
-res := <-resultCh
-if res.Error != nil { /* handle */ }
-fmt.Println(res.Result.Content)
-```
+For a **non-blocking** wait, use the same handler and select on `agentRun.Done()` before `Get` — see [Non-blocking Run](/examples/nonblocking-run).
 
 ### Approval request types
 
@@ -75,9 +72,30 @@ fmt.Println(res.Result.Content)
 | Tool approval | `ParseToolApproval(req)` | `ToolName`, `AgentName` |
 | Sub-agent delegation | `ParseDelegationApproval(req)` | `SubAgentName`, `AgentName` |
 
+### Error handling
+
+`Respond` (and stream `OnApproval`) succeed once per approval token. A second call returns `ErrApprovalAlreadyResolved` — already answered or timed out; usually safe to ignore:
+
+```go
+a, err := agent.NewAgent(
+    agent.WithApprovalHandler(func(ctx context.Context, req *agent.ApprovalRequest) {
+        err := req.Respond(agent.ApprovalStatusApproved)
+        if errors.Is(err, agent.ErrApprovalAlreadyResolved) {
+            return // already answered or timed out
+        }
+        if err != nil {
+            log.WithError(err).Error("approval response failed")
+        }
+    }),
+    // ...
+)
+```
+
+On Temporal, approval state is durable across reconnects — calling `Respond` / `OnApproval` again after a crash returns the same sentinel.
+
 ## Stream
 
-Approval and delegation requests arrive as `AgentEventTypeCustom` events on the stream — **not** via `WithApprovalHandler`. Parse and respond with [`OnApproval`](https://pkg.go.dev/github.com/agenticenv/agent-sdk-go/pkg/agent#Agent.OnApproval):
+On `Stream`, approval and delegation requests arrive as `AgentEventTypeCustom` events — not via `WithApprovalHandler`. Parse the event, then call [`OnApproval`](https://pkg.go.dev/github.com/agenticenv/agent-sdk-go/pkg/agent#Agent.OnApproval):
 
 ```go
 for ev := range eventCh {
@@ -89,15 +107,27 @@ for ev := range eventCh {
         continue
     }
     if v, err := agent.ParseCustomEventApproval(ce); err == nil {
-        _ = a.OnApproval(ctx, v.ApprovalToken, agent.ApprovalStatusApproved)
+        err := a.OnApproval(ctx, v.ApprovalToken, agent.ApprovalStatusApproved)
+        if errors.Is(err, agent.ErrApprovalAlreadyResolved) {
+            continue
+        }
+        if err != nil {
+            log.WithError(err).Error("OnApproval failed")
+        }
     } else if d, err := agent.ParseCustomEventDelegation(ce); err == nil {
-        _ = a.OnApproval(ctx, d.ApprovalToken, agent.ApprovalStatusApproved)
+        err := a.OnApproval(ctx, d.ApprovalToken, agent.ApprovalStatusApproved)
+        if errors.Is(err, agent.ErrApprovalAlreadyResolved) {
+            continue
+        }
+        if err != nil {
+            log.WithError(err).Error("OnApproval failed")
+        }
     }
 }
 ```
 
 <Warning>
-For `Run` and `RunAsync`, use `req.Respond()` inside `WithApprovalHandler`. For `Stream`, use `OnApproval` with `ApprovalToken` from the parsed event — these are two separate paths and cannot be mixed.
+`Run` uses `req.Respond()` in `WithApprovalHandler`. `Stream` uses `OnApproval` with the token from the CUSTOM event. Do not mix the two paths.
 </Warning>
 
 ## Sub-agent approval
@@ -120,11 +150,47 @@ The main agent's policy governs whether delegation itself requires approval. The
 
 | Method | On timeout |
 |---|---|
-| `Run` | Returns error |
+| `Run` | `Get` returns error |
 | `Stream` | Emits `AgentEventTypeRunError` on the channel |
-| `RunAsync` | `resultCh` receives `AgentRunAsyncResult` with `Error` set |
 
 Approval timeout must be **less than** the agent timeout. See [Timeouts & Modes](/advanced/timeouts-and-modes).
+
+## Reconnecting after approval
+
+On Temporal, if the process crashes while an approval is pending, reconnect the stream and answer if you have not already:
+
+```go
+savedRunID, savedOffset := db.LoadSavedRun()
+stream, err := a.GetAgentStream(ctx, savedRunID)
+if err != nil {
+    return err
+}
+eventCh, err := stream.Events(ctx, agent.WithOffset(savedOffset))
+if err != nil {
+    return err
+}
+
+for ev := range eventCh {
+    if ev == nil || ev.Type() != agent.AgentEventTypeCustom {
+        continue
+    }
+    ce, ok := ev.(*agent.AgentCustomEvent)
+    if !ok {
+        continue
+    }
+    if v, err := agent.ParseCustomEventApproval(ce); err == nil {
+        err := a.OnApproval(ctx, v.ApprovalToken, agent.ApprovalStatusApproved)
+        if errors.Is(err, agent.ErrApprovalAlreadyResolved) {
+            continue // answered before the crash
+        }
+        if err != nil {
+            return err
+        }
+    }
+}
+```
+
+The CUSTOM approval event is delivered once. If you already responded before the crash, `OnApproval` returns `ErrApprovalAlreadyResolved`. If you crashed before responding, the token stays open until you answer.
 
 ## Example
 
@@ -132,7 +198,7 @@ Approval timeout must be **less than** the agent timeout. See [Timeouts & Modes]
   <Card title="Tools" icon="play" href="/examples/tools" horizontal>
     approval and authorizer sub-examples
   </Card>
-  <Card title="RunAsync" icon="play" href="/examples/run-async" horizontal>
+  <Card title="Non-blocking Run" icon="play" href="/examples/nonblocking-run" horizontal>
     Non-blocking run with approval handler
   </Card>
 </CardGroup>

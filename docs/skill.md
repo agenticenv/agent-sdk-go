@@ -14,7 +14,7 @@ Full documentation index: [llms.txt](https://docs.agenticenv.ai/llms.txt)
 ## Capabilities
 
 - Create and configure agents with `NewAgent` and functional options
-- Run agents with `Run`, `RunAsync`, or `Stream`
+- Run agents with `Run` (handle → `Get` / `Done`) or `Stream` (handle → `Events`)
 - Register built-in, custom, MCP, and A2A tools
 - Persist conversation history (in-memory or Redis)
 - Store and recall long-term memory (Weaviate, pgvector)
@@ -31,7 +31,7 @@ Full documentation index: [llms.txt](https://docs.agenticenv.ai/llms.txt)
 1. Read [Quickstart](https://docs.agenticenv.ai/getting-started/quickstart.md)
 2. Configure an LLM client — [LLM Providers](https://docs.agenticenv.ai/getting-started/llm-providers.md)
 3. Call `NewAgent` with `WithLLMClient` and `WithSystemPrompt`
-4. Call `Run(ctx, prompt, nil)` and read `AgentRunResult`
+4. Call `Run(ctx, prompt, nil)`, then `Get(ctx)` on the returned handle for `AgentRunResult`
 5. Always call `defer a.Close()` — required to flush OTLP exporters on shutdown
 
 Example: [Simple Agent](https://docs.agenticenv.ai/examples/simple-agent.md)
@@ -46,18 +46,30 @@ Example: [Simple Agent](https://docs.agenticenv.ai/examples/simple-agent.md)
 ### Stream to a UI
 
 1. Read [Streaming](https://docs.agenticenv.ai/getting-started/streaming.md)
-2. Pass `WithStream(true)` at agent creation
-3. Call `Stream` and consume `<-chan AgentEvent`
-4. Check for `nil` events; handle `RUN_FINISHED` for final result and token usage
-5. Example: [Stream](https://docs.agenticenv.ai/examples/stream.md) · [AG-UI](https://docs.agenticenv.ai/examples/agui.md)
+2. Call `Stream`, then `Events(ctx)` on the handle and consume `<-chan AgentEvent`
+3. Check for `nil` events; handle `RUN_FINISHED` for final result and token usage
+4. Example: [Stream](https://docs.agenticenv.ai/examples/stream.md) · [AG-UI](https://docs.agenticenv.ai/examples/agui.md)
 
 ### Switch to Temporal (durable execution)
 
 1. Read [Temporal runtime](https://docs.agenticenv.ai/runtimes/temporal.md)
 2. Add `WithTemporalConfig` or `WithTemporalClient` — never both
-3. For production, split client and worker — [Worker separation](https://docs.agenticenv.ai/advanced/worker-separation.md)
+3. For production, split client and worker — [Distributed execution](https://docs.agenticenv.ai/advanced/distributed-execution.md)
 4. Align agent and worker configuration (fingerprint) — same name, LLM, tools, hooks group names, approval policy
 5. Examples: [Temporal Client](https://docs.agenticenv.ai/examples/temporal-client.md) · [Agent Worker](https://docs.agenticenv.ai/examples/agent-worker.md) · [Durable Agent](https://docs.agenticenv.ai/examples/durable-agent.md)
+
+### Reconnect after crash (Temporal only)
+
+Crash reconnect is **Temporal-only**. `LocalRuntime` handles are same-process; after a crash, `GetAgentRun` / `GetAgentStream` return `ErrRunNotFound` / `ErrStreamNotFound`, and `WithOffset(n>0)` returns `ErrStreamOffsetNotSupported`.
+
+1. Read [Durable Execution](https://docs.agenticenv.ai/advanced/durable-execution.md) and [Temporal runtime](https://docs.agenticenv.ai/runtimes/temporal.md)
+2. Persist the handle `ID()` immediately after `Run` / `Stream` — before `Get` / consuming `Events`
+3. For streams, persist each event’s opaque offset **before** handling the event
+4. On restart — stream: `GetAgentStream(ctx, savedRunID)` then `Events(ctx, agent.WithOffset(savedOffset))`
+5. On restart — run: `GetAgentRun(ctx, savedRunID)` then `Get(ctx)` (or `<-Done()` then `Get`)
+6. If the workflow already finished: `ErrRunAlreadyCompleted` — clear saved state; continue from conversation/memory
+7. Cancelling `Run`/`Stream` ctx cancels the agent run; cancelling `Get`/`Events`/`GetAgentRun`/`GetAgentStream` ctx does not — call `Cancel()` on the handle to stop the run. After reconnect, `WithTimeout` starts fresh (not remaining time). Details: [Timeouts & Modes](https://docs.agenticenv.ai/advanced/timeouts-and-modes.md)
+8. Examples: [Reconnect](https://docs.agenticenv.ai/examples/reconnect.md) · [Durable Agent](https://docs.agenticenv.ai/examples/durable-agent.md)
 
 ## Integration
 
@@ -80,7 +92,7 @@ Example: [Simple Agent](https://docs.agenticenv.ai/examples/simple-agent.md)
 - Capabilities resolve at call time from registries — tools, MCP, A2A, and sub-agents can change between runs
 - Feature pages explain concepts; example pages show run commands and expected output under `examples/`
 - Default tool approval policy is **require-all** — set `AutoToolApprovalPolicy()` for unattended runs
-- With `DisableLocalWorker()` and streaming, you must also call `EnableRemoteWorkers()`
+- `DisableLocalWorker()` works with streaming and approvals with no extra configuration
 - Hook group **names** participate in the Temporal agent fingerprint — register the same names on client and worker
 
 ## Documentation map
@@ -90,7 +102,7 @@ Example: [Simple Agent](https://docs.agenticenv.ai/examples/simple-agent.md)
 | Overview | [Introduction](https://docs.agenticenv.ai/introduction.md) |
 | Getting started | [Quickstart](https://docs.agenticenv.ai/getting-started/quickstart.md) |
 | Features | [Tools](https://docs.agenticenv.ai/features/tools.md) |
-| Advanced | [Worker separation](https://docs.agenticenv.ai/advanced/worker-separation.md) |
+| Advanced | [Distributed execution](https://docs.agenticenv.ai/advanced/distributed-execution.md) |
 | Observability | [Telemetry](https://docs.agenticenv.ai/observability/telemetry.md) |
 | Examples | [Running Examples](https://docs.agenticenv.ai/examples/running-examples.md) |
 | Production | [Readiness](https://docs.agenticenv.ai/production/readiness.md) |

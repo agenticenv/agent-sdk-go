@@ -95,7 +95,7 @@ agent.WithToolAuthExecutionConfig(agent.ExecutionConfig{
 
 | Timeout type | Scope | Set via |
 |---|---|---|
-| Agent run timeout | Entire `Run` / `Stream` / `RunAsync` call | `WithTimeout` or context deadline |
+| Agent run timeout | Entire `Run` / `Stream` call | `WithTimeout` or context deadline |
 | Per-operation timeout | Single attempt of one operation | `With*ExecutionConfig` |
 
 A single LLM call timing out after `Timeout` does not end the run — it counts as a failed attempt and may be retried until `MaxAttempts` is exhausted. The run ends only if the agent run timeout fires or all attempts are exhausted.

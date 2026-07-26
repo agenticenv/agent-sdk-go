@@ -52,6 +52,14 @@ func WithToolExecutionMode(mode types.AgentToolExecutionMode) Option {
 	}
 }
 
+// WithApprovalHandler sets the Run-path approval callback (from agent WithApprovalHandler).
+// Stream uses CUSTOM events + Approve instead.
+func WithApprovalHandler(fn types.ApprovalHandler) Option {
+	return func(r *LocalRuntime) {
+		r.approvalHandler = fn
+	}
+}
+
 func buildLocalRuntime(opts ...Option) (*LocalRuntime, error) {
 	r := &LocalRuntime{logger: logger.NoopLogger()}
 	for _, opt := range opts {

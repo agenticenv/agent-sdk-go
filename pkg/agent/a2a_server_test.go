@@ -20,7 +20,6 @@ import (
 	"github.com/golang/mock/gomock"
 
 	"github.com/agenticenv/agent-sdk-go/internal/events"
-	"github.com/agenticenv/agent-sdk-go/internal/runtime"
 	rtmocks "github.com/agenticenv/agent-sdk-go/internal/runtime/mocks"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
@@ -28,31 +27,31 @@ import (
 	"github.com/agenticenv/agent-sdk-go/pkg/observability"
 )
 
-// streamCapableLLM reports IsStreamSupported true for A2A streaming executor tests.
-type streamCapableLLM struct{}
-
-func (streamCapableLLM) Generate(ctx context.Context, req *interfaces.LLMRequest) (*interfaces.LLMResponse, error) {
-	return &interfaces.LLMResponse{}, nil
-}
-func (streamCapableLLM) GenerateStream(ctx context.Context, req *interfaces.LLMRequest) (interfaces.LLMStream, error) {
-	return nil, errors.New("unused")
-}
-func (streamCapableLLM) GetModel() string                    { return "stream-model" }
-func (streamCapableLLM) GetProvider() interfaces.LLMProvider { return interfaces.LLMProviderOpenAI }
-func (streamCapableLLM) IsStreamSupported() bool             { return true }
-
-type serverTestTool struct {
-	name, display, desc string
+// expectRuntimeRun stubs Runtime.Run → RunHandle.Get for non-streaming A2A paths.
+func expectRuntimeRun(ctrl *gomock.Controller, mockRT *rtmocks.MockRuntime, result *types.AgentRunResult, runErr error) {
+	if runErr != nil {
+		mockRT.EXPECT().Run(gomock.Any(), gomock.Any()).Return(nil, runErr)
+		return
+	}
+	h := rtmocks.NewMockRunHandle(ctrl)
+	mockRT.EXPECT().Run(gomock.Any(), gomock.Any()).Return(h, nil)
+	h.EXPECT().ID().Return("a2a-run").AnyTimes()
+	h.EXPECT().Done().Return(closedDoneChan()).AnyTimes()
+	h.EXPECT().Get(gomock.Any()).Return(result, nil)
 }
 
-func (t serverTestTool) Name() string        { return t.name }
-func (t serverTestTool) DisplayName() string { return t.display }
-func (t serverTestTool) Description() string { return t.desc }
-func (t serverTestTool) Parameters() interfaces.JSONSchema {
-	return interfaces.JSONSchema{"type": "object"}
-}
-func (t serverTestTool) Execute(context.Context, map[string]any) (any, error) {
-	return nil, nil
+// expectRuntimeStream stubs Runtime.Stream → StreamHandle.Events for streaming A2A paths.
+// Done is closed so agentStream.awaitCompletion can finish before the test/controller teardown.
+func expectRuntimeStream(ctrl *gomock.Controller, mockRT *rtmocks.MockRuntime, ch <-chan events.AgentEvent, streamErr error) {
+	if streamErr != nil {
+		mockRT.EXPECT().Stream(gomock.Any(), gomock.Any()).Return(nil, streamErr)
+		return
+	}
+	h := rtmocks.NewMockStreamHandle(ctrl)
+	mockRT.EXPECT().Stream(gomock.Any(), gomock.Any()).Return(h, nil)
+	h.EXPECT().ID().Return("stream-run").AnyTimes()
+	h.EXPECT().Done().Return(closedDoneChan()).AnyTimes()
+	h.EXPECT().Events(gomock.Any(), int64(0)).Return(ch, nil)
 }
 
 func TestRunA2A_NotConfigured(t *testing.T) {
@@ -94,8 +93,7 @@ func TestBuildSDKAgentCard(t *testing.T) {
 		agentConfig: agentConfig{
 			Name:            "CardAgent",
 			Description:     "desc",
-			LLMClient:       stubLLM{},
-			streamEnabled:   false,
+			LLMClient:       testLLM(t),
 			a2aServerConfig: &A2AServerConfig{Hostname: "127.0.0.1", Port: 9000},
 		},
 	}
@@ -105,7 +103,7 @@ func TestBuildSDKAgentCard(t *testing.T) {
 		t.Fatalf("card metadata: %+v", card)
 	}
 	if card.Capabilities.Streaming {
-		t.Fatal("Streaming should be false when stream disabled")
+		t.Fatal("Streaming should be false when LLM does not support streaming")
 	}
 	if len(card.SecuritySchemes) != 0 {
 		t.Fatalf("expected no security without bearer tokens, got %v", card.SecuritySchemes)
@@ -117,21 +115,20 @@ func TestBuildSDKAgentCard(t *testing.T) {
 	a2 := &Agent{
 		agentConfig: agentConfig{
 			Name:            "S",
-			LLMClient:       streamCapableLLM{},
-			streamEnabled:   true,
+			LLMClient:       testStreamLLM(t),
 			a2aServerConfig: &A2AServerConfig{Hostname: "localhost", Port: 1},
 		},
 	}
 	mustTestRegistries(t, &a2.agentConfig)
 	c2 := a2.buildSDKAgentCard()
 	if !c2.Capabilities.Streaming {
-		t.Fatal("Streaming should be true when stream enabled and LLM supports it")
+		t.Fatal("Streaming should be true when LLM supports streaming")
 	}
 
 	a3 := &Agent{
 		agentConfig: agentConfig{
 			Name:            "AuthCard",
-			LLMClient:       stubLLM{},
+			LLMClient:       testLLM(t),
 			a2aServerConfig: &A2AServerConfig{Hostname: "h", Port: 9, BearerTokens: []string{"secret"}},
 		},
 	}
@@ -159,8 +156,7 @@ func TestBuildSDKAgentCard_CustomAgentCardOverride(t *testing.T) {
 		agentConfig: agentConfig{
 			Name:            "IgnoredName",
 			Description:     "ignored desc",
-			LLMClient:       stubLLM{},
-			streamEnabled:   false,
+			LLMClient:       testLLM(t),
 			a2aServerConfig: &A2AServerConfig{Hostname: "127.0.0.1", Port: 9000, AgentCard: custom},
 		},
 	}
@@ -185,7 +181,7 @@ func TestDeriveSDKSkills(t *testing.T) {
 	a := &Agent{
 		agentConfig: agentConfig{
 			tools: []interfaces.Tool{
-				serverTestTool{name: "alpha", display: "Alpha", desc: "generic tool"},
+				testToolMeta(t, "alpha", "Alpha", "generic tool", interfaces.JSONSchema{"type": "object"}),
 				NewA2ATool("remote", interfaces.ToolSpec{Name: "sk1", Description: "d"},
 					interfaces.A2ASkillSpec{
 						ID: "sk1", Name: "Skill One", Description: "remote desc",
@@ -246,11 +242,10 @@ func TestAgentA2AExecutor_Execute_NonStreaming(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	mockRT := rtmocks.NewMockRuntime(ctrl)
-	mockRT.EXPECT().Execute(gomock.Any(), gomock.Any()).Return(&types.AgentRunResult{Content: "reply"}, nil)
+	expectRuntimeRun(ctrl, mockRT, &types.AgentRunResult{Content: "reply"}, nil)
 
 	a := testAgentWithRuntime(mockRT)
-	a.LLMClient = stubLLM{}
-	a.streamEnabled = false
+	a.LLMClient = testLLM(t)
 
 	exec := &agentA2AExecutor{agent: a}
 	execCtx := &a2asrv.ExecutorContext{
@@ -281,10 +276,10 @@ func TestAgentA2AExecutor_Execute_NonStreaming_RunError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	mockRT := rtmocks.NewMockRuntime(ctrl)
-	mockRT.EXPECT().Execute(gomock.Any(), gomock.Any()).Return(nil, errors.New("run boom"))
+	expectRuntimeRun(ctrl, mockRT, nil, errors.New("run boom"))
 
 	a := testAgentWithRuntime(mockRT)
-	a.LLMClient = stubLLM{}
+	a.LLMClient = testLLM(t)
 
 	exec := &agentA2AExecutor{agent: a}
 	execCtx := &a2asrv.ExecutorContext{
@@ -312,20 +307,16 @@ func TestAgentA2AExecutor_Execute_Streaming_MultiDelta(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	mockRT := rtmocks.NewMockRuntime(ctrl)
-	mockRT.EXPECT().ExecuteStream(gomock.Any(), gomock.Any()).DoAndReturn(
-		func(ctx context.Context, req *runtime.ExecuteRequest) (<-chan events.AgentEvent, error) {
-			ch := make(chan events.AgentEvent, 8)
-			ch <- events.NewAgentTextMessageContentEvent("m1", "aa")
-			ch <- events.NewAgentTextMessageContentEvent("m1", "bb")
-			ch <- events.NewAgentRunFinishedEvent("t", "r", &types.AgentRunResult{Content: "full"})
-			close(ch)
-			return ch, nil
-		})
+	streamCh1 := make(chan events.AgentEvent, 8)
+	streamCh1 <- events.NewAgentTextMessageContentEvent("m1", "aa")
+	streamCh1 <- events.NewAgentTextMessageContentEvent("m1", "bb")
+	streamCh1 <- events.NewAgentRunFinishedEvent("t", "r", &types.AgentRunResult{Content: "full"})
+	close(streamCh1)
+	var streamRecv1 <-chan events.AgentEvent = streamCh1
+	expectRuntimeStream(ctrl, mockRT, streamRecv1, nil)
 
 	a := testAgentWithRuntime(mockRT)
-	a.LLMClient = streamCapableLLM{}
-	a.streamEnabled = true
-
+	a.LLMClient = testStreamLLM(t)
 	exec := &agentA2AExecutor{agent: a}
 	execCtx := &a2asrv.ExecutorContext{
 		Message: a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("prompt")),
@@ -361,20 +352,16 @@ func TestAgentA2AExecutor_Execute_Streaming_SkipEmptyDelta(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	mockRT := rtmocks.NewMockRuntime(ctrl)
-	mockRT.EXPECT().ExecuteStream(gomock.Any(), gomock.Any()).DoAndReturn(
-		func(ctx context.Context, req *runtime.ExecuteRequest) (<-chan events.AgentEvent, error) {
-			ch := make(chan events.AgentEvent, 4)
-			ch <- events.NewAgentTextMessageContentEvent("m1", "")
-			ch <- events.NewAgentTextMessageContentEvent("m1", "z")
-			ch <- events.NewAgentRunFinishedEvent("", "", nil)
-			close(ch)
-			return ch, nil
-		})
+	streamCh2 := make(chan events.AgentEvent, 4)
+	streamCh2 <- events.NewAgentTextMessageContentEvent("m1", "")
+	streamCh2 <- events.NewAgentTextMessageContentEvent("m1", "z")
+	streamCh2 <- events.NewAgentRunFinishedEvent("", "", nil)
+	close(streamCh2)
+	var streamRecv2 <-chan events.AgentEvent = streamCh2
+	expectRuntimeStream(ctrl, mockRT, streamRecv2, nil)
 
 	a := testAgentWithRuntime(mockRT)
-	a.LLMClient = streamCapableLLM{}
-	a.streamEnabled = true
-
+	a.LLMClient = testStreamLLM(t)
 	exec := &agentA2AExecutor{agent: a}
 	execCtx := &a2asrv.ExecutorContext{
 		Message: a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("p")),
@@ -393,12 +380,10 @@ func TestAgentA2AExecutor_Execute_Streaming_StreamOpenError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	mockRT := rtmocks.NewMockRuntime(ctrl)
-	mockRT.EXPECT().ExecuteStream(gomock.Any(), gomock.Any()).Return(nil, errors.New("no stream"))
+	expectRuntimeStream(ctrl, mockRT, nil, errors.New("no stream"))
 
 	a := testAgentWithRuntime(mockRT)
-	a.LLMClient = streamCapableLLM{}
-	a.streamEnabled = true
-
+	a.LLMClient = testStreamLLM(t)
 	exec := &agentA2AExecutor{agent: a}
 	execCtx := &a2asrv.ExecutorContext{
 		Message: a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("p")),
@@ -421,18 +406,14 @@ func TestAgentA2AExecutor_Execute_Streaming_RunErrorEvent(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	mockRT := rtmocks.NewMockRuntime(ctrl)
-	mockRT.EXPECT().ExecuteStream(gomock.Any(), gomock.Any()).DoAndReturn(
-		func(ctx context.Context, req *runtime.ExecuteRequest) (<-chan events.AgentEvent, error) {
-			ch := make(chan events.AgentEvent, 2)
-			ch <- events.NewAgentRunErrorEvent("boom", "CODE")
-			close(ch)
-			return ch, nil
-		})
+	errCh := make(chan events.AgentEvent, 2)
+	errCh <- events.NewAgentRunErrorEvent("boom", "CODE")
+	close(errCh)
+	var errRecv <-chan events.AgentEvent = errCh
+	expectRuntimeStream(ctrl, mockRT, errRecv, nil)
 
 	a := testAgentWithRuntime(mockRT)
-	a.LLMClient = streamCapableLLM{}
-	a.streamEnabled = true
-
+	a.LLMClient = testStreamLLM(t)
 	exec := &agentA2AExecutor{agent: a}
 	execCtx := &a2asrv.ExecutorContext{
 		Message: a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("p")),
@@ -454,17 +435,13 @@ func TestAgentA2AExecutor_Execute_Streaming_CloseWithoutRunFinished(t *testing.T
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	mockRT := rtmocks.NewMockRuntime(ctrl)
-	mockRT.EXPECT().ExecuteStream(gomock.Any(), gomock.Any()).DoAndReturn(
-		func(ctx context.Context, req *runtime.ExecuteRequest) (<-chan events.AgentEvent, error) {
-			ch := make(chan events.AgentEvent, 1)
-			close(ch)
-			return ch, nil
-		})
+	closedCh := make(chan events.AgentEvent, 1)
+	close(closedCh)
+	var closedRecv <-chan events.AgentEvent = closedCh
+	expectRuntimeStream(ctrl, mockRT, closedRecv, nil)
 
 	a := testAgentWithRuntime(mockRT)
-	a.LLMClient = streamCapableLLM{}
-	a.streamEnabled = true
-
+	a.LLMClient = testStreamLLM(t)
 	exec := &agentA2AExecutor{agent: a}
 	execCtx := &a2asrv.ExecutorContext{
 		Message: a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("p")),
@@ -551,7 +528,7 @@ func TestRunA2A_ServesAgentCardAndSendMessage(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	mockRT := rtmocks.NewMockRuntime(ctrl)
-	mockRT.EXPECT().Execute(gomock.Any(), gomock.Any()).Return(&types.AgentRunResult{Content: "hello-from-agent"}, nil)
+	expectRuntimeRun(ctrl, mockRT, &types.AgentRunResult{Content: "hello-from-agent"}, nil)
 
 	a := &Agent{
 		agentConfig: agentConfig{
@@ -560,7 +537,7 @@ func TestRunA2A_ServesAgentCardAndSendMessage(t *testing.T) {
 			logger:           logger.DefaultLogger("error"),
 			tracer:           observability.DefaultNoopTracer,
 			metrics:          observability.DefaultNoopMetrics,
-			LLMClient:        stubLLM{},
+			LLMClient:        testLLM(t),
 			maxSubAgentDepth: 2,
 			a2aServerConfig:  &A2AServerConfig{Hostname: addr.IP.String(), Port: addr.Port},
 		},
@@ -673,7 +650,7 @@ func TestRunA2A_JSONRPCSendStreamingMessage_ReturnsSSE(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	mockRT := rtmocks.NewMockRuntime(ctrl)
-	mockRT.EXPECT().Execute(gomock.Any(), gomock.Any()).Return(&types.AgentRunResult{Content: "hello-from-agent"}, nil)
+	expectRuntimeRun(ctrl, mockRT, &types.AgentRunResult{Content: "hello-from-agent"}, nil)
 
 	a := &Agent{
 		agentConfig: agentConfig{
@@ -682,7 +659,7 @@ func TestRunA2A_JSONRPCSendStreamingMessage_ReturnsSSE(t *testing.T) {
 			logger:           logger.DefaultLogger("error"),
 			tracer:           observability.DefaultNoopTracer,
 			metrics:          observability.DefaultNoopMetrics,
-			LLMClient:        stubLLM{},
+			LLMClient:        testLLM(t),
 			maxSubAgentDepth: 2,
 			a2aServerConfig:  &A2AServerConfig{Hostname: addr.IP.String(), Port: addr.Port},
 		},

@@ -38,7 +38,7 @@ defer a.Close() // flushes buffered log records
 
 No separate `WithLogger` call is needed for OTLP — the SDK wires [`logger.DefaultLoggerWithOtelProvider`](https://pkg.go.dev/github.com/agenticenv/agent-sdk-go/pkg/logger#DefaultLoggerWithOtelProvider) when logs are enabled.
 
-Use the **same** `WithObservabilityConfig` and log level on [`NewAgentWorker`](/advanced/worker-separation) for worker-side log export.
+Use the **same** `WithObservabilityConfig` and log level on [`NewAgentWorker`](/advanced/distributed-execution) for worker-side log export.
 
 ### Custom logger + OTLP
 

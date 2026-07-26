@@ -52,8 +52,11 @@ opts := &agent.AgentRunOptions{
     ConversationOptions: &agent.ConversationOptions{ID: "session-1"},
 }
 
-a.Run(ctx, "I'm Alice. Remember that.", opts)
-a.Run(ctx, "What's my name?", opts) // receives: "Alice"
+agentRun, err := a.Run(ctx, "I'm Alice. Remember that.", opts)
+result, err := agentRun.Get(ctx)
+
+agentRun, err = a.Run(ctx, "What's my name?", opts)
+result, err = agentRun.Get(ctx) // receives: "Alice"
 ```
 
 Different IDs are isolated sessions. Sub-agents always run without a conversation ID — they do not inherit the parent session history.
@@ -73,12 +76,12 @@ docker run --rm -p 6379:6379 redis:latest
 ```
 
 <Warning>
-In-memory conversation fails at **build time** when `DisableLocalWorker` or `EnableRemoteWorkers` is set — the SDK detects the mismatch between a non-distributed backend and a remote-worker deployment. Use Redis (or another distributed backend) on both the agent and worker processes.
+In-memory conversation fails at **build time** when `DisableLocalWorker` is set — the SDK detects the mismatch between a non-distributed backend and a split agent/worker deployment. Use Redis (or another distributed backend) on both the agent and worker processes.
 </Warning>
 
 ### Remote workers
 
-Use Redis on both the agent and worker processes. Pass the same `conversation.Config` to `NewAgent` and `NewAgentWorker`. Set `SaveOnIteration: true` on the worker if external consumers need live history mid-run. See [Worker Separation](/advanced/worker-separation) for the full setup.
+Use Redis on both the agent and worker processes. Pass the same `conversation.Config` to `NewAgent` and `NewAgentWorker`. Set `SaveOnIteration: true` on the worker if external consumers need live history mid-run. See [Distributed Execution](/advanced/distributed-execution) for the full setup.
 
 ## Lifecycle
 
@@ -122,7 +125,7 @@ Set `IsDistributed()` to `true` for any backend that can be shared across proces
     Long-term facts across separate runs
   </Card>
 
-  <Card title="Worker Separation" icon="server" href="/advanced/worker-separation" horizontal>
+  <Card title="Distributed Execution" icon="server" href="/advanced/distributed-execution" horizontal>
     Redis conversation with remote workers
   </Card>
 </CardGroup>

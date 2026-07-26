@@ -4,11 +4,16 @@
 //
 //	go run . [initial prompt]
 //
-// Starts an event-workflow-backed stream so you can observe each event as it
-// arrives and simulate failure scenarios (e.g. kill the worker or this process
-// mid-run and restart to watch the streamingUnavailable path).
+// Streams events delivered via Temporal Workflow Streams, so each run has a
+// durable event log hosted in the Temporal server. Kill the worker or this
+// process mid-run, then restart to observe workflow replay and recovery.
 //
-// At the "you>" prompt type any message.  Approval requests pause the stream
+// GetAgentStream support: on startup the agent checks for a saved run state
+// (runID + last offset) in /tmp/durable_agent_runstate.json. If one exists it
+// asks whether to reconnect from the last known offset. This demonstrates the
+// full crash-and-recover cycle without any extra infrastructure.
+//
+// At the "you>" prompt type any message. Approval requests pause the stream
 // and ask for y/n before continuing.  Type "exit" or "quit" to stop.
 package main
 
@@ -16,17 +21,60 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
+	"syscall"
 
 	config "github.com/agenticenv/agent-sdk-go/examples"
 	"github.com/agenticenv/agent-sdk-go/examples/durable_agent/opts"
 	"github.com/agenticenv/agent-sdk-go/examples/shared"
 	"github.com/agenticenv/agent-sdk-go/pkg/agent"
 )
+
+// stateFile is where the agent persists runID + offset between process restarts.
+// Use /tmp so it is easy to locate and does not pollute the repo.
+const stateFile = "/tmp/durable_agent_runstate.json"
+
+// runState holds the mid-stream position that survives a process crash.
+type runState struct {
+	RunID  string `json:"run_id"`
+	Offset int64  `json:"offset"`
+	Prompt string `json:"prompt"` // original prompt, printed on reconnect for context
+}
+
+// loadRunState reads a saved run state from stateFile, or returns nil if none.
+func loadRunState() *runState {
+	data, err := os.ReadFile(stateFile)
+	if err != nil {
+		return nil
+	}
+	var s runState
+	if err := json.Unmarshal(data, &s); err != nil || s.RunID == "" {
+		return nil
+	}
+	return &s
+}
+
+// saveRunState atomically updates stateFile with the current runID and offset.
+func saveRunState(runID string, offset int64, prompt string) {
+	data, err := json.Marshal(runState{RunID: runID, Offset: offset, Prompt: prompt})
+	if err != nil {
+		return
+	}
+	// WriteFile is not atomic, but good enough for a demo; for production use
+	// a rename-based atomic write (write to temp file, then os.Rename).
+	_ = os.WriteFile(stateFile, data, 0o600)
+}
+
+// clearRunState removes the persisted state after a run completes or is abandoned.
+func clearRunState() {
+	_ = os.Remove(stateFile)
+}
 
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -42,34 +90,68 @@ func main() {
 	baseOpts := opts.Common(cfg.Host, cfg.Port, cfg.Namespace, cfg.TaskQueue, llmClient, config.NewLoggerFromLogConfig(cfg))
 	agentOpts := append(baseOpts,
 		agent.DisableLocalWorker(),
-		agent.EnableRemoteWorkers(),
-		agent.WithStream(true),
 	)
 
 	a, err := agent.NewAgent(agentOpts...)
 	if err != nil {
 		log.Fatal(config.FormatNewAgentError("failed to create agent", err))
 	}
-	defer a.Close()
+	var closeOnce sync.Once
+	closeAgent := func() {
+		closeOnce.Do(func() {
+			a.Close()
+		})
+	}
+	defer closeAgent()
 
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt)
+	// Buffer 2 so a second signal can force-exit if Close() blocks.
+	sigChan := make(chan os.Signal, 2)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 
 	go func() {
 		<-sigChan
-		cancel()
-		fmt.Println("Shutting down durable_agent...")
-		a.Close()
-		os.Exit(0)
+		fmt.Println("\nShutdown signal received; closing agent...")
+		done := make(chan struct{})
+		go func() {
+			closeAgent()
+			close(done)
+		}()
+		select {
+		case <-done:
+			fmt.Println("durable_agent stopped.")
+			os.Exit(0)
+		case <-sigChan:
+			fmt.Println("Second signal: forcing exit.")
+			os.Exit(1)
+		}
 	}()
 
 	fmt.Println("=== durable_agent interactive stream ===")
-	fmt.Println("Events arrive via the event workflow (UpdateWorkflow path).")
-	fmt.Println("Simulate scenarios: kill the worker or this process mid-run, then restart.")
+	fmt.Println("Events are delivered via Temporal Workflow Streams (durable, replayable).")
+	fmt.Println("Kill this process mid-stream (Ctrl+C / pkill), then restart to reconnect.")
 	fmt.Println("Type 'exit' or 'quit' or 'bye' to stop.")
 	fmt.Println()
 
 	scanner := bufio.NewScanner(os.Stdin)
+
+	// Check for a saved run state and offer reconnect before starting the REPL.
+	if saved := loadRunState(); saved != nil {
+		fmt.Printf("[reconnect] found saved run state:\n")
+		fmt.Printf("  run_id : %s\n", saved.RunID)
+		fmt.Printf("  offset : %d\n", saved.Offset)
+		fmt.Printf("  prompt : %q\n", saved.Prompt)
+		fmt.Print("Reconnect from last offset? [y/n]> ")
+		if scanner.Scan() {
+			ans := strings.ToLower(strings.TrimSpace(scanner.Text()))
+			if ans == "y" || ans == "yes" {
+				reconnectStream(ctx, a, scanner, saved)
+			} else {
+				fmt.Println("[reconnect] skipped — clearing saved state.")
+				clearRunState()
+			}
+		}
+		fmt.Println()
+	}
 
 	initial := strings.Join(os.Args[1:], " ")
 	if initial != "" {
@@ -98,19 +180,104 @@ func main() {
 	}
 }
 
+// runStream starts a new stream run, persisting runID+offset on each event so a
+// crashed process can resume via reconnectStream on the next startup.
 func runStream(ctx context.Context, a *agent.Agent, scanner *bufio.Scanner, prompt string) {
-	eventCh, err := a.Stream(ctx, prompt, nil)
+	// runID is available synchronously before any events arrive.
+	// Persist it immediately — before consuming eventCh — so a Ctrl+C or kill -9
+	// between start and the first event doesn't lose the reconnect handle.
+	agentStream, err := a.Stream(ctx, prompt, nil)
 	if err != nil {
 		fmt.Printf("[error] failed to start stream: %v\n\n", err)
 		return
 	}
+	runID := agentStream.ID()
+	eventCh, err := agentStream.Events(ctx)
+	if err != nil {
+		fmt.Printf("[error] failed to subscribe to stream events: %v\n\n", err)
+		return
+	}
+	saveRunState(runID, 0, prompt)
+	fmt.Println(shared.RunIDLine(runID))
 
 	fmt.Println("--- stream start ---")
+	drainStreamEvents(ctx, a, scanner, prompt, runID, eventCh, 0)
+	fmt.Println("--- stream end ---")
+	fmt.Println()
+}
+
+// reconnectStream resumes a prior stream from the offset saved in state.
+// Events at offsets already seen (≤ state.Offset) are silently discarded so
+// the user only sees new content.
+func reconnectStream(ctx context.Context, a *agent.Agent, scanner *bufio.Scanner, state *runState) {
+	fmt.Printf("[reconnect] reconnecting run_id=%s from offset=%d\n", state.RunID, state.Offset)
+	fmt.Printf("[reconnect] original prompt: %q\n\n", state.Prompt)
+
+	agentStream, err := a.GetAgentStream(ctx, state.RunID)
+	if err != nil {
+		if errors.Is(err, agent.ErrRunAlreadyCompleted) {
+			fmt.Println("[reconnect] the run completed successfully while you were disconnected.")
+			fmt.Println("[reconnect] the response was generated, but streaming events are no longer available.")
+			fmt.Println("[reconnect] if conversation history is configured, the response is already saved —")
+			fmt.Println("[reconnect] start a new turn to continue. otherwise, start a new run.")
+			fmt.Printf("[reconnect] original prompt: %q\n", state.Prompt)
+		} else {
+			fmt.Printf("[reconnect] GetAgentStream failed: %v\n", err)
+		}
+		clearRunState()
+		return
+	}
+	eventCh, err := agentStream.Events(ctx, agent.WithOffset(state.Offset))
+	if err != nil {
+		fmt.Printf("[reconnect] stream events failed: %v\n", err)
+		clearRunState()
+		return
+	}
+
+	fmt.Println("--- stream resumed ---")
+	drainStreamEvents(ctx, a, scanner, state.Prompt, state.RunID, eventCh, state.Offset)
+	fmt.Println("--- stream end ---")
+	fmt.Println()
+}
+
+// drainStreamEvents is the shared event loop used by both runStream and
+// reconnectStream. It prints events as they arrive and:
+//   - skips events at offset ≤ skipBelowOffset (deduplicate on reconnect)
+//   - saves the latest offset to the state file after each persisted event
+//   - clears the state file on terminal events (RUN_FINISHED, RUN_ERROR)
+func drainStreamEvents(
+	ctx context.Context,
+	a *agent.Agent,
+	scanner *bufio.Scanner,
+	prompt string,
+	runID string,
+	eventCh <-chan agent.AgentEvent,
+	skipBelowOffset int64,
+) {
 	streamed := false
 
 	for ev := range eventCh {
 		if ev == nil {
 			continue
+		}
+
+		// Extract stream offset when available.
+		var evOffset int64
+		var hasOffset bool
+		if ob, ok := ev.(interface{ Offset() (int64, bool) }); ok {
+			evOffset, hasOffset = ob.Offset()
+		}
+
+		// Skip events already processed before the crash.
+		// Events at exactly skipBelowOffset may replay — discard them too.
+		if hasOffset && evOffset <= skipBelowOffset && skipBelowOffset > 0 {
+			continue
+		}
+
+		// Persist the new latest offset before processing the event so that
+		// a crash during the handler doesn't lose this position.
+		if hasOffset {
+			saveRunState(runID, evOffset, prompt)
 		}
 
 		switch ev.Type() {
@@ -152,27 +319,24 @@ func runStream(ctx context.Context, a *agent.Agent, scanner *bufio.Scanner, prom
 			if re, ok := ev.(*agent.AgentRunErrorEvent); ok {
 				fmt.Printf("\n[error] %s\n", re.Message)
 			}
+			// Run is terminal — clear saved state.
+			clearRunState()
 
 		case agent.AgentEventTypeRunFinished:
+			res := shared.RunResultFromFinishedEvent(ev)
 			if streamed {
 				fmt.Println()
-			}
-			res := shared.RunResultFromFinishedEvent(ev)
-			if res != nil && res.Content != "" && !streamed {
-				fmt.Printf("[complete] %s\n", res.Content)
-			} else {
-				fmt.Println("[complete]")
+			} else if res != nil && res.Content != "" {
+				fmt.Println(res.Content)
 			}
 			shared.PrintRunFooters(res)
+			// Run is terminal — clear saved state.
+			clearRunState()
 
 		default:
-			//fmt.Printf("[%s] %+v\n", ev.Type(), ev)
 			continue
 		}
 	}
-
-	fmt.Println("--- stream end ---")
-	fmt.Println()
 }
 
 func handleApprovalTokenPrompt(ctx context.Context, a *agent.Agent, scanner *bufio.Scanner, token string) {

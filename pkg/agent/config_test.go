@@ -61,7 +61,7 @@ func TestBuildAgentConfig_NeitherTemporalConfigNorClient_UsesLocalRuntime(t *tes
 	// No Temporal config is valid — the local runtime is the default backend.
 	cfg, err := buildAgentConfig([]Option{
 		WithName("test"),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 	})
 	if err != nil {
 		t.Fatalf("expected success with local backend, got: %v", err)
@@ -75,7 +75,7 @@ func TestBuildAgentConfig_DefaultNoopTracerMetrics(t *testing.T) {
 	cfg, err := buildAgentConfig([]Option{
 		WithName("noop-obs"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -95,7 +95,7 @@ func TestBuildAgentConfig_EmptyTaskQueue(t *testing.T) {
 	_, err := buildAgentConfig([]Option{
 		WithName("test"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: ""}),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 	})
 	if err == nil || !strings.Contains(err.Error(), "TaskQueue") {
 		t.Fatalf("got %v", err)
@@ -156,7 +156,7 @@ func TestBuildAgentConfig_WithMCP(t *testing.T) {
 	_, err = buildAgentConfig([]Option{
 		WithName("test"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 		WithMCPConfig(MCPServers{"srv": MCPConfig{
 			Transport:  types.MCPLoopback{Transport: t2},
 			ToolFilter: types.MCPToolFilter{AllowTools: []string{"keep"}},
@@ -192,7 +192,7 @@ func TestBuildAgentConfig_MCPClients_toolFilter(t *testing.T) {
 	_, err = buildAgentConfig([]Option{
 		WithName("test"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 		WithMCPClients(cl),
 	})
 	if err != nil {
@@ -209,7 +209,7 @@ func TestBuildAgentConfig_MCP_duplicateClientName(t *testing.T) {
 	_, err := buildAgentConfig([]Option{
 		WithName("test"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 		WithMCPConfig(MCPServers{"dup": MCPConfig{
 			Transport: types.MCPStdio{Command: "go", Args: []string{"env"}},
 		}}),
@@ -221,7 +221,7 @@ func TestBuildAgentConfig_MCP_duplicateClientName(t *testing.T) {
 }
 
 func TestAgentConfig_ToolsList(t *testing.T) {
-	tool := mockTool{name: "t1"}
+	tool := testTool(t, "t1")
 	c := &agentConfig{tools: []interfaces.Tool{tool}}
 	if err := c.buildToolRegistry(); err != nil {
 		t.Fatal(err)
@@ -234,7 +234,13 @@ func TestAgentConfig_ToolsList(t *testing.T) {
 		t.Errorf("toolsList = %v, want [t1]", list)
 	}
 
-	reg := &mockRegistry{tools: []interfaces.Tool{tool, mockTool{name: "t2"}}}
+	reg := NewToolRegistry()
+	if err := reg.Register(tool); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(testTool(t, "t2")); err != nil {
+		t.Fatal(err)
+	}
 	c2 := &agentConfig{toolRegistry: reg}
 	list2, err := c2.resolveTools(context.Background())
 	if err != nil {
@@ -279,8 +285,8 @@ func TestAgentConfig_ApplySamplingToRequest(t *testing.T) {
 }
 
 func TestAgentConfig_RequiresApproval(t *testing.T) {
-	approvalTool := mockToolWithApproval{mockTool: mockTool{name: "a"}, needApproval: true}
-	noApprovalTool := mockToolWithApproval{mockTool: mockTool{name: "b"}, needApproval: false}
+	approvalTool := testToolWithApproval(t, "a", true)
+	noApprovalTool := testToolWithApproval(t, "b", false)
 
 	// No policy: use tool's ApprovalRequired
 	c := &agentConfig{}
@@ -386,7 +392,7 @@ func TestAgentConfig_resolveSubAgentTools_okWithinDepth(t *testing.T) {
 func TestAgentConfig_validateToolNames_conflict(t *testing.T) {
 	sub := &Agent{agentConfig: agentConfig{Name: "Math"}}
 	c := &agentConfig{
-		tools:     []interfaces.Tool{mockTool{name: "subagent_Math"}},
+		tools:     []interfaces.Tool{testTool(t, "subagent_Math")},
 		subAgents: []*Agent{sub},
 	}
 	if err := c.buildRegistries(); err != nil {
@@ -406,7 +412,7 @@ func TestAgentConfig_validateToolNames_conflict(t *testing.T) {
 func TestAgentConfig_toolsList_includesSubAgents(t *testing.T) {
 	sub := &Agent{agentConfig: agentConfig{Name: "Helper", ID: "id-sub"}}
 	c := &agentConfig{
-		tools:     []interfaces.Tool{mockTool{name: "echo"}},
+		tools:     []interfaces.Tool{testTool(t, "echo")},
 		subAgents: []*Agent{sub},
 	}
 	if err := c.buildRegistries(); err != nil {
@@ -433,7 +439,7 @@ func TestAgentConfig_toolsList_includesSubAgents(t *testing.T) {
 
 func TestAgentConfig_HasApprovalTools(t *testing.T) {
 	c := &agentConfig{
-		tools:              []interfaces.Tool{mockToolWithApproval{mockTool: mockTool{name: "x"}, needApproval: true}},
+		tools:              []interfaces.Tool{testToolWithApproval(t, "x", true)},
 		toolApprovalPolicy: RequireAllToolApprovalPolicy{},
 	}
 	if err := c.buildToolRegistry(); err != nil {
@@ -444,7 +450,7 @@ func TestAgentConfig_HasApprovalTools(t *testing.T) {
 	}
 
 	c2 := &agentConfig{
-		tools:              []interfaces.Tool{mockToolWithApproval{mockTool: mockTool{name: "x"}, needApproval: false}},
+		tools:              []interfaces.Tool{testToolWithApproval(t, "x", false)},
 		toolApprovalPolicy: AutoToolApprovalPolicy(),
 	}
 	if err := c2.buildToolRegistry(); err != nil {
@@ -459,7 +465,7 @@ func TestBuildAgentConfig_approvalTimeoutValidatedWithoutApprovalTools(t *testin
 	_, err := buildAgentConfig([]Option{
 		WithName("test"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 		WithTimeout(5 * time.Minute),
 		WithApprovalTimeout(6 * time.Minute),
 	})
@@ -470,7 +476,7 @@ func TestBuildAgentConfig_approvalTimeoutValidatedWithoutApprovalTools(t *testin
 	cfg, err := buildAgentConfig([]Option{
 		WithName("test"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 		WithTimeout(5 * time.Minute),
 		WithApprovalTimeout(2 * time.Minute),
 	})
@@ -485,7 +491,7 @@ func TestBuildAgentConfig_approvalTimeoutValidatedWithoutApprovalTools(t *testin
 func TestBuildAgentConfig_executionConfigsMappedToRuntime(t *testing.T) {
 	cfg, err := buildAgentConfig([]Option{
 		WithName("exec"),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 		WithLLMExecutionConfig(ExecutionConfig{Timeout: 45 * time.Minute, MaxAttempts: 4}),
 		WithToolAuthExecutionConfig(ExecutionConfig{MaxAttempts: 2}),
 		WithToolExecutionConfig(ExecutionConfig{Timeout: 25 * time.Minute}),
@@ -541,33 +547,6 @@ func TestBuildAgentConfig_executionConfigsMappedToRuntime(t *testing.T) {
 	}
 }
 
-type mockRegistry struct {
-	tools []interfaces.Tool
-}
-
-func (m *mockRegistry) Register(interfaces.Tool) error { return nil }
-func (m *mockRegistry) Unregister(string) error        { return ErrRegistryNotFound }
-func (m *mockRegistry) Get(name string) (interfaces.Tool, error) {
-	for _, t := range m.tools {
-		if t.Name() == name {
-			return t, nil
-		}
-	}
-	return nil, ErrRegistryNotFound
-}
-func (m *mockRegistry) List() []interfaces.Tool { return m.tools }
-
-type mockToolWithApproval struct {
-	mockTool
-	needApproval bool
-}
-
-func (m mockToolWithApproval) ApprovalRequired() bool { return m.needApproval }
-
-// Ensure mockToolWithApproval implements both interfaces
-var _ interfaces.Tool = (*mockToolWithApproval)(nil)
-var _ interfaces.ToolApproval = (*mockToolWithApproval)(nil)
-
 // ---------------------------------------------------------------------------
 // A2A test helpers
 // ---------------------------------------------------------------------------
@@ -587,49 +566,6 @@ func newTestA2ACardServer(t *testing.T, skills []a2a.AgentSkill) string {
 	t.Cleanup(srv.Close)
 	return srv.URL
 }
-
-// stubA2AClient is a minimal [interfaces.A2AClient] for config/runtime unit tests.
-type stubA2AClient struct {
-	name   string
-	skills []interfaces.A2ASkillSpec
-}
-
-func (s *stubA2AClient) Name() string { return s.name }
-func (s *stubA2AClient) Ping(_ context.Context) error {
-	return nil
-}
-func (s *stubA2AClient) ResolveCard(_ context.Context) (interfaces.A2AAgentCard, error) {
-	return interfaces.A2AAgentCard{Name: s.name}, nil
-}
-func (s *stubA2AClient) ListSkills(_ context.Context) ([]interfaces.A2ASkillSpec, error) {
-	return s.skills, nil
-}
-func (s *stubA2AClient) SendMessage(_ context.Context, _ interfaces.A2ASendMessageRequest) (interfaces.A2ASendMessageResult, error) {
-	return interfaces.A2ASendMessageResult{}, nil
-}
-func (s *stubA2AClient) Close() error { return nil }
-
-var _ interfaces.A2AClient = (*stubA2AClient)(nil)
-
-type stubRetriever struct{}
-
-func (stubRetriever) Name() string { return "stub" }
-
-func (stubRetriever) Search(context.Context, string) ([]interfaces.Document, error) {
-	return nil, nil
-}
-
-var _ interfaces.Retriever = stubRetriever{}
-
-type namedStubRetriever string
-
-func (n namedStubRetriever) Name() string { return string(n) }
-
-func (namedStubRetriever) Search(context.Context, string) ([]interfaces.Document, error) {
-	return nil, nil
-}
-
-var _ interfaces.Retriever = namedStubRetriever("")
 
 // ---------------------------------------------------------------------------
 // Retriever config tests
@@ -670,7 +606,7 @@ func TestValidateRetrievers(t *testing.T) {
 		}
 	})
 	t.Run("ok", func(t *testing.T) {
-		if err := validateRetrievers([]interfaces.Retriever{stubRetriever{}, stubRetriever{}}); err != nil {
+		if err := validateRetrievers([]interfaces.Retriever{testRetriever(t, "stub"), testRetriever(t, "stub")}); err != nil {
 			t.Fatalf("got %v", err)
 		}
 	})
@@ -680,7 +616,7 @@ func TestBuildRetrieverTools(t *testing.T) {
 	t.Run("agentic_builds_tools", func(t *testing.T) {
 		c := &agentConfig{
 			retrieverMode: RetrieverModeAgentic,
-			retrievers:    []interfaces.Retriever{namedStubRetriever("kb")},
+			retrievers:    []interfaces.Retriever{testRetriever(t, "kb")},
 		}
 		tools, err := c.resolveRetrieverTools()
 		if err != nil {
@@ -693,7 +629,7 @@ func TestBuildRetrieverTools(t *testing.T) {
 	t.Run("hybrid_builds_tools", func(t *testing.T) {
 		c := &agentConfig{
 			retrieverMode: RetrieverModeHybrid,
-			retrievers:    []interfaces.Retriever{stubRetriever{}},
+			retrievers:    []interfaces.Retriever{testRetriever(t, "stub")},
 		}
 		tools, err := c.resolveRetrieverTools()
 		if err != nil {
@@ -706,7 +642,7 @@ func TestBuildRetrieverTools(t *testing.T) {
 	t.Run("prefetch_skips_tools", func(t *testing.T) {
 		c := &agentConfig{
 			retrieverMode: RetrieverModePrefetch,
-			retrievers:    []interfaces.Retriever{stubRetriever{}},
+			retrievers:    []interfaces.Retriever{testRetriever(t, "stub")},
 		}
 		tools, err := c.resolveRetrieverTools()
 		if err != nil {
@@ -729,7 +665,7 @@ func TestBuildRetrieverTools(t *testing.T) {
 	t.Run("duplicate_name", func(t *testing.T) {
 		c := &agentConfig{
 			retrieverMode: RetrieverModeAgentic,
-			retrievers:    []interfaces.Retriever{namedStubRetriever("x"), namedStubRetriever("x")},
+			retrievers:    []interfaces.Retriever{testRetriever(t, "x"), testRetriever(t, "x")},
 		}
 		_, err := c.resolveRetrieverTools()
 		if err == nil || !strings.Contains(err.Error(), "duplicate retriever name") {
@@ -739,7 +675,7 @@ func TestBuildRetrieverTools(t *testing.T) {
 	t.Run("empty_name", func(t *testing.T) {
 		c := &agentConfig{
 			retrieverMode: RetrieverModeAgentic,
-			retrievers:    []interfaces.Retriever{namedStubRetriever("  ")},
+			retrievers:    []interfaces.Retriever{testRetriever(t, "  ")},
 		}
 		_, err := c.resolveRetrieverTools()
 		if err == nil || !strings.Contains(err.Error(), "must not be empty") {
@@ -749,7 +685,7 @@ func TestBuildRetrieverTools(t *testing.T) {
 }
 
 func TestResolveMemoryTools(t *testing.T) {
-	stub := stubMemoryBackend{}
+	stub := testMemory(t)
 	t.Run("ondemand", func(t *testing.T) {
 		cfg := memory.DefaultConfig(stub)
 		c := &agentConfig{memoryConfig: &cfg}
@@ -789,8 +725,8 @@ func TestBuildAgentConfig_WithMemory_registersSaveMemory(t *testing.T) {
 	cfg, err := buildAgentConfig([]Option{
 		WithName("test"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
-		WithMemory(memory.DefaultConfig(stubMemoryBackend{})),
+		WithLLMClient(testLLM(t)),
+		WithMemory(memory.DefaultConfig(testMemory(t))),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -812,12 +748,12 @@ func TestBuildAgentConfig_WithMemory_registersSaveMemory(t *testing.T) {
 }
 
 func TestBuildAgentConfig_WithMemoryAlways_leavesExtractNil(t *testing.T) {
-	cfg := memory.DefaultConfig(stubMemoryBackend{})
+	cfg := memory.DefaultConfig(testMemory(t))
 	cfg.Store.Mode = memory.StoreModeAlways
 	got, err := buildAgentConfig([]Option{
 		WithName("test"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 		WithMemory(cfg),
 	})
 	if err != nil {
@@ -830,11 +766,11 @@ func TestBuildAgentConfig_WithMemoryAlways_leavesExtractNil(t *testing.T) {
 }
 
 func TestBuildAgentConfig_WithMemoryOnDemand_noExtract(t *testing.T) {
-	cfg := memory.DefaultConfig(stubMemoryBackend{})
+	cfg := memory.DefaultConfig(testMemory(t))
 	got, err := buildAgentConfig([]Option{
 		WithName("test"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 		WithMemory(cfg),
 	})
 	if err != nil {
@@ -850,13 +786,13 @@ func TestBuildAgentConfig_WithMemoryAlways_preservesCustomExtract(t *testing.T) 
 	custom := memory.ExtractFunc(func(context.Context, []interfaces.Message) ([]interfaces.MemoryRecord, error) {
 		return nil, nil
 	})
-	cfg := memory.DefaultConfig(stubMemoryBackend{})
+	cfg := memory.DefaultConfig(testMemory(t))
 	cfg.Store.Mode = memory.StoreModeAlways
 	cfg.Store.Extract = custom
 	got, err := buildAgentConfig([]Option{
 		WithName("test"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 		WithMemory(cfg),
 	})
 	if err != nil {
@@ -872,22 +808,12 @@ func TestBuildAgentConfig_WithMemoryAlways_preservesCustomExtract(t *testing.T) 
 	}
 }
 
-type stubMemoryBackend struct{}
-
-func (stubMemoryBackend) Store(context.Context, interfaces.MemoryScope, interfaces.MemoryRecord, ...interfaces.StoreMemoryOption) (string, error) {
-	return "", nil
-}
-func (stubMemoryBackend) Load(context.Context, interfaces.MemoryScope, string, ...interfaces.LoadMemoryOption) ([]interfaces.MemoryEntry, error) {
-	return nil, nil
-}
-func (stubMemoryBackend) Clear(context.Context, interfaces.MemoryScope) error { return nil }
-
 func TestBuildAgentConfig_WithRetrievers(t *testing.T) {
-	r1, r2 := namedStubRetriever("kb-a"), namedStubRetriever("kb-b")
+	r1, r2 := testRetriever(t, "kb-a"), testRetriever(t, "kb-b")
 	cfg, err := buildAgentConfig([]Option{
 		WithName("test"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 		WithRetrievers(r1, r2),
 	})
 	if err != nil {
@@ -909,8 +835,8 @@ func TestBuildAgentConfig_RetrieverMode_prefetchNoTools(t *testing.T) {
 	cfg, err := buildAgentConfig([]Option{
 		WithName("test"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
-		WithRetrievers(stubRetriever{}),
+		WithLLMClient(testLLM(t)),
+		WithRetrievers(testRetriever(t, "stub")),
 		WithRetrieverMode(RetrieverModePrefetch),
 	})
 	if err != nil {
@@ -931,8 +857,8 @@ func TestBuildAgentConfig_RetrieverMode_agenticBuildsTools(t *testing.T) {
 	cfg, err := buildAgentConfig([]Option{
 		WithName("test"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
-		WithRetrievers(stubRetriever{}),
+		WithLLMClient(testLLM(t)),
+		WithRetrievers(testRetriever(t, "stub")),
 		WithRetrieverMode(RetrieverModeAgentic),
 	})
 	if err != nil {
@@ -961,7 +887,7 @@ func TestBuildAgentConfig_AgenticNoRetrievers_NoTools(t *testing.T) {
 	cfg, err := buildAgentConfig([]Option{
 		WithName("test"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 		WithRetrieverMode(RetrieverModeAgentic),
 	})
 	if err != nil {
@@ -980,8 +906,8 @@ func TestBuildAgentConfig_RetrieverMode_hybridBuildsTools(t *testing.T) {
 	cfg, err := buildAgentConfig([]Option{
 		WithName("test"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
-		WithRetrievers(stubRetriever{}),
+		WithLLMClient(testLLM(t)),
+		WithRetrievers(testRetriever(t, "stub")),
 		WithRetrieverMode(RetrieverModeHybrid),
 	})
 	if err != nil {
@@ -1000,8 +926,8 @@ func TestBuildAgentConfig_RetrieverDuplicateName(t *testing.T) {
 	_, err := buildAgentConfig([]Option{
 		WithName("test"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
-		WithRetrievers(namedStubRetriever("dup"), namedStubRetriever("dup")),
+		WithLLMClient(testLLM(t)),
+		WithRetrievers(testRetriever(t, "dup"), testRetriever(t, "dup")),
 	})
 	if err == nil || !strings.Contains(err.Error(), "duplicate retriever name") {
 		t.Fatalf("got %v", err)
@@ -1012,9 +938,9 @@ func TestBuildAgentConfig_toolsList_includesRetrieverTools(t *testing.T) {
 	cfg, err := buildAgentConfig([]Option{
 		WithName("test"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
-		WithTools(mockTool{name: "echo"}),
-		WithRetrievers(stubRetriever{}),
+		WithLLMClient(testLLM(t)),
+		WithTools(testTool(t, "echo")),
+		WithRetrievers(testRetriever(t, "stub")),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1033,8 +959,8 @@ func TestBuildAgentConfig_toolsList_includesRetrieverTools(t *testing.T) {
 
 func TestBuildAgentConfig_validateToolNames_RetrieverConflict(t *testing.T) {
 	c := &agentConfig{
-		tools:         []interfaces.Tool{mockTool{name: "retriever_stub"}},
-		retrievers:    []interfaces.Retriever{stubRetriever{}},
+		tools:         []interfaces.Tool{testTool(t, "retriever_stub")},
+		retrievers:    []interfaces.Retriever{testRetriever(t, "stub")},
 		retrieverMode: RetrieverModeAgentic,
 	}
 	if err := c.buildToolRegistry(); err != nil {
@@ -1062,8 +988,8 @@ func TestBuildAgentConfig_WithRetrievers_nilEntry(t *testing.T) {
 	_, err := buildAgentConfig([]Option{
 		WithName("test"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
-		WithRetrievers(stubRetriever{}, nil),
+		WithLLMClient(testLLM(t)),
+		WithRetrievers(testRetriever(t, "stub"), nil),
 	})
 	if err == nil || !strings.Contains(err.Error(), "nil") {
 		t.Fatalf("got %v", err)
@@ -1074,8 +1000,8 @@ func TestBuildAgentConfig_WithRetrievers_emptyClears(t *testing.T) {
 	cfg, err := buildAgentConfig([]Option{
 		WithName("test"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
-		WithRetrievers(stubRetriever{}),
+		WithLLMClient(testLLM(t)),
+		WithRetrievers(testRetriever(t, "stub")),
 		WithRetrievers(),
 	})
 	if err != nil {
@@ -1097,7 +1023,7 @@ func TestBuildAgentConfig_RetrieverMode_default(t *testing.T) {
 	cfg, err := buildAgentConfig([]Option{
 		WithName("test"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1117,7 +1043,7 @@ func TestBuildAgentConfig_RetrieverMode_explicit(t *testing.T) {
 			cfg, err := buildAgentConfig([]Option{
 				WithName("test"),
 				WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-				WithLLMClient(stubLLM{}),
+				WithLLMClient(testLLM(t)),
 				WithRetrieverMode(mode),
 			})
 			if err != nil {
@@ -1134,7 +1060,7 @@ func TestAgentConfigFingerprint_RetrieverModeChangesDigest(t *testing.T) {
 	baseOpts := []Option{
 		WithName("test"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 	}
 	build := func(mode RetrieverMode) string {
 		t.Helper()
@@ -1163,9 +1089,9 @@ func TestBuildAgentConfig_toolsList_includesRetrieverTools_hybrid(t *testing.T) 
 	cfg, err := buildAgentConfig([]Option{
 		WithName("test"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
-		WithTools(mockTool{name: "echo"}),
-		WithRetrievers(stubRetriever{}),
+		WithLLMClient(testLLM(t)),
+		WithTools(testTool(t, "echo")),
+		WithRetrievers(testRetriever(t, "stub")),
 		WithRetrieverMode(RetrieverModeHybrid),
 	})
 	if err != nil {
@@ -1187,10 +1113,10 @@ func TestResolveTools_order_nativeMemoryThenRAG(t *testing.T) {
 	cfg, err := buildAgentConfig([]Option{
 		WithName("test"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
-		WithTools(mockTool{name: "echo"}),
-		WithMemory(memory.DefaultConfig(stubMemoryBackend{})),
-		WithRetrievers(stubRetriever{}),
+		WithLLMClient(testLLM(t)),
+		WithTools(testTool(t, "echo")),
+		WithMemory(memory.DefaultConfig(testMemory(t))),
+		WithRetrievers(testRetriever(t, "stub")),
 		WithRetrieverMode(RetrieverModeAgentic),
 	})
 	if err != nil {
@@ -1218,14 +1144,14 @@ func TestAgentConfigFingerprint_AgenticRetrieverNamesChangesDigest(t *testing.T)
 	baseOpts := []Option{
 		WithName("test"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 		WithRetrieverMode(RetrieverModeAgentic),
 	}
 	cfgNoR, err := buildAgentConfig(baseOpts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfgWithR, err := buildAgentConfig(append(baseOpts, WithRetrievers(namedStubRetriever("wiki"))))
+	cfgWithR, err := buildAgentConfig(append(baseOpts, WithRetrievers(testRetriever(t, "wiki"))))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1238,7 +1164,7 @@ func TestBuildAgentConfig_RetrieverMode_invalid(t *testing.T) {
 	_, err := buildAgentConfig([]Option{
 		WithName("test"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 		WithRetrieverMode(RetrieverMode("bogus")),
 	})
 	if err == nil || !strings.Contains(err.Error(), "invalid retriever mode") {
@@ -1258,14 +1184,14 @@ func TestValidateA2AClients(t *testing.T) {
 		}
 	})
 	t.Run("empty_name", func(t *testing.T) {
-		err := validateA2AClients([]interfaces.A2AClient{&stubA2AClient{name: "  "}})
+		err := validateA2AClients([]interfaces.A2AClient{testA2AClient(t, "  ", nil)})
 		if err == nil || !strings.Contains(err.Error(), "empty") {
 			t.Fatalf("got %v", err)
 		}
 	})
 	t.Run("duplicate_name", func(t *testing.T) {
-		c1 := &stubA2AClient{name: "agent"}
-		c2 := &stubA2AClient{name: "agent"}
+		c1 := testA2AClient(t, "agent", nil)
+		c2 := testA2AClient(t, "agent", nil)
 		err := validateA2AClients([]interfaces.A2AClient{c1, c2})
 		if err == nil || !strings.Contains(err.Error(), "duplicate") {
 			t.Fatalf("got %v", err)
@@ -1281,7 +1207,7 @@ func TestBuildAgentConfig_WithA2AConfig(t *testing.T) {
 	cfg, err := buildAgentConfig([]Option{
 		WithName("test"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 		WithA2AConfig(A2AServers{"agent": A2AConfig{URL: url}}),
 	})
 	if err != nil {
@@ -1310,7 +1236,7 @@ func TestBuildAgentConfig_WithA2AConfig_SkillFilter(t *testing.T) {
 	cfg, err := buildAgentConfig([]Option{
 		WithName("test"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 		WithA2AConfig(A2AServers{"agent": A2AConfig{
 			URL:         url,
 			SkillFilter: types.A2ASkillFilter{AllowSkills: []string{"keep"}},
@@ -1329,14 +1255,11 @@ func TestBuildAgentConfig_WithA2AConfig_SkillFilter(t *testing.T) {
 }
 
 func TestBuildAgentConfig_WithA2AClients(t *testing.T) {
-	cl := &stubA2AClient{
-		name:   "agent1",
-		skills: []interfaces.A2ASkillSpec{{ID: "echo", Description: "echo back"}},
-	}
+	cl := testA2AClient(t, "agent1", []interfaces.A2ASkillSpec{{ID: "echo", Description: "echo back"}})
 	cfg, err := buildAgentConfig([]Option{
 		WithName("test"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 		WithA2AClients(cl),
 	})
 	if err != nil {
@@ -1355,7 +1278,7 @@ func TestBuildAgentConfig_WithA2ADefaultServer(t *testing.T) {
 	cfg, err := buildAgentConfig([]Option{
 		WithName("test"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 		WithA2ADefaultServer(),
 	})
 	if err != nil {
@@ -1377,7 +1300,7 @@ func TestBuildAgentConfig_WithA2AServer(t *testing.T) {
 		cfg, err := buildAgentConfig([]Option{
 			WithName("test"),
 			WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-			WithLLMClient(stubLLM{}),
+			WithLLMClient(testLLM(t)),
 			WithA2AServer(&A2AServerConfig{
 				Hostname:     "0.0.0.0",
 				Port:         8080,
@@ -1400,7 +1323,7 @@ func TestBuildAgentConfig_WithA2AServer(t *testing.T) {
 		cfg, err := buildAgentConfig([]Option{
 			WithName("test"),
 			WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-			WithLLMClient(stubLLM{}),
+			WithLLMClient(testLLM(t)),
 			WithA2AServer(nil),
 		})
 		if err != nil {
@@ -1418,7 +1341,7 @@ func TestBuildAgentConfig_WithA2AServer(t *testing.T) {
 		cfg, err := buildAgentConfig([]Option{
 			WithName("test"),
 			WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-			WithLLMClient(stubLLM{}),
+			WithLLMClient(testLLM(t)),
 			WithA2AServer(&A2AServerConfig{Hostname: "", Port: 4000}),
 		})
 		if err != nil {
@@ -1433,7 +1356,7 @@ func TestBuildAgentConfig_WithA2AServer(t *testing.T) {
 		cfg, err := buildAgentConfig([]Option{
 			WithName("test"),
 			WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-			WithLLMClient(stubLLM{}),
+			WithLLMClient(testLLM(t)),
 			WithA2AServer(&A2AServerConfig{Hostname: "127.0.0.1", Port: 0}),
 		})
 		if err != nil {
@@ -1448,7 +1371,7 @@ func TestBuildAgentConfig_WithA2AServer(t *testing.T) {
 		cfg, err := buildAgentConfig([]Option{
 			WithName("test"),
 			WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-			WithLLMClient(stubLLM{}),
+			WithLLMClient(testLLM(t)),
 			WithA2ADefaultServer(),
 			WithA2AServer(&A2AServerConfig{Hostname: "custom.example", Port: 1111}),
 		})
@@ -1468,7 +1391,7 @@ func TestAgentConfigFingerprint_InboundA2AServerIgnored(t *testing.T) {
 	base := []Option{
 		WithName("fp-test"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 	}
 	cfgNoInbound, err := buildAgentConfig(base)
 	if err != nil {
@@ -1494,7 +1417,7 @@ func TestBuildAgentConfig_WithA2AConfig_URLRequired(t *testing.T) {
 	_, err := buildAgentConfig([]Option{
 		WithName("test"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 		WithA2AConfig(A2AServers{"agent": A2AConfig{URL: ""}}),
 	})
 	if err == nil || !strings.Contains(err.Error(), "URL is required") {
@@ -1505,11 +1428,11 @@ func TestBuildAgentConfig_WithA2AConfig_URLRequired(t *testing.T) {
 func TestBuildAgentConfig_A2A_duplicateClientName(t *testing.T) {
 	// Config creates a client named "dup"; explicit client also named "dup" → duplicate.
 	// "http://127.0.0.1:1" is a non-routable address; NewClient is lazy so no network call is made.
-	cl := &stubA2AClient{name: "dup", skills: []interfaces.A2ASkillSpec{{ID: "s", Description: "s"}}}
+	cl := testA2AClient(t, "dup", []interfaces.A2ASkillSpec{{ID: "s", Description: "s"}})
 	_, err := buildAgentConfig([]Option{
 		WithName("test"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 		WithA2AConfig(A2AServers{"dup": A2AConfig{URL: "http://127.0.0.1:1"}}),
 		WithA2AClients(cl),
 	})
@@ -1519,7 +1442,7 @@ func TestBuildAgentConfig_A2A_duplicateClientName(t *testing.T) {
 }
 
 func TestAgentConfig_toolsList_includesA2ATools(t *testing.T) {
-	echo := mockTool{name: "echo"}
+	echo := testTool(t, "echo")
 	a2aTool := NewA2ATool("agent1", interfaces.ToolSpec{Name: "search", Description: "d"}, interfaces.A2ASkillSpec{}, nil)
 	c := &agentConfig{
 		tools: []interfaces.Tool{echo},
@@ -1542,7 +1465,7 @@ func TestAgentConfig_toolsList_includesA2ATools(t *testing.T) {
 func TestAgentConfig_validateToolNames_A2AConflict(t *testing.T) {
 	a2aTool := NewA2ATool("srv", interfaces.ToolSpec{Name: "s", Description: "d"}, interfaces.A2ASkillSpec{}, nil)
 	c := &agentConfig{
-		tools: []interfaces.Tool{mockTool{name: a2aTool.Name()}},
+		tools: []interfaces.Tool{testTool(t, a2aTool.Name())},
 	}
 	if err := c.buildToolRegistry(); err != nil {
 		t.Fatal(err)
@@ -1628,7 +1551,7 @@ func TestBuildAgentConfig_WithObservabilityConfig_HTTP(t *testing.T) {
 	cfg, err := buildAgentConfig([]Option{
 		WithName("obs-agent"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 		WithObservabilityConfig(&ObservabilityConfig{
 			Endpoint: host,
 			Protocol: OTLPProtocolHTTP,
@@ -1664,11 +1587,11 @@ func TestBuildAgentConfig_WithObservabilityConfig_DisableTraces_keepsInjectedTra
 	defer srv.Close()
 	host := strings.TrimPrefix(strings.TrimPrefix(srv.URL, "http://"), "https://")
 
-	stub := presStubTracer{}
+	stub := testTracer(t)
 	cfg, err := buildAgentConfig([]Option{
 		WithName("disable-traces-keep-tracer"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 		WithTracer(stub),
 		WithObservabilityConfig(&ObservabilityConfig{
 			Endpoint:      host,
@@ -1692,11 +1615,11 @@ func TestBuildAgentConfig_WithObservabilityConfig_DisableMetrics_keepsInjectedMe
 	defer srv.Close()
 	host := strings.TrimPrefix(strings.TrimPrefix(srv.URL, "http://"), "https://")
 
-	stub := presStubMetrics{}
+	stub := testMetrics(t)
 	cfg, err := buildAgentConfig([]Option{
 		WithName("disable-metrics-keep-metrics"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 		WithMetrics(stub),
 		WithObservabilityConfig(&ObservabilityConfig{
 			Endpoint:       host,
@@ -1738,7 +1661,7 @@ func TestBuildAgentConfig_WithObservabilityConfig_replacesInjectedTracer(t *test
 	cfg, err := buildAgentConfig([]Option{
 		WithName("obs-replace-tracer"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 		WithTracer(tr),
 		WithObservabilityConfig(&ObservabilityConfig{
 			Endpoint: host,
@@ -1786,7 +1709,7 @@ func TestBuildAgentConfig_WithObservabilityConfig_replacesInjectedMetrics(t *tes
 	cfg, err := buildAgentConfig([]Option{
 		WithName("obs-replace-metrics"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 		WithMetrics(mt),
 		WithObservabilityConfig(&ObservabilityConfig{
 			Endpoint: host,
@@ -1859,7 +1782,7 @@ func TestBuildAgentConfig_WithObservabilityConfig_replacesInjectedTracerMetricsL
 	cfg, err := buildAgentConfig([]Option{
 		WithName("triple-replace"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 		WithTracer(tr),
 		WithMetrics(mt),
 		WithLogs(lg),
@@ -1887,8 +1810,8 @@ func TestBuildAgentConfig_injectedStubLogs_withoutObs_doesNotWireOtelLogger(t *t
 	cfg, err := buildAgentConfig([]Option{
 		WithName("stub-logs-no-otel"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
-		WithLogs(&stubLogs{}),
+		WithLLMClient(testLLM(t)),
+		WithLogs(testLogs(t)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1898,38 +1821,12 @@ func TestBuildAgentConfig_injectedStubLogs_withoutObs_doesNotWireOtelLogger(t *t
 	}
 }
 
-type stubLogs struct {
-	shutdowns int
-}
-
-func (s *stubLogs) Shutdown(_ context.Context) error {
-	s.shutdowns++
-	return nil
-}
-
-// presStubTracer / presStubMetrics are minimal [interfaces.Tracer] / [interfaces.Metrics] for precedence tests.
-type presStubTracer struct{}
-
-func (presStubTracer) StartSpan(ctx context.Context, name string, attrs ...interfaces.Attribute) (context.Context, interfaces.Span) {
-	return ctx, &observability.NoopSpan{}
-}
-
-func (presStubTracer) Shutdown(context.Context) error { return nil }
-
-type presStubMetrics struct{}
-
-func (presStubMetrics) IncrementCounter(context.Context, string, ...interfaces.Attribute) {}
-
-func (presStubMetrics) RecordHistogram(context.Context, string, float64, ...interfaces.Attribute) {}
-
-func (presStubMetrics) Shutdown(context.Context) error { return nil }
-
 func TestBuildAgentConfig_WithLogs_withoutObservability(t *testing.T) {
-	stub := &stubLogs{}
+	stub := testLogs(t)
 	cfg, err := buildAgentConfig([]Option{
 		WithName("logs-inject"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 		WithLogs(stub),
 	})
 	if err != nil {
@@ -1947,11 +1844,11 @@ func TestBuildAgentConfig_WithObservabilityConfig_overwritesWithLogs(t *testing.
 	defer srv.Close()
 	host := strings.TrimPrefix(strings.TrimPrefix(srv.URL, "http://"), "https://")
 
-	stub := &stubLogs{}
+	stub := testLogs(t)
 	cfg, err := buildAgentConfig([]Option{
 		WithName("obs-overwrites-logs"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 		WithLogs(stub),
 		WithObservabilityConfig(&ObservabilityConfig{
 			Endpoint: host,
@@ -1995,7 +1892,7 @@ func TestBuildAgentConfig_NewLogs_injected_alone_autoWiresDefaultLogger(t *testi
 	cfg, err := buildAgentConfig([]Option{
 		WithName("inject-logs-wire"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 		WithLogs(lg),
 	})
 	if err != nil {
@@ -2033,7 +1930,7 @@ func TestBuildAgentConfig_WithObservabilityConfig_replacesInjectedOTLPLogs(t *te
 	cfg, err := buildAgentConfig([]Option{
 		WithName("obs-replace-inject"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 		WithLogs(lg),
 		WithObservabilityConfig(&ObservabilityConfig{
 			Endpoint: host,
@@ -2059,11 +1956,11 @@ func TestBuildAgentConfig_WithObservabilityConfig_DisableLogs_keepsWithLogs(t *t
 	defer srv.Close()
 	host := strings.TrimPrefix(strings.TrimPrefix(srv.URL, "http://"), "https://")
 
-	stub := &stubLogs{}
+	stub := testLogs(t)
 	cfg, err := buildAgentConfig([]Option{
 		WithName("disable-logs-keep-inject"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 		WithLogs(stub),
 		WithObservabilityConfig(&ObservabilityConfig{
 			Endpoint:    host,
@@ -2105,7 +2002,7 @@ func TestBuildAgentConfig_WithObservabilityConfig_DisableLogs_injectedOTLPLogs_w
 	cfg, err := buildAgentConfig([]Option{
 		WithName("disable-logs-wire-otel"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 		WithLogs(lg),
 		WithObservabilityConfig(&ObservabilityConfig{
 			Endpoint:    host,
@@ -2140,7 +2037,7 @@ func TestBuildAgentConfig_WithObservabilityConfig_customLogger_warnsAboutLogs(t 
 	_, err := buildAgentConfig([]Option{
 		WithName("custom-log-warn"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 		WithLogger(custom),
 		WithObservabilityConfig(&ObservabilityConfig{
 			Endpoint: host,
@@ -2159,15 +2056,15 @@ func TestBuildAgentConfig_WithObservabilityConfig_customLogger_warnsAboutLogs(t 
 
 func TestBuildAgentConfig_WithExplicitRegistryOptions(t *testing.T) {
 	toolReg := NewToolRegistry()
-	if err := toolReg.Register(mockTool{name: "native"}); err != nil {
+	if err := toolReg.Register(testTool(t, "native")); err != nil {
 		t.Fatal(err)
 	}
 	mcpReg := NewMCPRegistry(nil)
-	if err := mcpReg.RegisterClient(&registryMockMCPClient{name: "mcp-srv"}); err != nil {
+	if err := mcpReg.RegisterClient(testMCPClient(t, "mcp-srv")); err != nil {
 		t.Fatal(err)
 	}
 	a2aReg := NewA2ARegistry(nil)
-	if err := a2aReg.RegisterClient(&registryMockA2AClient{name: "a2a-srv"}); err != nil {
+	if err := a2aReg.RegisterClient(testA2AClient(t, "a2a-srv", nil)); err != nil {
 		t.Fatal(err)
 	}
 	subReg := NewSubAgentRegistry()
@@ -2182,7 +2079,7 @@ func TestBuildAgentConfig_WithExplicitRegistryOptions(t *testing.T) {
 	cfg, err := buildAgentConfig([]Option{
 		WithName("parent"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 		WithToolRegistry(toolReg),
 		WithMCPRegistry(mcpReg),
 		WithA2ARegistry(a2aReg),

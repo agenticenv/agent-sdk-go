@@ -40,7 +40,6 @@ func main() {
 		agent.WithDescription("Example: WithLLMSampling + generic LLMReasoning"),
 		agent.WithSystemPrompt("You are a helpful assistant. Be concise."),
 		agent.WithLLMClient(llmClient),
-		agent.WithStream(true),
 		agent.WithLLMSampling(&agent.LLMSampling{
 			MaxTokens: 4096,
 			Reasoning: &interfaces.LLMReasoning{
@@ -64,12 +63,18 @@ func main() {
 	}
 
 	fmt.Println("user:", prompt)
-	fmt.Println("--- stream (REASONING_MESSAGE_CONTENT may appear before assistant text) ---")
 
-	eventCh, err := a.Stream(context.Background(), prompt, nil)
+	agentStream, err := a.Stream(context.Background(), prompt, nil)
 	if err != nil {
 		log.Fatalf("Stream: %v", err)
 	}
+	runID := agentStream.ID()
+	eventCh, err := agentStream.Events(context.Background())
+	if err != nil {
+		log.Fatalf("stream events: %v", err)
+	}
+	fmt.Println(shared.RunIDLine(runID))
+	fmt.Println("--- stream (REASONING_MESSAGE_CONTENT may appear before assistant text) ---")
 
 	streamed := false
 	for ev := range eventCh {

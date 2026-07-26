@@ -33,7 +33,13 @@ type RunTelemetry struct {
 	CompletedAt time.Time `json:"completed_at"`
 
 	// TotalLLMCalls counts how many LLM calls were made during the run.
+	// Each iteration counts as one call regardless of how many Temporal retries it took.
 	TotalLLMCalls int64 `json:"total_llm_calls"`
+
+	// LLMRetryCount is the total number of Temporal activity retries across all LLM calls in
+	// this run. A value of 0 means every LLM activity succeeded on its first attempt.
+	// Temporal also exposes per-activity retry counts natively in its metrics and workflow history.
+	LLMRetryCount int64 `json:"llm_retry_count,omitempty"`
 
 	// FinishReason explains how the run concluded. See FinishReason for possible values.
 	FinishReason FinishReason `json:"finish_reason"`
