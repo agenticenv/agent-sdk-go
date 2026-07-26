@@ -144,7 +144,6 @@ func TestBuildTemporalRuntime_RequiresTemporalOrClient(t *testing.T) {
 	options := []Option{
 		WithLogger(logger.NoopLogger()),
 		WithInstanceId("test"),
-		WithEnableRemoteWorkers(false),
 		WithRemoteWorker(false),
 		WithPolicyFingerprint("test"),
 		WithMCPFingerprint("test"),

@@ -185,12 +185,12 @@ type ObservabilityConfig struct {
 // agentConfig holds shared configuration for Agent and AgentWorker.
 //
 // Option applicability:
-//   - Agent only: EnableRemoteWorkers, DisableLocalWorker, WithApprovalHandler, WithTimeout, WithApprovalTimeout
+//   - Agent only: DisableLocalWorker, WithApprovalHandler, WithTimeout, WithApprovalTimeout
 //   - AgentWorker only: (none; worker inherits options passed to NewAgentWorker)
 //   - Both: WithName, WithDescription, WithSystemPrompt, WithTemporalConfig, WithTemporalClient,
 //     WithInstanceId, WithLLMClient, WithToolApprovalPolicy, WithTools, WithToolRegistry,
 //     WithMCPRegistry, WithA2ARegistry, WithSubAgentRegistry,
-//     WithMaxIterations, WithStream, WithLogger, WithLogLevel, WithConversation, WithMemory,
+//     WithMaxIterations, WithLogger, WithLogLevel, WithConversation, WithMemory,
 //     WithResponseFormat, WithLLMSampling, WithSubAgents, WithMaxSubAgentDepth,
 //     WithMCPConfig, WithMCPClients, WithA2AConfig, WithA2AClients, WithRetrievers, WithRetrieverMode, WithAgentMode, WithDisableFingerprintCheck, WithAgentToolExecutionMode,
 //     WithLLMExecutionConfig, WithToolAuthExecutionConfig, WithToolExecutionConfig, WithMCPExecutionConfig, WithA2AExecutionConfig,
@@ -216,7 +216,6 @@ type agentConfig struct {
 	subAgentRegistry   SubAgentRegistry
 	toolApprovalPolicy interfaces.AgentToolApprovalPolicy
 	maxIterations      int
-	streamEnabled      bool
 	logger             logger.Logger
 	logLevel           string
 	approvalHandler    types.ApprovalHandler
@@ -235,9 +234,8 @@ type agentConfig struct {
 	llmSampling *LLMSampling
 
 	// build-time flags
-	disableLocalWorker  bool // true when user calls DisableLocalWorker; no local worker. Agent only.
-	enableRemoteWorkers bool // true: run remote event path for streaming/approvals. false (default): in-process only. Agent only.
-	remoteWorker        bool // true for AgentWorker: worker-side runtime (remote activities/updates).
+	disableLocalWorker bool // true when user calls DisableLocalWorker; no local worker. Agent only.
+	remoteWorker       bool // true for AgentWorker: worker-side runtime (remote activities/updates).
 	// break-glass: disable caller-vs-worker fingerprint guard at activity entry.
 	disableFingerprintCheck bool
 
@@ -364,25 +362,25 @@ func WithTools(tools ...interfaces.Tool) Option {
 	return func(c *agentConfig) { c.tools = tools }
 }
 
-// WithToolRegistry sets the tool registry. Use Register and Unregister before Run, Stream, or RunAsync.
+// WithToolRegistry sets the tool registry. Use Register and Unregister before Run or Stream.
 // Applies to Agent and AgentWorker.
 func WithToolRegistry(reg ToolRegistry) Option {
 	return func(c *agentConfig) { c.toolRegistry = reg }
 }
 
-// WithMCPRegistry sets the MCP client registry. Use Register, RegisterClient, and Unregister before Run, Stream, or RunAsync.
+// WithMCPRegistry sets the MCP client registry. Use Register, RegisterClient, and Unregister before Run or Stream.
 // Applies to Agent and AgentWorker.
 func WithMCPRegistry(reg MCPRegistry) Option {
 	return func(c *agentConfig) { c.mcpRegistry = reg }
 }
 
-// WithA2ARegistry sets the A2A client registry. Use Register, RegisterClient, and Unregister before Run, Stream, or RunAsync.
+// WithA2ARegistry sets the A2A client registry. Use Register, RegisterClient, and Unregister before Run or Stream.
 // Applies to Agent and AgentWorker.
 func WithA2ARegistry(reg A2ARegistry) Option {
 	return func(c *agentConfig) { c.a2aRegistry = reg }
 }
 
-// WithSubAgentRegistry sets the sub-agent registry. Use Register and Unregister before Run, Stream, or RunAsync.
+// WithSubAgentRegistry sets the sub-agent registry. Use Register and Unregister before Run or Stream.
 // Applies to Agent and AgentWorker.
 func WithSubAgentRegistry(reg SubAgentRegistry) Option {
 	return func(c *agentConfig) { c.subAgentRegistry = reg }
@@ -391,11 +389,6 @@ func WithSubAgentRegistry(reg SubAgentRegistry) Option {
 // WithMaxIterations sets the max number of LLM rounds. Applies to Agent and AgentWorker.
 func WithMaxIterations(n int) Option {
 	return func(c *agentConfig) { c.maxIterations = n }
-}
-
-// WithStream enables partial content streaming. Applies to Agent and AgentWorker.
-func WithStream(enable bool) Option {
-	return func(c *agentConfig) { c.streamEnabled = enable }
 }
 
 // WithLogger sets the SDK logger (structured logging with log/slog-style attributes).
@@ -415,8 +408,10 @@ func WithLogLevel(level string) Option {
 	return func(c *agentConfig) { c.logLevel = level }
 }
 
-// WithApprovalHandler sets the approval callback for Run and RunAsync. Required when tools need approval.
-// The callback receives req with req.Respond set; call req.Respond(Approved|Rejected). Agent only; Stream uses OnApproval on events.
+// WithApprovalHandler registers the approval callback once at [NewAgent] construction time for
+// [Agent.Run]. Required when tools need approval. The callback receives req
+// with req.Respond set; call req.Respond(Approved|Rejected). Agent only; [Agent.Stream] uses
+// [Agent.OnApproval] on CUSTOM events instead.
 func WithApprovalHandler(fn types.ApprovalHandler) Option {
 	return func(c *agentConfig) { c.approvalHandler = fn }
 }
@@ -487,13 +482,6 @@ func WithConversationExecutionConfig(cfg ExecutionConfig) Option {
 // timeout set via [WithTimeout] rather than a fixed default. Applies to Agent and AgentWorker.
 func WithSubAgentExecutionConfig(cfg ExecutionConfig) Option {
 	return func(c *agentConfig) { c.executionConfigs.SubAgent = cfg }
-}
-
-// EnableRemoteWorkers enables the runtime's remote event path (out-of-process event delivery). Agent only.
-// If unset, streaming and approvals use in-process channels only.
-// Required for some setups with [DisableLocalWorker] and [NewAgentWorker], and for certain approval/streaming configurations.
-func EnableRemoteWorkers() Option {
-	return func(c *agentConfig) { c.enableRemoteWorkers = true }
 }
 
 // DisableLocalWorker marks to skip local worker creation. Agent only. Use with NewAgentWorker.
@@ -801,8 +789,10 @@ func buildAgentConfig(opts []Option) (*agentConfig, error) {
 		if err := cfg.Validate(); err != nil {
 			return nil, err
 		}
-		remoteWorkers := c.enableRemoteWorkers || c.disableLocalWorker
-		if err := conversation.ValidateDistributed(cfg.Conversation, remoteWorkers); err != nil {
+		// disableLocalWorker means the agent process does not run a worker itself, so a
+		// separate worker process must be running elsewhere; conversation state can no
+		// longer live in local memory and must use a distributed backend.
+		if err := conversation.ValidateDistributed(cfg.Conversation, c.disableLocalWorker); err != nil {
 			return nil, err
 		}
 		c.conversationConfig = &cfg
@@ -976,9 +966,7 @@ func buildAgentConfig(opts []Option) (*agentConfig, error) {
 		c.logger.Info(ctx, "agent config detail", append(commonAttrs,
 			slog.String("taskQueue", c.taskQueue),
 			slog.String("instanceId", c.instanceId),
-			slog.Bool("streamEnabled", c.streamEnabled),
 			slog.Bool("disableLocalWorker", c.disableLocalWorker),
-			slog.Bool("enableRemoteWorkers", c.enableRemoteWorkers),
 			slog.Bool("remoteWorker", c.remoteWorker),
 			slog.Bool("disableFingerprintCheck", c.disableFingerprintCheck),
 		)...)

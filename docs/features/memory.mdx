@@ -33,7 +33,8 @@ defer a.Close()
 
 // Attach scope on the context for each run
 ctx := memory.WithContextUserID(context.Background(), "user-123")
-result, _ := a.Run(ctx, "Remember I prefer concise answers.", nil)
+agentRun, _ := a.Run(ctx, "Remember I prefer concise answers.", nil)
+result, _ := agentRun.Get(ctx)
 ```
 
 ## Backends
@@ -63,7 +64,8 @@ Memories are isolated by scope. Attach context values on every run that should s
 ```go
 ctx := memory.WithContextUserID(ctx, userID)
 ctx = memory.WithContextTenantID(ctx, tenantID) // optional
-a.Run(ctx, prompt, nil)
+agentRun, err := a.Run(ctx, prompt, nil)
+result, err := agentRun.Get(ctx)
 ```
 
 By default, memories are also isolated per agent name. Override resolvers or add custom tags on `memCfg.ScopeConfig`:
@@ -137,7 +139,7 @@ memCfg.TTLPolicy = memory.TTLPolicy{
 
 ## Remote workers
 
-Pass the **same** `memory.Config` to both `NewAgent` and `NewAgentWorker`. Both processes must reach the same backend host. See [Worker Separation](/advanced/worker-separation) for the full split-process setup.
+Pass the **same** `memory.Config` to both `NewAgent` and `NewAgentWorker`. Both processes must reach the same backend host. See [Distributed Execution](/advanced/distributed-execution) for the full split-process setup.
 
 ## Custom backend
 

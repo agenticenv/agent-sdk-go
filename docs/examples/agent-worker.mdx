@@ -12,7 +12,7 @@ Source: [`examples/agent_with_worker/`](https://github.com/agenticenv/agent-sdk-
 - `NewAgentWorker` with the same options as `NewAgent`
 - `DisableLocalWorker` on the client process
 - `Stream` from the remote agent process
-- Foundation pattern for production worker separation
+- Foundation pattern for production distributed agents
 
 ## Run
 
@@ -51,9 +51,13 @@ a, err := agent.NewAgent(
     agent.WithLLMClient(llmClient),
     agent.WithTemporalConfig(temporalCfg),
     agent.DisableLocalWorker(),
-    agent.EnableRemoteWorkers(),
 )
-eventCh, _ := a.Stream(ctx, prompt, nil)
+// runID is available synchronously — persist for GetAgentStream before consuming events.
+agentStream, _ := a.Stream(ctx, prompt, nil)
+runID := agentStream.ID()
+eventCh, _ := agentStream.Events(ctx)
+_ = runID
+_ = eventCh
 ```
 
 Both processes use identical agent options so the SDK fingerprint matches.
@@ -68,13 +72,13 @@ Terminal 2 (agent) prints the streamed reply:
 Hello from remote agent! I'm running as a Temporal workflow on a separate worker process.
 ```
 
-See [Worker Separation](/advanced/worker-separation) and [Temporal Runtime](/runtimes/temporal) for production context.
+See [Distributed Execution](/advanced/distributed-execution) and [Temporal Runtime](/runtimes/temporal) for production context.
 
 ## Learn more
 
 <CardGroup cols={2}>
 
-  <Card title="Worker Separation" icon="server" href="/advanced/worker-separation" horizontal>
+  <Card title="Distributed Execution" icon="server" href="/advanced/distributed-execution" horizontal>
     Production split-process guide
   </Card>
 

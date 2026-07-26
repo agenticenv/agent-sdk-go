@@ -298,7 +298,7 @@ func TestAgentConfigFingerprint_RetrieverNamesChangesDigest(t *testing.T) {
 	baseOpts := []Option{
 		WithName("test"),
 		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
-		WithLLMClient(stubLLM{}),
+		WithLLMClient(testLLM(t)),
 		WithRetrieverMode(RetrieverModePrefetch),
 	}
 	cfgNoR, err := buildAgentConfig(baseOpts)

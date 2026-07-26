@@ -85,7 +85,7 @@ func newSubAgent(
 	subAgents []*agent.Agent,
 	taskQueue string,
 ) (*agent.Agent, error) {
-	opts := RootOptions(cfg, llm, lgr, name, prompt, subAgents, taskQueue, false)
+	opts := RootOptions(cfg, llm, lgr, name, prompt, subAgents, taskQueue)
 	a, err := agent.NewAgent(opts...)
 	if err != nil {
 		return nil, err

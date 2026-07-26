@@ -93,9 +93,13 @@ func main() {
 	fmt.Println("user:", prompt)
 	fmt.Println()
 
-	result, err := a.Run(context.Background(), prompt, nil)
+	agentRun, err := a.Run(context.Background(), prompt, nil)
 	if err != nil {
 		log.Fatalf("agent run failed: %v", err)
+	}
+	result, err := agentRun.Get(context.Background())
+	if err != nil {
+		log.Fatalf("run get result: %v", err)
 	}
 
 	fmt.Printf("assistant: %s\n", result.Content)

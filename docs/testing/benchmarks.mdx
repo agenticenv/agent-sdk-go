@@ -116,7 +116,7 @@ temporal:
   workers_count: 0   # embedded worker in agent process
 ```
 
-**External root workers** (`workers_count: 1+`) — spawns separate worker processes and enables `EnableRemoteWorkers()` on the root agent:
+**External root workers** (`workers_count: 1+`) — spawns separate worker processes that also poll the root agent's task queue:
 
 ```yaml
 runtime: temporal

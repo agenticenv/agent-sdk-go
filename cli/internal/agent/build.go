@@ -68,7 +68,6 @@ func Build(cfg *config.Config, forceAutoApprove bool) (*Built, error) {
 		sdkagent.WithName(name),
 		sdkagent.WithSystemPrompt(systemPrompt),
 		sdkagent.WithLLMClient(llmClient),
-		sdkagent.WithStream(true),
 		sdkagent.WithToolRegistry(reg),
 		sdkagent.WithConversation(convCfg),
 		sdkagent.WithLogger(lgr),

@@ -6,6 +6,12 @@ import (
 	"github.com/agenticenv/agent-sdk-go/internal/types"
 )
 
+// ErrApprovalAlreadyResolved is returned by [Agent.OnApproval] when the approval token refers to
+// an activity task that has already been completed (approved or rejected). This can happen when a
+// reconnecting subscriber replays a CUSTOM approval event for an approval that was resolved while
+// the subscriber was disconnected. Treat it as informational — the run is already advancing.
+var ErrApprovalAlreadyResolved = types.ErrApprovalAlreadyResolved
+
 type ApprovalStatus = types.ApprovalStatus
 
 const (
@@ -14,16 +20,18 @@ const (
 	ApprovalStatusApproved    ApprovalStatus = types.ApprovalStatusApproved
 	ApprovalStatusRejected    ApprovalStatus = types.ApprovalStatusRejected
 	ApprovalStatusUnavailable ApprovalStatus = types.ApprovalStatusUnavailable
+	ApprovalStatusTimedOut    ApprovalStatus = types.ApprovalStatusTimedOut
 )
 
 // ApprovalSender sends an approval result for the current run. Call once per request. Safe for concurrent use—
 // multiple approvals may be pending when tools run in parallel.
 type ApprovalSender = types.ApprovalSender
 
-// ApprovalHandler is called for pending tool approval during [Agent.Run] (register with [WithApprovalHandler]).
+// ApprovalHandler is called for pending tool approval during [Agent.Run].
+// Register once at [NewAgent] via [WithApprovalHandler] (construction-time, not per-call).
 // req.Respond is always set: call req.Respond(ApprovalStatusApproved) or Rejected when ready.
 // The handler may return immediately after starting async work. Multiple invocations may run
-// concurrently when tools are invoked in parallel.
+// concurrently when tools are invoked in parallel. For streaming approvals use [Agent.OnApproval].
 type ApprovalHandler = types.ApprovalHandler
 
 // ApprovalRequestName classifies approval callbacks (aligned with CUSTOM event roles).
@@ -34,7 +42,7 @@ const (
 	ApprovalRequestNameSubAgent = types.ApprovalRequestNameSubAgent
 )
 
-// ApprovalRequest describes a pending tool approval for [Agent.Run] and [Agent.RunAsync].
+// ApprovalRequest describes a pending tool approval for [Agent.Run].
 // Name + Value mirror CUSTOM stream events; use [ParseToolApproval] / [ParseDelegationApproval].
 // Respond is always set; call it once with ApprovalStatusApproved or ApprovalStatusRejected.
 // For streaming approvals, use [Agent.OnApproval] with the approval token from the CUSTOM event Value.

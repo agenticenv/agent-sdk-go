@@ -41,7 +41,6 @@ func main() {
 		agent.WithDescription("Stream with conversation; shows event handling pattern to avoid duplicate output"),
 		agent.WithSystemPrompt("You are a helpful assistant. Remember context. Use tools: echo, calculator."),
 		agent.WithLLMClient(llmClient),
-		agent.WithStream(true),
 		agent.WithToolRegistry(reg),
 		agent.WithToolApprovalPolicy(agent.AutoToolApprovalPolicy()),
 		agent.WithConversation(conversation.DefaultConfig(conv)),
@@ -71,17 +70,24 @@ func main() {
 
 func runSingleTurn(ctx context.Context, a *agent.Agent, prompt, convID string) {
 	fmt.Println("user:", prompt)
-	fmt.Println("assistant:")
-	opts := &agent.AgentRunOptions{
+	streamOpts := &agent.AgentStreamOptions{
 		ConversationOptions: &agent.ConversationOptions{
 			ID: convID,
 		},
 	}
-	eventCh, err := a.Stream(ctx, prompt, opts)
+	agentStream, err := a.Stream(ctx, prompt, streamOpts)
 	if err != nil {
 		log.Printf("Stream failed: %v", err)
 		return
 	}
+	runID := agentStream.ID()
+	eventCh, err := agentStream.Events(ctx)
+	if err != nil {
+		log.Printf("stream events: %v", err)
+		return
+	}
+	fmt.Println(shared.RunIDLine(runID))
+	fmt.Println("assistant:")
 	handleEvents(eventCh)
 	fmt.Println()
 }
@@ -101,16 +107,23 @@ func runInteractive(ctx context.Context, a *agent.Agent, convID string) {
 		if prompt == "exit" || prompt == "quit" || prompt == "bye" {
 			break
 		}
-		opts := &agent.AgentRunOptions{
+		streamOpts := &agent.AgentStreamOptions{
 			ConversationOptions: &agent.ConversationOptions{
 				ID: convID,
 			},
 		}
-		eventCh, err := a.Stream(ctx, prompt, opts)
+		agentStream, err := a.Stream(ctx, prompt, streamOpts)
 		if err != nil {
 			log.Printf("Stream failed: %v", err)
 			continue
 		}
+		runID := agentStream.ID()
+		eventCh, err := agentStream.Events(ctx)
+		if err != nil {
+			log.Printf("stream events: %v", err)
+			continue
+		}
+		fmt.Println(shared.RunIDLine(runID))
 		fmt.Print("assistant: ")
 		handleEvents(eventCh)
 		fmt.Println()

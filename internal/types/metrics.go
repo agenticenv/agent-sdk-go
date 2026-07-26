@@ -6,7 +6,7 @@ package types
 // Counters: call Metrics.IncrementCounter. Histograms: call Metrics.RecordHistogram.
 // Latency histograms are in milliseconds; token histograms are raw counts.
 const (
-	// Agent API — emitted by Agent.Run / Agent.RunAsync.
+	// Agent API — emitted by Agent.Run (including non-blocking Done/Get usage).
 	MetricRunStarted    = "agent.run.started"
 	MetricRunCompleted  = "agent.run.completed"
 	MetricRunFailed     = "agent.run.failed"
@@ -17,6 +17,28 @@ const (
 	MetricStreamDispatched = "agent.stream.dispatched"
 	MetricStreamFailed     = "agent.stream.failed"
 	MetricStreamDurationMs = "agent.stream.duration_ms"
+
+	// Agent API — reconnect and control-plane (GetAgentRun / GetAgentStream / Cancel / Events).
+	MetricRunReconnectStarted   = "agent.run.reconnect.started"
+	MetricRunReconnectFailed    = "agent.run.reconnect.failed"
+	MetricRunReconnectCompleted = "agent.run.reconnect.completed"
+
+	MetricStreamReconnectStarted   = "agent.stream.reconnect.started"
+	MetricStreamReconnectFailed    = "agent.stream.reconnect.failed"
+	MetricStreamReconnectCompleted = "agent.stream.reconnect.completed"
+
+	MetricStreamEventsStarted    = "agent.stream.events.started"
+	MetricStreamEventsFailed     = "agent.stream.events.failed"
+	MetricStreamEventsSubscribed = "agent.stream.events.subscribed"
+	MetricStreamEventsDurationMs = "agent.stream.events.duration_ms"
+
+	MetricRunCancelStarted   = "agent.run.cancel.started"
+	MetricRunCancelFailed    = "agent.run.cancel.failed"
+	MetricRunCancelCompleted = "agent.run.cancel.completed"
+
+	MetricStreamCancelStarted   = "agent.stream.cancel.started"
+	MetricStreamCancelFailed    = "agent.stream.cancel.failed"
+	MetricStreamCancelCompleted = "agent.stream.cancel.completed"
 
 	// Runtime — emitted per LLM Generate / GenerateStream call.
 	MetricLLMCallStarted   = "agent.llm.call.started"

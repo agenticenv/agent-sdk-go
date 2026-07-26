@@ -2,6 +2,8 @@ package temporal
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -9,9 +11,13 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"go.temporal.io/sdk/contrib/workflowstreams"
+	temporalmocks "go.temporal.io/sdk/mocks"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
 
+	"github.com/agenticenv/agent-sdk-go/internal/events"
 	sdkruntime "github.com/agenticenv/agent-sdk-go/internal/runtime"
 	"github.com/agenticenv/agent-sdk-go/internal/runtime/base"
 	testutil "github.com/agenticenv/agent-sdk-go/internal/testing"
@@ -164,6 +170,48 @@ func TestAgentWorkflow_OneToolThenFinal(t *testing.T) {
 	require.NotNil(t, result.Telemetry)
 	require.Equal(t, int64(1), result.Telemetry.Tools.TotalCalls)
 	require.Equal(t, int64(0), result.Telemetry.Tools.FailedCalls)
+}
+
+// TestAgentWorkflow_MaxIterations_SkipToolsUsesDistinctMessageID asserts that when the last
+// iteration still returns tool calls, the follow-up SkipTools LLM round mints a new MessageID
+// instead of reusing the tool-calls round's ID.
+func TestAgentWorkflow_MaxIterations_SkipToolsUsesDistinctMessageID(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	rt := testRuntimeForWorkflow(t)
+	rt.AgentConfig.Limits.MaxIterations = 1
+
+	var messageIDs []string
+	var skipToolsFlags []bool
+	env.RegisterWorkflow(rt.AgentWorkflow)
+	env.OnActivity(rt.AgentLLMActivity, mock.Anything, mock.Anything).Return(func(ctx context.Context, in AgentLLMInput) (*AgentLLMResult, error) {
+		messageIDs = append(messageIDs, in.MessageID)
+		skipToolsFlags = append(skipToolsFlags, in.SkipTools)
+		if !in.SkipTools {
+			return &AgentLLMResult{
+				Content:   "still wants tools",
+				ToolCalls: []ToolCallRequest{testWorkflowToolCall("tc-max", "echo", types.ToolKindNative, map[string]any{"x": 1})},
+			}, nil
+		}
+		return &AgentLLMResult{Content: "forced final", ToolCalls: nil}, nil
+	})
+
+	env.ExecuteWorkflow(rt.AgentWorkflow, AgentWorkflowInput{
+		UserPrompt: "run",
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	var result types.AgentRunResult
+	require.NoError(t, env.GetWorkflowResult(&result))
+	require.Equal(t, "forced final", result.Content)
+	require.Equal(t, types.FinishReasonMaxIterations, result.Telemetry.Run.FinishReason)
+	require.Len(t, messageIDs, 2)
+	require.False(t, skipToolsFlags[0], "first LLM call should allow tools")
+	require.True(t, skipToolsFlags[1], "max-iter fallback must set SkipTools")
+	require.NotEmpty(t, messageIDs[0])
+	require.NotEmpty(t, messageIDs[1])
+	require.NotEqual(t, messageIDs[0], messageIDs[1],
+		"SkipTools final round must use a distinct MessageID from the tool-calls round")
 }
 
 func TestAgentWorkflow_ToolTelemetry_ExecError(t *testing.T) {
@@ -533,9 +581,8 @@ func TestAgentLLMStreamActivity_MockLLM_FallbackToGenerate(t *testing.T) {
 	actEnv := newActivityTestEnv(t)
 	actEnv.RegisterActivity(rt.AgentLLMStreamActivity)
 	val, err := actEnv.ExecuteActivity(rt.AgentLLMStreamActivity, AgentLLMInput{
-		AgentName:        "StreamAct",
-		Messages:         []interfaces.Message{{Role: interfaces.MessageRoleUser, Content: "s"}},
-		LocalChannelName: "ch",
+		AgentName: "StreamAct",
+		Messages:  []interfaces.Message{{Role: interfaces.MessageRoleUser, Content: "s"}},
 	})
 	require.NoError(t, err)
 
@@ -1013,3 +1060,126 @@ func (stubMemoryExtractLLM) GenerateStream(context.Context, *interfaces.LLMReque
 func (stubMemoryExtractLLM) GetModel() string                    { return "stub" }
 func (stubMemoryExtractLLM) GetProvider() interfaces.LLMProvider { return interfaces.LLMProviderOpenAI }
 func (stubMemoryExtractLLM) IsStreamSupported() bool             { return false }
+
+func TestPublishStreamEventActivity_EmptyEventJSON_NoOp(t *testing.T) {
+	rt := &TemporalRuntime{}
+	// No client wired: if the guard clause did not short-circuit, this would panic on a nil client.
+	if err := rt.PublishStreamEventActivity(context.Background(), PublishStreamEventInput{
+		StreamWorkflowID: "wf-1",
+		EventJSON:        nil,
+	}); err != nil {
+		t.Fatalf("PublishStreamEventActivity: %v", err)
+	}
+}
+
+func TestPublishStreamEventActivity_EmptyStreamWorkflowID_NoOp(t *testing.T) {
+	rt := &TemporalRuntime{}
+	if err := rt.PublishStreamEventActivity(context.Background(), PublishStreamEventInput{
+		StreamWorkflowID: "",
+		EventJSON:        json.RawMessage(`{"type":"TOOL_CALL_START"}`),
+	}); err != nil {
+		t.Fatalf("PublishStreamEventActivity: %v", err)
+	}
+}
+
+// TestPublishStreamEventActivity_PublishesAndFlushes verifies the happy path: a well-formed
+// event with both fields set is signaled to the target workflow's stream and flushed before
+// the activity returns.
+func TestPublishStreamEventActivity_PublishesAndFlushes(t *testing.T) {
+	tc := temporalmocks.NewClient(t)
+	tc.On("SignalWorkflow", mock.Anything, "root-wf", "", workflowstreams.PublishSignalName, mock.Anything).
+		Return(nil).Once()
+
+	rt := &TemporalRuntime{temporalClient: tc}
+	ev := events.NewAgentToolCallStartEvent("tc1", "echo")
+	raw, err := ev.ToJSON()
+	if err != nil {
+		t.Fatalf("ToJSON: %v", err)
+	}
+
+	actEnv := newActivityTestEnv(t)
+	actEnv.RegisterActivity(rt.PublishStreamEventActivity)
+	_, err = actEnv.ExecuteActivity(rt.PublishStreamEventActivity, PublishStreamEventInput{
+		StreamWorkflowID: "root-wf",
+		EventJSON:        json.RawMessage(raw),
+	})
+	if err != nil {
+		t.Fatalf("PublishStreamEventActivity: %v", err)
+	}
+	tc.AssertExpectations(t)
+}
+
+func TestAgentWorkflowCleanupActivity_EmptyInput(t *testing.T) {
+	rt := &TemporalRuntime{}
+	actEnv := newActivityTestEnv(t)
+	actEnv.RegisterActivity(rt.AgentWorkflowCleanupActivity)
+	_, err := actEnv.ExecuteActivity(rt.AgentWorkflowCleanupActivity, AgentWorkflowCleanupInput{})
+	require.NoError(t, err)
+}
+
+func TestAgentWorkflowCleanupActivity_CancelsPendingApprovals(t *testing.T) {
+	tc := temporalmocks.NewClient(t)
+	tc.On("CompleteActivityByID",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		"AgentToolApprovalActivity_suf_0", mock.Anything, mock.MatchedBy(func(err error) bool {
+			return temporal.IsCanceledError(err)
+		}),
+	).Return(nil).Once()
+	tc.On("CompleteActivityByID",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		"AgentToolApprovalActivity_suf_1", mock.Anything, mock.MatchedBy(func(err error) bool {
+			return temporal.IsCanceledError(err)
+		}),
+	).Return(nil).Once()
+
+	rt := &TemporalRuntime{temporalClient: tc}
+	actEnv := newActivityTestEnv(t)
+	actEnv.RegisterActivity(rt.AgentWorkflowCleanupActivity)
+	_, err := actEnv.ExecuteActivity(rt.AgentWorkflowCleanupActivity, AgentWorkflowCleanupInput{
+		ApprovalActivityIDs: []string{
+			"AgentToolApprovalActivity_suf_0",
+			"AgentToolApprovalActivity_suf_1",
+		},
+	})
+	require.NoError(t, err)
+	tc.AssertExpectations(t)
+}
+
+func TestAgentWorkflowCleanupActivity_IgnoresAlreadyResolved(t *testing.T) {
+	tc := temporalmocks.NewClient(t)
+	tc.On("CompleteActivityByID",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		"AgentToolApprovalActivity_done", mock.Anything, mock.MatchedBy(func(err error) bool {
+			return temporal.IsCanceledError(err)
+		}),
+	).Return(errors.New("activity task not found")).Once()
+	tc.On("CompleteActivityByID",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		"AgentToolApprovalActivity_open", mock.Anything, mock.MatchedBy(func(err error) bool {
+			return temporal.IsCanceledError(err)
+		}),
+	).Return(nil).Once()
+
+	rt := &TemporalRuntime{temporalClient: tc}
+	actEnv := newActivityTestEnv(t)
+	actEnv.RegisterActivity(rt.AgentWorkflowCleanupActivity)
+	_, err := actEnv.ExecuteActivity(rt.AgentWorkflowCleanupActivity, AgentWorkflowCleanupInput{
+		ApprovalActivityIDs: []string{
+			"AgentToolApprovalActivity_done",
+			"AgentToolApprovalActivity_open",
+		},
+	})
+	require.NoError(t, err)
+	tc.AssertExpectations(t)
+}
+
+func TestAgentWorkflowCleanupActivity_RequiresClient(t *testing.T) {
+	rt := &TemporalRuntime{}
+	actEnv := newActivityTestEnv(t)
+	actEnv.RegisterActivity(rt.AgentWorkflowCleanupActivity)
+	_, err := actEnv.ExecuteActivity(rt.AgentWorkflowCleanupActivity, AgentWorkflowCleanupInput{
+		ApprovalActivityIDs: []string{"AgentToolApprovalActivity_x"},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "requires a Temporal client")
+}

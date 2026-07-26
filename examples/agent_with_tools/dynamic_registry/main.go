@@ -47,12 +47,17 @@ func main() {
 
 	fmt.Println("--- run 1 (echo only) ---")
 	fmt.Println("user:", mathPrompt)
-	result, err := a.Run(ctx, mathPrompt, nil)
+	agentRun1, err := a.Run(ctx, mathPrompt, nil)
 	if err != nil {
 		log.Printf("run 1 failed: %v", err)
 	} else {
-		fmt.Println("agent:", result.Content)
-		shared.PrintRunFooters(result)
+		result1, err := agentRun1.Get(ctx)
+		if err != nil {
+			log.Printf("run 1 get result: %v", err)
+		} else {
+			fmt.Println("agent:", result1.Content)
+			shared.PrintRunFooters(result1)
+		}
 	}
 
 	if err := a.ToolRegistry().Register(calculator.New()); err != nil {
@@ -62,11 +67,16 @@ func main() {
 
 	fmt.Println("\n--- run 2 (echo + calculator) ---")
 	fmt.Println("user:", mathPrompt)
-	result, err = a.Run(ctx, mathPrompt, nil)
+	agentRun2, err := a.Run(ctx, mathPrompt, nil)
 	if err != nil {
 		log.Printf("run 2 failed: %v", err)
 		return
 	}
-	fmt.Println("agent:", result.Content)
-	shared.PrintRunFooters(result)
+	result2, err := agentRun2.Get(ctx)
+	if err != nil {
+		log.Printf("run 2 get result: %v", err)
+		return
+	}
+	fmt.Println("agent:", result2.Content)
+	shared.PrintRunFooters(result2)
 }

@@ -131,7 +131,7 @@ temporal:
 go run ./benchmarks/ -config benchmarks/config.yaml
 ```
 
-**External root workers** (`workers_count: 1+`) — benchmark spawns separate worker processes and enables `EnableRemoteWorkers()` on the root agent. Embedded local workers still run for the root agent and all sub-agents (sub-agents always use embedded workers on their own task queues).
+**External root workers** (`workers_count: 1+`) — benchmark spawns separate worker processes that also poll the root agent's task queue. Embedded local workers still run for the root agent and all sub-agents (sub-agents always use embedded workers on their own task queues).
 
 ```yaml
 runtime: temporal

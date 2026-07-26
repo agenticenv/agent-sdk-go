@@ -85,12 +85,12 @@ func newLocalRT(t *testing.T, client interfaces.LLMClient, tools ...interfaces.T
 		}),
 	)
 	require.NoError(t, err)
-	_ = tools // callers pass resolved tools on ExecuteRequest.Tools
+	_ = tools // callers pass resolved tools on RunRequest.Tools
 	return rt
 }
 
-func execReq(prompt string, tools ...interfaces.Tool) *sdkruntime.ExecuteRequest {
-	return &sdkruntime.ExecuteRequest{UserPrompt: prompt, Tools: tools}
+func runReq(prompt string, tools ...interfaces.Tool) *sdkruntime.RunRequest {
+	return &sdkruntime.RunRequest{UserPrompt: prompt, Tools: tools}
 }
 
 // collectEvents drains an event channel until it is closed or timeout elapses,
@@ -122,6 +122,25 @@ func eventTypes(evs []events.AgentEvent) []events.AgentEventType {
 		out[i] = ev.Type()
 	}
 	return out
+}
+
+// waitHandleStatus polls handle.Status until want or timeout.
+func waitHandleStatus(t *testing.T, h interface {
+	Status(context.Context) (types.RunStatus, error)
+}, want types.RunStatus, timeout time.Duration) {
+	t.Helper()
+	deadline := time.After(timeout)
+	for {
+		st, err := h.Status(context.Background())
+		if err == nil && st == want {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("timed out waiting for status %s (last=%v err=%v)", want, st, err)
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -173,26 +192,21 @@ func TestNewLocalRuntime_WithAllOptions(t *testing.T) {
 func TestNewLocalRuntime_EventBusInitialised(t *testing.T) {
 	rt := newLocalRT(t, &seqLLMClient{})
 	require.NotNil(t, rt.eventbus, "eventbus should be initialised by NewLocalRuntime")
+	require.True(t, rt.ownsEventBus, "NewLocalRuntime should own the bus it creates")
 }
 
 // ---------------------------------------------------------------------------
-// agentNameFromRuntime
+// Run / GetRunHandle
 // ---------------------------------------------------------------------------
 
-func TestAgentNameFromRuntime_NilRuntime(t *testing.T) {
-	require.Equal(t, "", agentNameFromRuntime(nil))
-}
-
-func TestAgentNameFromRuntime_WithName(t *testing.T) {
+func TestRun_NilRequest(t *testing.T) {
 	rt := newLocalRT(t, &seqLLMClient{})
-	require.Equal(t, "test-agent", agentNameFromRuntime(rt))
+	_, err := rt.Run(context.Background(), nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "nil RunRequest")
 }
 
-// ---------------------------------------------------------------------------
-// Execute
-// ---------------------------------------------------------------------------
-
-func TestExecute_SimpleTextResponse(t *testing.T) {
+func TestRun_SimpleTextResponse(t *testing.T) {
 	client := &seqLLMClient{
 		responses: []*interfaces.LLMResponse{
 			{Content: "Hello from the agent"},
@@ -200,17 +214,59 @@ func TestExecute_SimpleTextResponse(t *testing.T) {
 	}
 	rt := newLocalRT(t, client)
 
-	result, err := rt.Execute(context.Background(), &sdkruntime.ExecuteRequest{
-		UserPrompt: "hi",
-	})
+	handle, err := rt.Run(context.Background(), &sdkruntime.RunRequest{UserPrompt: "hi"})
+	require.NoError(t, err)
+	require.NotEmpty(t, handle.ID())
 
+	result, err := handle.Get(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, "Hello from the agent", result.Content)
 	require.Equal(t, "test-agent", result.AgentName)
 	require.Equal(t, "test-model", result.Model)
+	require.Equal(t, handle.ID(), result.RunID)
+
+	st, err := handle.Status(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, types.StatusCompleted, st)
 }
 
-func TestExecute_PropagatesLLMError(t *testing.T) {
+func TestGetRunHandle_NotFound(t *testing.T) {
+	rt := newLocalRT(t, &seqLLMClient{})
+	_, err := rt.GetRunHandle(context.Background(), "unknown-run-id")
+	require.ErrorIs(t, err, types.ErrRunNotFound)
+}
+
+func TestRun_CancelAbortsLiveRun(t *testing.T) {
+	blocking := &blockingLLMClient{block: make(chan struct{})}
+	rt, err := NewLocalRuntime(
+		WithLogger(logger.NoopLogger()),
+		WithAgentSpec(sdkruntime.AgentSpec{Name: "test-agent"}),
+		WithAgentConfig(sdkruntime.AgentConfig{
+			LLM: sdkruntime.AgentLLM{Client: blocking},
+			Limits: sdkruntime.AgentLimits{
+				MaxIterations: 1,
+				Timeout:       30 * time.Second,
+			},
+		}),
+	)
+	require.NoError(t, err)
+
+	handle, err := rt.Run(context.Background(), &sdkruntime.RunRequest{UserPrompt: "hi"})
+	require.NoError(t, err)
+
+	waitHandleStatus(t, handle, types.StatusRunning, 2*time.Second)
+	require.NoError(t, handle.Cancel(context.Background()))
+
+	_, getErr := handle.Get(context.Background())
+	require.Error(t, getErr)
+	require.ErrorIs(t, getErr, context.Canceled)
+
+	st, err := handle.Status(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, types.StatusCancelled, st)
+}
+
+func TestRun_PropagatesLLMError(t *testing.T) {
 	client := &seqLLMClient{
 		errs: []error{errors.New("llm unavailable")},
 	}
@@ -230,13 +286,15 @@ func TestExecute_PropagatesLLMError(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	_, err = rt.Execute(context.Background(), &sdkruntime.ExecuteRequest{UserPrompt: "hi"})
+	handle, err := rt.Run(context.Background(), &sdkruntime.RunRequest{UserPrompt: "hi"})
+	require.NoError(t, err)
+
+	_, err = handle.Get(context.Background())
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "llm unavailable")
 }
 
-func TestExecute_AppliesTimeoutWhenNoDeadline(t *testing.T) {
-	// Build a runtime with a very short timeout.
+func TestRun_AppliesTimeoutWhenNoDeadline(t *testing.T) {
 	blocking := &blockingLLMClient{block: make(chan struct{})}
 	rt, err := NewLocalRuntime(
 		WithLogger(logger.NoopLogger()),
@@ -250,12 +308,13 @@ func TestExecute_AppliesTimeoutWhenNoDeadline(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	// Pass context.Background() — no deadline — so Execute applies the runtime timeout.
 	start := time.Now()
-	_, err = rt.Execute(context.Background(), &sdkruntime.ExecuteRequest{UserPrompt: "hi"})
+	handle, err := rt.Run(context.Background(), &sdkruntime.RunRequest{UserPrompt: "hi"})
+	require.NoError(t, err)
+
+	_, err = handle.Get(context.Background())
 	elapsed := time.Since(start)
 
-	// Should have been cancelled by the 50ms runtime timeout.
 	require.Error(t, err)
 	assert.Less(t, elapsed, 2*time.Second, "runtime timeout should fire well before 2s")
 }
@@ -276,7 +335,7 @@ func (b *blockingLLMClient) GetModel() string                    { return "block
 func (b *blockingLLMClient) GetProvider() interfaces.LLMProvider { return interfaces.LLMProviderOpenAI }
 func (b *blockingLLMClient) IsStreamSupported() bool             { return false }
 
-func TestExecute_WithApprovalHandler(t *testing.T) {
+func TestRun_WithApprovalHandler(t *testing.T) {
 	client := &seqLLMClient{
 		responses: []*interfaces.LLMResponse{
 			{
@@ -288,7 +347,6 @@ func TestExecute_WithApprovalHandler(t *testing.T) {
 		},
 	}
 	tool := stubTool{name: "approve-tool", result: "executed", needsApproval: true}
-	rt := newLocalRT(t, client, tool)
 
 	handlerCalled := false
 	handler := func(_ context.Context, req *types.ApprovalRequest) {
@@ -296,46 +354,129 @@ func TestExecute_WithApprovalHandler(t *testing.T) {
 		_ = req.Respond(types.ApprovalStatusApproved)
 	}
 
-	result, err := rt.Execute(context.Background(), &sdkruntime.ExecuteRequest{
-		UserPrompt:      "run tool",
-		Tools:           []interfaces.Tool{tool},
-		ApprovalHandler: handler,
-	})
+	rt, err := NewLocalRuntime(
+		WithLogger(logger.NoopLogger()),
+		WithAgentSpec(sdkruntime.AgentSpec{Name: "test-agent", SystemPrompt: "you are helpful"}),
+		WithAgentConfig(sdkruntime.AgentConfig{
+			LLM: sdkruntime.AgentLLM{Client: client},
+			Limits: sdkruntime.AgentLimits{
+				MaxIterations: 5,
+				Timeout:       30 * time.Second,
+			},
+		}),
+		WithApprovalHandler(handler),
+	)
+	require.NoError(t, err)
 
+	handle, err := rt.Run(context.Background(), &sdkruntime.RunRequest{
+		UserPrompt: "run tool",
+		Tools:      []interfaces.Tool{tool},
+	})
+	require.NoError(t, err)
+
+	result, err := handle.Get(context.Background())
 	require.NoError(t, err)
 	require.True(t, handlerCalled, "approval handler must be called")
 	require.Equal(t, "tool done", result.Content)
 }
 
+func TestRun_ToolCallThenFinalAnswer(t *testing.T) {
+	client := &seqLLMClient{
+		responses: []*interfaces.LLMResponse{
+			{
+				ToolCalls: []*interfaces.ToolCall{
+					{ToolCallID: "c1", ToolName: "calc"},
+				},
+			},
+			{Content: "the answer is 42"},
+		},
+	}
+	tool := stubTool{name: "calc", result: "42"}
+	rt := newLocalRT(t, client, tool)
+
+	handle, err := rt.Run(context.Background(), runReq("compute", tool))
+	require.NoError(t, err)
+
+	result, err := handle.Get(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "the answer is 42", result.Content)
+}
+
+func TestRun_PersistsConversationMessages(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	conv := ifmocks.NewMockConversation(ctrl)
+
+	conv.EXPECT().ListMessages(gomock.Any(), "conv-1", gomock.Any()).Return(nil, nil)
+	conv.EXPECT().AddMessage(gomock.Any(), "conv-1", gomock.Any()).Return(nil).Times(2)
+
+	client := &seqLLMClient{
+		responses: []*interfaces.LLMResponse{{Content: "persisted"}},
+	}
+	rt, err := NewLocalRuntime(
+		WithLogger(logger.NoopLogger()),
+		WithAgentSpec(sdkruntime.AgentSpec{Name: "agent"}),
+		WithAgentConfig(sdkruntime.AgentConfig{
+			LLM:     sdkruntime.AgentLLM{Client: client},
+			Session: sdkruntime.AgentSession{Conversation: conv, ConversationSize: 20},
+			Limits:  sdkruntime.AgentLimits{MaxIterations: 5, Timeout: 5 * time.Second},
+		}),
+	)
+	require.NoError(t, err)
+
+	handle, err := rt.Run(context.Background(), &sdkruntime.RunRequest{
+		UserPrompt:     "remember this",
+		ConversationID: "conv-1",
+	})
+	require.NoError(t, err)
+
+	_, err = handle.Get(context.Background())
+	require.NoError(t, err)
+}
+
 // ---------------------------------------------------------------------------
-// ExecuteStream
+// Stream / GetStreamHandle
 // ---------------------------------------------------------------------------
 
-func TestExecuteStream_EmitsRunStartedAndFinished(t *testing.T) {
+func TestStream_NilRequest(t *testing.T) {
+	rt := newLocalRT(t, &seqLLMClient{})
+	_, err := rt.Stream(context.Background(), nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "nil RunRequest")
+}
+
+func TestGetStreamHandle_NotFound(t *testing.T) {
+	rt := newLocalRT(t, &seqLLMClient{})
+	_, err := rt.GetStreamHandle(context.Background(), "unknown-run-id")
+	require.ErrorIs(t, err, types.ErrStreamNotFound)
+}
+
+func TestStream_EmitsRunStartedAndFinished(t *testing.T) {
 	client := &seqLLMClient{
 		responses: []*interfaces.LLMResponse{{Content: "stream answer"}},
 	}
 	rt := newLocalRT(t, client)
 
-	ch, err := rt.ExecuteStream(context.Background(), &sdkruntime.ExecuteRequest{
-		UserPrompt: "hello",
-	})
+	ctx := context.Background()
+	handle, err := rt.Stream(ctx, &sdkruntime.RunRequest{UserPrompt: "hello"})
+	require.NoError(t, err)
+
+	ch, err := handle.Events(ctx, 0)
 	require.NoError(t, err)
 
 	evs := collectEvents(t, ch, 5*time.Second)
-	types := eventTypes(evs)
+	gotTypes := eventTypes(evs)
 
-	require.Contains(t, types, events.AgentEventTypeRunStarted)
-	require.Contains(t, types, events.AgentEventTypeRunFinished)
+	require.Contains(t, gotTypes, events.AgentEventTypeRunStarted)
+	require.Contains(t, gotTypes, events.AgentEventTypeRunFinished)
+	require.Equal(t, events.AgentEventTypeRunStarted, gotTypes[0])
+	require.Equal(t, events.AgentEventTypeRunFinished, gotTypes[len(gotTypes)-1])
 
-	// RUN_STARTED must come first, RUN_FINISHED last.
-	first := types[0]
-	last := types[len(types)-1]
-	require.Equal(t, events.AgentEventTypeRunStarted, first)
-	require.Equal(t, events.AgentEventTypeRunFinished, last)
+	st, err := handle.Status(ctx)
+	require.NoError(t, err)
+	require.Equal(t, types.StatusCompleted, st)
 }
 
-func TestExecuteStream_EmitsRunError(t *testing.T) {
+func TestStream_EmitsRunError(t *testing.T) {
 	client := &seqLLMClient{
 		errs: []error{errors.New("llm down")},
 	}
@@ -355,34 +496,43 @@ func TestExecuteStream_EmitsRunError(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	ch, err := rt.ExecuteStream(context.Background(), &sdkruntime.ExecuteRequest{
-		UserPrompt: "hi",
-	})
-	require.NoError(t, err) // subscribe succeeds synchronously
+	ctx := context.Background()
+	handle, err := rt.Stream(ctx, &sdkruntime.RunRequest{UserPrompt: "hi"})
+	require.NoError(t, err)
+
+	ch, err := handle.Events(ctx, 0)
+	require.NoError(t, err)
 
 	evs := collectEvents(t, ch, 5*time.Second)
-	types := eventTypes(evs)
+	gotTypes := eventTypes(evs)
 
-	require.Contains(t, types, events.AgentEventTypeRunStarted)
-	require.Contains(t, types, events.AgentEventTypeRunError)
+	require.Contains(t, gotTypes, events.AgentEventTypeRunStarted)
+	require.Contains(t, gotTypes, events.AgentEventTypeRunError)
+
+	st, err := handle.Status(ctx)
+	require.NoError(t, err)
+	require.Equal(t, types.StatusFailed, st)
 }
 
-func TestExecuteStream_ChannelClosedAfterTerminalEvent(t *testing.T) {
+func TestStream_ChannelClosedAfterTerminalEvent(t *testing.T) {
 	client := &seqLLMClient{
 		responses: []*interfaces.LLMResponse{{Content: "done"}},
 	}
 	rt := newLocalRT(t, client)
 
-	ch, err := rt.ExecuteStream(context.Background(), &sdkruntime.ExecuteRequest{UserPrompt: "hi"})
+	ctx := context.Background()
+	handle, err := rt.Stream(ctx, &sdkruntime.RunRequest{UserPrompt: "hi"})
 	require.NoError(t, err)
 
-	// Channel must close eventually.
+	ch, err := handle.Events(ctx, 0)
+	require.NoError(t, err)
+
 	timeout := time.After(5 * time.Second)
 	for {
 		select {
 		case _, ok := <-ch:
 			if !ok {
-				return // channel closed — success
+				return
 			}
 		case <-timeout:
 			t.Fatal("channel never closed")
@@ -390,25 +540,114 @@ func TestExecuteStream_ChannelClosedAfterTerminalEvent(t *testing.T) {
 	}
 }
 
-func TestExecuteStream_ContextCancelledAborts(t *testing.T) {
+func TestStream_Events_AlreadyCompleted(t *testing.T) {
+	client := &seqLLMClient{
+		responses: []*interfaces.LLMResponse{{Content: "done"}},
+	}
+	rt := newLocalRT(t, client)
+
+	ctx := context.Background()
+	handle, err := rt.Stream(ctx, &sdkruntime.RunRequest{UserPrompt: "hi"})
+	require.NoError(t, err)
+
+	ch, err := handle.Events(ctx, 0)
+	require.NoError(t, err)
+	_ = collectEvents(t, ch, 5*time.Second)
+
+	waitHandleStatus(t, handle, types.StatusCompleted, 2*time.Second)
+
+	_, err = handle.Events(ctx, 0)
+	require.ErrorIs(t, err, types.ErrRunAlreadyCompleted)
+}
+
+func TestStream_Events_OffsetUnsupported(t *testing.T) {
+	client := &seqLLMClient{
+		responses: []*interfaces.LLMResponse{{Content: "done"}},
+	}
+	rt := newLocalRT(t, client)
+
+	handle, err := rt.Stream(context.Background(), &sdkruntime.RunRequest{UserPrompt: "hi"})
+	require.NoError(t, err)
+
+	_, err = handle.Events(context.Background(), 5)
+	require.ErrorIs(t, err, types.ErrStreamOffsetNotSupported)
+
+	// Still allow offset-0 subscribe so the stream goroutine can finish.
+	ch, err := handle.Events(context.Background(), 0)
+	require.NoError(t, err)
+	_ = collectEvents(t, ch, 5*time.Second)
+}
+
+func TestStream_Status_RunningThenTerminal(t *testing.T) {
+	blocking := &blockingLLMClient{block: make(chan struct{})}
+	rt := newLocalRT(t, blocking)
+
+	ctx := context.Background()
+	handle, err := rt.Stream(ctx, &sdkruntime.RunRequest{UserPrompt: "hi"})
+	require.NoError(t, err)
+
+	st, err := handle.Status(ctx)
+	require.NoError(t, err)
+	require.Equal(t, types.StatusRunning, st)
+
+	ch, err := handle.Events(ctx, 0)
+	require.NoError(t, err)
+
+	require.NoError(t, handle.Cancel(ctx))
+	_ = collectEvents(t, ch, 3*time.Second)
+
+	st, err = handle.Status(context.Background())
+	require.NoError(t, err)
+	require.True(t, st.IsTerminal(), "expected terminal status, got %s", st)
+	require.Equal(t, types.StatusCancelled, st)
+}
+
+func TestStream_Cancel_AbortsLiveStream(t *testing.T) {
+	blocking := &blockingLLMClient{block: make(chan struct{})}
+	rt, err := NewLocalRuntime(
+		WithLogger(logger.NoopLogger()),
+		WithAgentSpec(sdkruntime.AgentSpec{Name: "test-agent"}),
+		WithAgentConfig(sdkruntime.AgentConfig{
+			LLM: sdkruntime.AgentLLM{Client: blocking},
+			Limits: sdkruntime.AgentLimits{
+				MaxIterations: 1,
+				Timeout:       30 * time.Second,
+			},
+		}),
+	)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	handle, err := rt.Stream(ctx, &sdkruntime.RunRequest{UserPrompt: "hi"})
+	require.NoError(t, err)
+
+	ch, err := handle.Events(ctx, 0)
+	require.NoError(t, err)
+
+	require.NoError(t, handle.Cancel(ctx))
+
+	evs := collectEvents(t, ch, 3*time.Second)
+	require.NotEmpty(t, evs)
+	require.Contains(t, eventTypes(evs), events.AgentEventTypeRunStarted)
+}
+
+func TestStream_ContextCancelledAborts(t *testing.T) {
 	blocking := &blockingLLMClient{block: make(chan struct{})}
 	rt := newLocalRT(t, blocking)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	ch, err := rt.ExecuteStream(ctx, &sdkruntime.ExecuteRequest{UserPrompt: "hi"})
+	handle, err := rt.Stream(ctx, &sdkruntime.RunRequest{UserPrompt: "hi"})
 	require.NoError(t, err)
 
-	// Give the goroutine a moment to start, then cancel.
+	ch, err := handle.Events(context.Background(), 0)
+	require.NoError(t, err)
+
 	time.Sleep(20 * time.Millisecond)
 	cancel()
 
 	evs := collectEvents(t, ch, 3*time.Second)
-	types := eventTypes(evs)
-	require.Contains(t, types, events.AgentEventTypeRunStarted)
-	// Channel must close (error or finished).
-	// Verifying closure is enough; collectEvents blocks until close.
-	_ = types
+	require.Contains(t, eventTypes(evs), events.AgentEventTypeRunStarted)
 }
 
 // ---------------------------------------------------------------------------
@@ -418,8 +657,7 @@ func TestExecuteStream_ContextCancelledAborts(t *testing.T) {
 func TestApprove_UnknownToken(t *testing.T) {
 	rt := newLocalRT(t, &seqLLMClient{})
 	err := rt.Approve(context.Background(), "nonexistent-token", types.ApprovalStatusApproved)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "no pending approval for token")
+	require.ErrorIs(t, err, types.ErrApprovalAlreadyResolved)
 }
 
 func TestApprove_ResolvesRegisteredChannel(t *testing.T) {
@@ -439,7 +677,6 @@ func TestApprove_ResolvesRegisteredChannel(t *testing.T) {
 		t.Fatal("expected status on channel, got timeout")
 	}
 
-	// Token should have been removed by LoadAndDelete.
 	_, loaded := rt.pendingApprovals.Load(token)
 	require.False(t, loaded, "token must be removed after Approve")
 }
@@ -466,13 +703,11 @@ func TestApprove_DoubleApproveSecondErrors(t *testing.T) {
 	rt.pendingApprovals.Store(token, resultCh)
 
 	require.NoError(t, rt.Approve(context.Background(), token, types.ApprovalStatusApproved))
-	// Second call: token already removed by LoadAndDelete.
 	err := rt.Approve(context.Background(), token, types.ApprovalStatusApproved)
-	require.Error(t, err)
+	require.ErrorIs(t, err, types.ErrApprovalAlreadyResolved)
 }
 
 func TestApprove_StreamingEndToEnd(t *testing.T) {
-	// LLM: first call returns a tool call needing approval, second returns final text.
 	client := &seqLLMClient{
 		responses: []*interfaces.LLMResponse{
 			{ToolCalls: []*interfaces.ToolCall{
@@ -484,13 +719,16 @@ func TestApprove_StreamingEndToEnd(t *testing.T) {
 	tool := stubTool{name: "guarded-tool", result: "ran!", needsApproval: true}
 	rt := newLocalRT(t, client, tool)
 
-	ch, err := rt.ExecuteStream(context.Background(), &sdkruntime.ExecuteRequest{
+	ctx := context.Background()
+	handle, err := rt.Stream(ctx, &sdkruntime.RunRequest{
 		UserPrompt: "run guarded tool",
 		Tools:      []interfaces.Tool{tool},
 	})
 	require.NoError(t, err)
 
-	// Collect events until we see a CUSTOM approval event, then approve.
+	ch, err := handle.Events(ctx, 0)
+	require.NoError(t, err)
+
 	var approvalToken string
 	var allEvents []events.AgentEvent
 
@@ -510,7 +748,6 @@ outer:
 				val, parseErr := events.ParseCustomEventApproval(ev.(*events.AgentCustomEvent))
 				if parseErr == nil && val.ApprovalToken != "" {
 					approvalToken = val.ApprovalToken
-					// Approve in a separate goroutine to unblock the loop.
 					go func(tok string) {
 						_ = rt.Approve(context.Background(), tok, types.ApprovalStatusApproved)
 					}(approvalToken)
@@ -521,9 +758,9 @@ outer:
 		}
 	}
 
-	types := eventTypes(allEvents)
+	gotTypes := eventTypes(allEvents)
 	require.NotEmpty(t, approvalToken, "expected an approval token in CUSTOM event")
-	require.Contains(t, types, events.AgentEventTypeRunFinished)
+	require.Contains(t, gotTypes, events.AgentEventTypeRunFinished)
 }
 
 // ---------------------------------------------------------------------------
@@ -533,6 +770,23 @@ outer:
 func TestClose_NoError(t *testing.T) {
 	rt := newLocalRT(t, &seqLLMClient{})
 	require.NotPanics(t, rt.Close)
+	require.False(t, rt.ownsEventBus, "Close should clear ownership after closing owned bus")
+	require.NotPanics(t, rt.Close) // idempotent
+}
+
+func TestClose_DoesNotCloseSharedEventBus(t *testing.T) {
+	parent := newLocalRT(t, &seqLLMClient{})
+	child := newLocalRT(t, &seqLLMClient{})
+	shared := parent.eventbus
+
+	child.setEventBus(shared)
+	require.False(t, child.ownsEventBus)
+
+	child.Close()
+
+	// Parent still owns the bus; publish must still work.
+	require.NoError(t, shared.Publish(context.Background(), "ch", []byte("ok")))
+	require.True(t, parent.ownsEventBus)
 }
 
 // ---------------------------------------------------------------------------
@@ -546,7 +800,6 @@ func TestPublishLifecycleEvent_NilEventbus(t *testing.T) {
 		},
 		logger: logger.NoopLogger(),
 	}
-	// eventbus is nil — must not panic.
 	require.NotPanics(t, func() {
 		rt.publishLifecycleEvent("some-channel", events.NewAgentRunErrorEvent("oops"))
 	})
@@ -554,7 +807,6 @@ func TestPublishLifecycleEvent_NilEventbus(t *testing.T) {
 
 func TestPublishLifecycleEvent_EmptyChannel(t *testing.T) {
 	rt := newLocalRT(t, &seqLLMClient{})
-	// empty channel — must not panic.
 	require.NotPanics(t, func() {
 		rt.publishLifecycleEvent("", events.NewAgentRunErrorEvent("oops"))
 	})
@@ -568,25 +820,44 @@ func TestPublishLifecycleEvent_NilEvent(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// EventBusRuntime interface
+// event bus sharing
 // ---------------------------------------------------------------------------
-
-func TestGetEventBus_ReturnsInitialisedBus(t *testing.T) {
-	rt := newLocalRT(t, &seqLLMClient{})
-	require.NotNil(t, rt.GetEventBus(), "GetEventBus must return the bus initialised by NewLocalRuntime")
-}
 
 func TestSetEventBus_ReplacesBus(t *testing.T) {
 	rt := newLocalRT(t, &seqLLMClient{})
-	original := rt.GetEventBus()
+	original := rt.eventbus
+	require.True(t, rt.ownsEventBus)
 
-	// Build a second runtime and swap its bus into the first.
 	rt2 := newLocalRT(t, &seqLLMClient{})
-	newBus := rt2.GetEventBus()
+	newBus := rt2.eventbus
 
-	rt.SetEventBus(newBus)
-	require.Same(t, newBus, rt.GetEventBus(), "GetEventBus should return the new bus")
-	require.NotSame(t, original, rt.GetEventBus(), "bus should have changed after SetEventBus")
+	rt.setEventBus(newBus)
+	require.Same(t, newBus, rt.eventbus)
+	require.NotSame(t, original, rt.eventbus)
+	require.False(t, rt.ownsEventBus, "setEventBus must clear ownership of a shared bus")
+}
+
+func TestShareEventBusWithSubAgents(t *testing.T) {
+	parent := newLocalRT(t, &seqLLMClient{})
+	child := newLocalRT(t, &seqLLMClient{})
+	grandchild := newLocalRT(t, &seqLLMClient{})
+
+	parent.shareEventBusWithSubAgents([]*sdkruntime.SubAgentSpec{
+		{
+			Name:     "child",
+			ToolName: "child",
+			Runtime:  child,
+			Children: []*sdkruntime.SubAgentSpec{
+				{Name: "gc", ToolName: "gc", Runtime: grandchild},
+			},
+		},
+	})
+
+	require.Same(t, parent.eventbus, child.eventbus)
+	require.Same(t, parent.eventbus, grandchild.eventbus)
+	require.False(t, child.ownsEventBus)
+	require.False(t, grandchild.ownsEventBus)
+	require.True(t, parent.ownsEventBus)
 }
 
 // ---------------------------------------------------------------------------
@@ -609,7 +880,6 @@ func TestSubscribeToAgentEvents_DecodesEvents(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = closeFn() }()
 
-	// Publish a raw lifecycle event.
 	ev := events.NewAgentRunStartedEvent("thread-1", "run-1")
 	rt.publishLifecycleEvent("test-channel", ev)
 
@@ -619,65 +889,4 @@ func TestSubscribeToAgentEvents_DecodesEvents(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for event")
 	}
-}
-
-// ---------------------------------------------------------------------------
-// Execute with tool call (two-turn)
-// ---------------------------------------------------------------------------
-
-func TestExecute_ToolCallThenFinalAnswer(t *testing.T) {
-	client := &seqLLMClient{
-		responses: []*interfaces.LLMResponse{
-			{
-				ToolCalls: []*interfaces.ToolCall{
-					{ToolCallID: "c1", ToolName: "calc"},
-				},
-			},
-			{Content: "the answer is 42"},
-		},
-	}
-	tool := stubTool{name: "calc", result: "42"}
-	rt := newLocalRT(t, client, tool)
-
-	result, err := rt.Execute(context.Background(), execReq("compute", tool))
-	require.NoError(t, err)
-	require.Equal(t, "the answer is 42", result.Content)
-}
-
-// ---------------------------------------------------------------------------
-// Execute — conversation persistence
-// ---------------------------------------------------------------------------
-
-func TestExecute_PersistsConversationMessages(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	conv := ifmocks.NewMockConversation(ctrl)
-
-	// ListMessages returns empty history for "conv-1".
-	conv.EXPECT().ListMessages(gomock.Any(), "conv-1", gomock.Any()).Return(nil, nil)
-	// AddMessage is called for each message (user + assistant = 2).
-	conv.EXPECT().AddMessage(gomock.Any(), "conv-1", gomock.Any()).Return(nil).Times(2)
-
-	client := &seqLLMClient{
-		responses: []*interfaces.LLMResponse{{Content: "persisted"}},
-	}
-	rt, err := NewLocalRuntime(
-		WithLogger(logger.NoopLogger()),
-		WithAgentSpec(sdkruntime.AgentSpec{Name: "agent"}),
-		WithAgentConfig(sdkruntime.AgentConfig{
-			LLM:     sdkruntime.AgentLLM{Client: client},
-			Session: sdkruntime.AgentSession{Conversation: conv, ConversationSize: 20},
-			Limits:  sdkruntime.AgentLimits{MaxIterations: 5, Timeout: 5 * time.Second},
-		}),
-	)
-	require.NoError(t, err)
-
-	_, err = rt.Execute(context.Background(), &sdkruntime.ExecuteRequest{
-		UserPrompt: "remember this",
-		RunOptions: &types.AgentRunOptions{
-			ConversationOptions: &types.ConversationOptions{
-				ID: "conv-1",
-			},
-		},
-	})
-	require.NoError(t, err)
 }

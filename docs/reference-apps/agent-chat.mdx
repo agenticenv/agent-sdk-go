@@ -36,7 +36,7 @@ The API and Temporal worker are **separate processes** from the same server imag
 
 | Mode | Process | SDK pattern |
 |---|---|---|
-| `server` | HTTP API + agent client | `NewAgent` with `DisableLocalWorker` + `EnableRemoteWorkers` |
+| `server` | HTTP API + agent client | `NewAgent` with `DisableLocalWorker` |
 | `worker` | Temporal worker | `NewAgentWorker` with matching config |
 
 Both share agent options via `agentsetup.CommonOptions` — same name, LLM client, conversation config, and Temporal settings — so the SDK fingerprint check passes.
@@ -57,7 +57,7 @@ Conversations and messages live in PostgreSQL. The SDK conversation bridge (`ser
 
 **1. Split client / worker with shared config**
 
-Both API and worker call `CommonOptions()` to get identical SDK options. The API adds `DisableLocalWorker` + `EnableRemoteWorkers`; the worker uses the options as-is. This ensures the SDK fingerprint check passes at activity entry.
+Both API and worker call `CommonOptions()` to get identical SDK options. The API adds `DisableLocalWorker`; the worker uses the options as-is. This ensures the SDK fingerprint check passes at activity entry.
 
 ```go
 // server/agent/setup.go — shared by API and worker
@@ -71,7 +71,6 @@ func CommonOptions(cfg Config, llmClient interfaces.LLMClient, conv conversation
         sdkagent.WithSystemPrompt(cfg.Agent.SystemPrompt),
         sdkagent.WithLLMClient(llmClient),
         sdkagent.WithConversation(conv),
-        sdkagent.WithStream(true),
         sdkagent.WithToolApprovalPolicy(sdkagent.AutoToolApprovalPolicy()),
     }
 }
@@ -79,7 +78,6 @@ func CommonOptions(cfg Config, llmClient interfaces.LLMClient, conv conversation
 // API process — adds client-only options
 opts := append(CommonOptions(cfg, llmClient, conv),
     sdkagent.DisableLocalWorker(),
-    sdkagent.EnableRemoteWorkers(),
 )
 a, _ := sdkagent.NewAgent(opts...)
 
@@ -87,7 +85,7 @@ a, _ := sdkagent.NewAgent(opts...)
 w, _ := sdkagent.NewAgentWorker(CommonOptions(cfg, llmClient, conv)...)
 ```
 
-See [Worker Separation](/advanced/worker-separation).
+See [Distributed Execution](/advanced/distributed-execution).
 
 **2. SSE streaming bridge**
 
@@ -95,7 +93,14 @@ The API streams SDK events directly to the browser as AG-UI JSON. Each event is 
 
 ```go
 // server/api/stream.go
-eventCh, err := agent.Stream(ctx, userMessage, opts)
+agentStream, err := agent.Stream(ctx, userMessage, opts)
+if err != nil {
+    http.Error(w, err.Error(), http.StatusInternalServerError)
+    return
+}
+runID := agentStream.ID()
+_ = runID // persist alongside conversationID for GetAgentStream on browser disconnect
+eventCh, err := agentStream.Events(ctx)
 if err != nil {
     http.Error(w, err.Error(), http.StatusInternalServerError)
     return

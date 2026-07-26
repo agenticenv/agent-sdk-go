@@ -89,12 +89,17 @@ func (c *ChatCmd) Run(cfg *config.Config) error {
 			break
 		}
 
-		runOpts := &sdkagent.AgentRunOptions{
+		streamOpts := &sdkagent.AgentStreamOptions{
 			ConversationOptions: &sdkagent.ConversationOptions{
 				ID: convID,
 			},
 		}
-		eventCh, err := a.Stream(context.Background(), line, runOpts)
+		agentStream, err := a.Stream(context.Background(), line, streamOpts)
+		if err != nil {
+			log.Printf("agent error: %v", err)
+			continue
+		}
+		eventCh, err := agentStream.Events(context.Background())
 		if err != nil {
 			log.Printf("agent error: %v", err)
 			continue

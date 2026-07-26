@@ -157,7 +157,7 @@ Use the **same** `WithAgentToolExecutionMode` on `NewAgent`, `NewAgentWorker`, a
 
 ## How tools merge at run time
 
-Each `Run`, `Stream`, or `RunAsync` resolves the full tool list from all registered sources:
+Each `Run` or `Stream` resolves the full tool list from all registered sources:
 
 1. Native / custom tools in [`ToolRegistry`](/advanced/dynamic-capabilities)
 2. MCP tools ([MCP](/features/mcp))

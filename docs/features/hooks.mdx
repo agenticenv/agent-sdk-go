@@ -3,7 +3,7 @@ title: "Hooks"
 description: "Implement middleware hooks at LLM, tool, retrieval, and memory lifecycle points for guardrails and auditing"
 ---
 
-Hooks let you register middleware callbacks that fire at key points in the agent execution lifecycle. Register once with [`WithHooks`](/getting-started/configuration) — the SDK calls your functions automatically across `Run`, `RunAsync`, and `Stream`.
+Hooks let you register middleware callbacks that fire at key points in the agent execution lifecycle. Register once with [`WithHooks`](/getting-started/configuration) — the SDK calls your functions automatically across `Run` and `Stream`.
 
 Every hook can **inspect**, **mutate**, or **abort** the operation it wraps. Return an error from any hook to abort the run immediately.
 

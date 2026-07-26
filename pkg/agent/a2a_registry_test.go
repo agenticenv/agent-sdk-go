@@ -1,34 +1,14 @@
 package agent
 
 import (
-	"context"
 	"testing"
 
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 )
 
-type registryMockA2AClient struct {
-	name string
-}
-
-func (c *registryMockA2AClient) Name() string { return c.name }
-func (c *registryMockA2AClient) Close() error { return nil }
-func (c *registryMockA2AClient) Ping(context.Context) error {
-	return nil
-}
-func (c *registryMockA2AClient) ResolveCard(context.Context) (interfaces.A2AAgentCard, error) {
-	return interfaces.A2AAgentCard{}, nil
-}
-func (c *registryMockA2AClient) ListSkills(context.Context) ([]interfaces.A2ASkillSpec, error) {
-	return nil, nil
-}
-func (c *registryMockA2AClient) SendMessage(context.Context, interfaces.A2ASendMessageRequest) (interfaces.A2ASendMessageResult, error) {
-	return interfaces.A2ASendMessageResult{}, nil
-}
-
 func TestA2ARegistry_RegisterClient(t *testing.T) {
 	r := NewA2ARegistry(nil)
-	cl := &registryMockA2AClient{name: "agent1"}
+	cl := testA2AClient(t, "agent1", nil)
 	if err := r.RegisterClient(cl); err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +32,7 @@ func TestA2ARegistry_UnregisterNotFound(t *testing.T) {
 }
 
 func TestNormalizeA2ARegistry_fromWithA2AClients(t *testing.T) {
-	cl := &registryMockA2AClient{name: "agent1"}
+	cl := testA2AClient(t, "agent1", nil)
 	c := &agentConfig{a2aClients: []interfaces.A2AClient{cl}}
 	if err := c.buildA2ARegistry(); err != nil {
 		t.Fatal(err)

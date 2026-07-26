@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	sdkruntime "github.com/agenticenv/agent-sdk-go/internal/runtime"
+	"github.com/agenticenv/agent-sdk-go/internal/store"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
@@ -40,12 +41,6 @@ func WithTemporalClient(tc client.Client, taskQueue string) Option {
 // instances of the same agent can run on isolated queues.
 func WithInstanceId(instanceId string) Option {
 	return func(rt *TemporalRuntime) { rt.instanceId = instanceId }
-}
-
-// WithEnableRemoteWorkers starts the event worker and event workflow inside
-// Execute/ExecuteStream (client agent runtime path).
-func WithEnableRemoteWorkers(enable bool) Option {
-	return func(rt *TemporalRuntime) { rt.enableRemoteWorkers = enable }
 }
 
 // WithRemoteWorker marks the runtime as a remote worker (true for [NewAgentWorker],
@@ -155,6 +150,12 @@ func WithMetrics(m interfaces.Metrics) Option {
 	return func(rt *TemporalRuntime) { rt.Metrics = m }
 }
 
+// WithApprovalHandler sets the Run-path approval callback (from agent WithApprovalHandler).
+// Stream uses CUSTOM events + Approve/OnApproval instead.
+func WithApprovalHandler(fn types.ApprovalHandler) Option {
+	return func(rt *TemporalRuntime) { rt.approvalHandler = fn }
+}
+
 // buildTemporalRuntime applies options onto a fresh [TemporalRuntime], validates required
 // fields, and dials the Temporal client when [WithTemporalConfig] is used. The returned
 // runtime is fully configured but does not yet have an eventbus — that is set by [NewTemporalRuntime].
@@ -197,6 +198,13 @@ func buildTemporalRuntime(opts ...Option) (*TemporalRuntime, error) {
 		rt.Metrics = observability.DefaultNoopMetrics
 	}
 
+	if rt.activeRuns == nil {
+		rt.activeRuns = store.NewKV[string, *runHandle]()
+	}
+	if rt.activeStreams == nil {
+		rt.activeStreams = store.NewKV[string, *streamHandle]()
+	}
+
 	rt.logger.Debug(context.Background(), "runtime config resolved",
 		slog.String("scope", "runtime"),
 		slog.String("agentName", rt.AgentSpec.Name),
@@ -206,7 +214,6 @@ func buildTemporalRuntime(opts ...Option) (*TemporalRuntime, error) {
 		slog.Bool("remoteWorker", rt.remoteWorker),
 		slog.String("agentMode", rt.agentMode),
 		slog.String("toolExecutionMode", string(rt.ToolExecutionMode)),
-		slog.Bool("enableRemoteWorkers", rt.enableRemoteWorkers),
 		slog.Bool("disableFingerprintCheck", rt.disableFingerprintCheck),
 		slog.Duration("timeout", rt.AgentConfig.Limits.Timeout),
 		slog.Duration("approvalTimeout", rt.AgentConfig.Limits.ApprovalTimeout),

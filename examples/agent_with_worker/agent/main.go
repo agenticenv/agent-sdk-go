@@ -4,9 +4,9 @@
 //
 //	go run . [initial prompt]
 //
-// Starts an event-workflow-backed stream so you can observe each event as it
-// arrives and simulate failure scenarios (e.g. kill the worker or this process
-// mid-run and restart to watch the streamingUnavailable path).
+// Streams events delivered via Temporal Workflow Streams, so each run has a
+// durable event log hosted in the Temporal server. Kill the worker or this
+// process mid-run, then restart to observe workflow replay and recovery.
 //
 // At the "you>" prompt type any message.  Approval requests pause the stream
 // and ask for y/n before continuing.  Type "exit" or "quit" to stop.
@@ -43,8 +43,6 @@ func main() {
 	baseOpts := opts.Common(cfg.Host, cfg.Port, cfg.Namespace, cfg.TaskQueue, llmClient, config.NewLoggerFromLogConfig(cfg))
 	agentOpts := append(baseOpts,
 		agent.DisableLocalWorker(),
-		agent.EnableRemoteWorkers(),
-		agent.WithStream(true),
 	)
 
 	a, err := agent.NewAgent(agentOpts...)
@@ -54,7 +52,7 @@ func main() {
 	defer a.Close()
 
 	fmt.Println("=== agent_with_worker interactive stream ===")
-	fmt.Println("Events arrive via the event workflow (UpdateWorkflow path).")
+	fmt.Println("Events are delivered via Temporal Workflow Streams (durable, replayable).")
 	fmt.Println("Simulate scenarios: kill the worker or this process mid-run, then restart.")
 	fmt.Println("Type 'exit' or 'quit' or 'bye' to stop.")
 	fmt.Println()
@@ -89,11 +87,20 @@ func main() {
 }
 
 func runStream(ctx context.Context, a *agent.Agent, scanner *bufio.Scanner, prompt string) {
-	eventCh, err := a.Stream(ctx, prompt, nil)
+	// runID is available synchronously before any event arrives.
+	// Persist it when crash-durability matters; use it with Agent.GetAgentStream to resume the stream.
+	agentStream, err := a.Stream(ctx, prompt, nil)
 	if err != nil {
 		fmt.Printf("[error] failed to start stream: %v\n\n", err)
 		return
 	}
+	runID := agentStream.ID()
+	eventCh, err := agentStream.Events(ctx)
+	if err != nil {
+		log.Printf("stream events: %v", err)
+		return
+	}
+	fmt.Println(shared.RunIDLine(runID))
 
 	fmt.Println("--- stream start ---")
 	streamed := false
@@ -144,14 +151,11 @@ func runStream(ctx context.Context, a *agent.Agent, scanner *bufio.Scanner, prom
 			}
 
 		case agent.AgentEventTypeRunFinished:
+			res := shared.RunResultFromFinishedEvent(ev)
 			if streamed {
 				fmt.Println()
-			}
-			res := shared.RunResultFromFinishedEvent(ev)
-			if res != nil && res.Content != "" && !streamed {
-				fmt.Printf("[complete] %s\n", res.Content)
-			} else {
-				fmt.Println("[complete]")
+			} else if res != nil && res.Content != "" {
+				fmt.Println(res.Content)
 			}
 			shared.PrintRunFooters(res)
 

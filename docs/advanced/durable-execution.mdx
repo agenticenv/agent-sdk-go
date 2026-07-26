@@ -1,0 +1,253 @@
+---
+title: "Durable Execution"
+description: "How agent runs survive crashes — automatic worker resilience and client-side Run / Stream recovery"
+---
+
+<Note>
+**Temporal runtime only.** Durable execution — including automatic activity retries and `GetAgentStream` / `GetAgentRun` — requires the [Temporal runtime](/runtimes/temporal). The `LocalRuntime` does not maintain a durable event log; non-zero offsets return `ErrStreamOffsetNotSupported`.
+</Note>
+
+**The problem:** Agent runs invoke LLM calls, tools, and memory operations that take time — and any of these processes can crash mid-run. Workers can restart, your subscriber process can disconnect, and prompts get lost. Re-running the entire agent from scratch wastes tokens and time, and loses partially completed work.
+
+**The solution:** The runtime records every step of the run as durable history. If a worker crashes, completed steps are not re-run — the run resumes exactly where it left off on any available worker. If your client process crashes mid-run, call `GetAgentRun` (non-stream) or `GetAgentStream` + `WithOffset` (stream) to reconnect without restarting the agent.
+
+These guarantees are independent:
+
+| Guarantee | What it means | Who handles it |
+|---|---|---|
+| **Server-side durability** | The run and all its steps survive worker crashes and restarts | Runtime — automatic, no SDK code needed |
+| **Client-side stream recovery** | Your subscriber process can reconnect after a crash and resume the event stream from exactly where it left off | Your code — `GetAgentStream` + `WithOffset` |
+| **Client-side run recovery** | Your process can reconnect to a still-running non-stream `Run` and wait for the result | Your code — `GetAgentRun` then `Get` / `Done` |
+
+## Server-side durability
+
+The runtime records every step of the agent run — LLM calls, tool executions, approvals, memory operations — as durable activities in the workflow history. When a worker crashes or restarts:
+
+- **In-flight activities** are automatically retried on a recovered or different worker
+- **Completed activities** are not re-executed — the run fast-forwards through recorded history
+- **The final result is identical** regardless of how many worker interruptions occurred
+
+This is automatic. No SDK changes are needed beyond using the Temporal runtime.
+
+### Activity retry and streaming
+
+When an LLM activity retries (after a transient error or worker crash), the LLM call restarts on the new attempt. The SDK detects this and signals any connected subscribers to discard token events from the failed attempt. Subscribers transparently receive clean token delivery from the new attempt — no duplicate or garbled output.
+
+### Experiencing it
+
+The [Durable Agent](/examples/durable-agent) example is a hands-on lab for this behavior. Scenarios 3, 4, and 6 deliberately crash or stop workers mid-run and show:
+
+- Runs completing after the worker that started them is killed
+- Graceful and crash restarts with no data loss
+- Multiple workers sharing a task queue
+
+## Client-side stream recovery
+
+If YOUR process — the one consuming the event stream — crashes or disconnects, the run continues on the server side but your subscriber loses the live connection. Use `GetAgentStream` to resubscribe and resume from exactly where you left off.
+
+<Warning>
+**Persist `runID` from the handle immediately.** Both `Stream` and `Run` return a handle whose `ID()` is available before events or `Get` complete. Persist that ID (and stream offsets) before consuming the channel so a mid-run crash can reconnect.
+</Warning>
+
+### The five-step protocol
+
+**1. Persist `runID` before consuming events.**
+
+```go
+// Stream ctx owns the run — cancel it only when you want to stop the agent.
+// Use a separate Events ctx so a subscriber disconnect does not CancelWorkflow.
+agentStream, err := a.Stream(ctx, prompt, nil)
+if err != nil {
+    return err
+}
+runID := agentStream.ID()
+// Persist runID → DB, file, or cache — before reading events.
+// It must survive a process crash.
+saveRunID(sessionID, runID)
+
+eventCh, err := agentStream.Events(eventsCtx)
+if err != nil {
+    return err
+}
+```
+
+**2. Track the offset of each received event.**
+
+Events from a durable stream carry a monotonic offset. Persist the last seen offset before processing each event — this is your resume point.
+
+```go
+for ev := range eventCh {
+    if ev == nil {
+        continue
+    }
+    if ob, ok := ev.(interface{ Offset() (int64, bool) }); ok {
+        if off, has := ob.Offset(); has {
+            saveOffset(sessionID, off) // persist before processing
+        }
+    }
+    handleEvent(ev)
+}
+```
+
+`Offset()` returns `(offset int64, ok bool)`. When `ok` is `false` the event was emitted client-side by the SDK (e.g. `RUN_STARTED`) and has no stream position — do not use it as a resume point.
+
+**3. On restart, call `GetAgentStream` then `Events` with the saved offset.**
+
+```go
+savedRunID, savedOffset := loadSavedRun(sessionID)
+agentStream, err := a.GetAgentStream(ctx, savedRunID)
+if err != nil {
+    if errors.Is(err, agent.ErrRunAlreadyCompleted) {
+        // Workflow finished while disconnected — see below.
+        clearSavedRun(sessionID)
+        return
+    }
+    return err
+}
+resumeCh, err := agentStream.Events(ctx, agent.WithOffset(savedOffset))
+if err != nil {
+    return err
+}
+```
+
+**4. Skip already-processed events, then resume normally.**
+
+The stream may redeliver from `savedOffset`. Skip events at or below that point before resuming normal handling.
+
+```go
+for ev := range resumeCh {
+    if ev == nil {
+        continue
+    }
+    if ob, ok := ev.(interface{ Offset() (int64, bool) }); ok {
+        if off, has := ob.Offset(); has && off <= savedOffset {
+            continue // already processed before the crash
+        }
+    }
+    handleEvent(ev)
+}
+```
+
+**5. Clear saved state on `RUN_FINISHED` or `RUN_ERROR`.**
+
+```go
+case agent.AgentEventTypeRunFinished, agent.AgentEventTypeRunError:
+    clearSavedRun(sessionID)
+```
+
+### Reconnect requires a running workflow
+
+`GetAgentStream` only works while the workflow is still executing. Once the workflow completes, fails, or times out, the stream log is no longer available for replay. Calling `GetAgentStream` on a finished run returns `ErrRunAlreadyCompleted` — clear your saved state and continue from conversation/memory or start a new run.
+
+```go
+agentStream, err := a.GetAgentStream(ctx, savedRunID)
+if errors.Is(err, agent.ErrRunAlreadyCompleted) {
+    // The run completed successfully while you were disconnected.
+    // The work was done — only the streaming view is lost.
+    // If WithConversation is configured, the response is in history; start a new turn.
+    // Otherwise, start a new run to get a fresh response.
+    clearSavedRun(sessionID)
+    return
+}
+```
+
+**Important:** `ErrRunAlreadyCompleted` does not mean the agent failed. Temporal completed the run — the LLM responded, tools ran, everything finished. What is lost is only the **streaming view** of those events. If you have `WithConversation` configured, the final response is already stored in conversation history and a follow-up turn will have full context.
+
+**Practical timing:** reconnect only works while the workflow is still running. For short queries that complete in seconds, it may finish before you reconnect. After `GetAgentRun` / `GetAgentStream`, `WithTimeout` (if set) starts **fresh** — not the remaining time from the original `Run` / `Stream`. See [Timeouts & Modes](/advanced/timeouts-and-modes#timeouts-after-reconnect-temporal).
+
+### Approval events on reconnect
+
+If an approval was already resolved while your subscriber was disconnected, the SDK filters it out automatically on reconnect — you will not be re-prompted for an approval that was already actioned.
+
+## Client-side run recovery
+
+If YOUR process started a non-stream `Run` and then crashed or exited before `Get` returned, the workflow continues on the server. Persist `runID` from `AgentRun.ID()` immediately after `Run`, then call `GetAgentRun` on restart to wait for the result:
+
+```go
+agentRun, err := a.Run(ctx, prompt, nil)
+if err != nil {
+    return err
+}
+saveRunID(sessionID, agentRun.ID()) // before Get / Done
+
+// ... process crash ...
+
+savedRunID := loadSavedRunID(sessionID)
+run, err := a.GetAgentRun(ctx, savedRunID)
+if err != nil {
+    if errors.Is(err, agent.ErrRunAlreadyCompleted) {
+        // Workflow finished while disconnected — outcome is not on this handle.
+        // Load from conversation/memory, or start a new run.
+        clearSavedRun(sessionID)
+        return nil
+    }
+    return err // including ErrRunNotFound
+}
+result, err := run.Get(ctx) // or <-run.Done() then Get
+if err != nil {
+    return err
+}
+clearSavedRun(sessionID)
+fmt.Println(result.Content)
+```
+
+Same rule as stream reconnect: `GetAgentRun` only works while the workflow is still executing. Once it completes, fails, or times out, you get `ErrRunAlreadyCompleted` — clear saved state and continue from conversation/memory. Cancelling the `GetAgentRun` / `Get` context does not cancel the workflow — use `AgentRun.Cancel`. After reconnect, `WithTimeout` starts fresh. See [Run](/getting-started/run#reconnect-with-getagentrun) and [Timeouts & Modes](/advanced/timeouts-and-modes#what-each-context-does).
+
+## API reference
+
+```go
+// GetAgentStream returns a handle for a prior stream run (must still be live).
+func (a *Agent) GetAgentStream(ctx context.Context, runID string) (AgentStream, error)
+
+// Events resumes delivery; WithOffset skips already-consumed durable log entries.
+func (s AgentStream) Events(ctx context.Context, opts ...AgentStreamOption) (<-chan AgentEvent, error)
+
+func WithOffset(offset int64) AgentStreamOption
+
+// GetAgentRun resumes a still-running non-stream Run by ID.
+func (a *Agent) GetAgentRun(ctx context.Context, runID string) (AgentRun, error)
+```
+
+`ErrRunAlreadyCompleted` — returned when the workflow is no longer running. Clear saved state and start a new turn/run.
+
+`ErrRunNotFound` — returned when `runID` is unknown or the runtime cannot reconnect (e.g. `LocalRuntime` after a crash).
+
+`ErrStreamOffsetNotSupported` — returned by `LocalRuntime` for non-zero offsets (no durable stream log).
+
+## Runtime support
+
+| Runtime | Server-side durability | Client-side reconnect |
+|---|---|---|
+| Temporal | Automatic — no code needed | `GetAgentStream` + `WithOffset`; `GetAgentRun` (while workflow is live) |
+| Local | No | Same-process handle only — no crash reconnect |
+
+## Examples
+
+<CardGroup cols={2}>
+  <Card title="Durable Agent" icon="shield" href="/examples/durable-agent" horizontal>
+    Interactive lab: crash workers, kill processes, observe durability in action
+  </Card>
+  <Card title="Reconnect" icon="rotate" href="/examples/reconnect" horizontal>
+    Single-process demo: stream, simulate crash, reconnect from saved offset
+  </Card>
+</CardGroup>
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Distributed Execution" icon="gears" href="/advanced/distributed-execution" horizontal>
+    Split agent client and worker into separate processes
+  </Card>
+  <Card title="Run" icon="play" href="/getting-started/run#reconnect-with-getagentrun" horizontal>
+    GetAgentRun — reconnect a non-stream Run
+  </Card>
+  <Card title="Approvals" icon="circle-check" href="/features/approvals" horizontal>
+    Human-in-the-loop tool approval and reconnect interaction
+  </Card>
+  <Card title="Streaming" icon="wave-pulse" href="/getting-started/streaming" horizontal>
+    RunID, event types, and the streaming API
+  </Card>
+  <Card title="Temporal Runtime" icon="server" href="/runtimes/temporal" horizontal>
+    Durable execution architecture and event delivery
+  </Card>
+</CardGroup>

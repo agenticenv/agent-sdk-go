@@ -20,14 +20,18 @@ if err != nil {
 }
 defer a.Close()
 
-result, err := a.Run(ctx, "Hello", nil)
+agentRun, err := a.Run(ctx, "Hello", nil)
+if err != nil {
+    // handle start error
+}
+result, err := agentRun.Get(ctx)
 ```
 
 See [Quickstart](/getting-started/quickstart) for a complete example.
 
 ## How it works
 
-When you call `Run`, `RunAsync`, or `Stream`, the SDK executes the full agent loop in your process:
+When you call `Run` or `Stream`, the SDK executes the full agent loop in your process:
 
 1. Load conversation history and recalled memory (when configured)
 2. Call the LLM with the merged tool list
@@ -55,13 +59,56 @@ The only capabilities exclusive to Temporal are **durable execution** (crash rec
 | Limitation | Detail |
 |---|---|
 | **No crash recovery** | If the process exits mid-run, the run is lost — no replay, no resume |
+| **No crash reconnect** | `GetAgentRun` / `GetAgentStream` return `ErrRunNotFound` / `ErrStreamNotFound` after a crash; `Events(..., WithOffset(n))` with `n > 0` returns `ErrStreamOffsetNotSupported` |
 | **Single process** | No horizontal worker scaling |
 | **In-memory conversation only** | Redis works technically, but split-process deployments require Temporal |
 | **No split client/worker** | `DisableLocalWorker` and `NewAgentWorker` require the Temporal runtime |
 
 <Note>
-These limits matter for production workloads where runs must survive deploys or scale independently. For those cases, see [Temporal runtime](/runtimes/temporal).
+Handles from `Run` / `Stream` are same-process only. For crash reconnect (`GetAgentRun`, `GetAgentStream` + `WithOffset`), use the [Temporal runtime](/runtimes/temporal).
 </Note>
+
+## Error handling
+
+On in-process, errors are returned directly to the caller:
+
+### Run
+
+```go
+run, err := a.Run(ctx, prompt, nil)
+if err != nil {
+    // Start error (context cancelled, config issue)
+    // If nil, the run started; check result via Get
+}
+
+result, err := run.Get(ctx)
+if err != nil {
+    // Run error (LLM failure, tool panic, timeout, context cancelled)
+    // result may be nil or partially populated
+}
+```
+
+### Stream
+
+```go
+stream, err := a.Stream(ctx, prompt, nil)
+if err != nil {
+    // Start error
+}
+
+events, err := stream.Events(ctx)
+if err != nil {
+    // Events subscribe error — including ErrStreamOffsetNotSupported
+    // when WithOffset(n) is used with n > 0
+}
+
+for ev := range events {
+    // Channel closes after RUN_FINISHED or RUN_ERROR.
+    // Cancelling Stream's ctx cancels the run (terminal event still delivered).
+}
+```
+
+Any panic inside a tool call is caught and returned as a `RUN_ERROR` event / error result, with the panic message included. The run does not propagate the panic to your caller.
 
 ## When to use
 

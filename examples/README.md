@@ -2,6 +2,64 @@
 
 These programs exercise **agent-sdk-go** (`github.com/agenticenv/agent-sdk-go`). By default examples run on the **local** runtime (in-process, no external services). Set `AGENT_RUNTIME=temporal` in `.env` for durable Temporal execution.
 
+## Configuration
+
+Set this up once before running any example. Per-example READMEs only list extra services or variables beyond this base.
+
+### Flow
+
+1. **`cd examples`** — every `go run` and `task` command assumes this directory.
+2. **Create `examples/.env`** — gitignored file for your API key and any overrides (see below).
+3. **Run an example** — e.g. `go run ./simple_agent "Hello"`. On startup, [`config.go`](config.go) loads env vars and each program builds its agent from that config.
+4. **Optional infra** — if the example needs Redis, Temporal, Weaviate, etc., start it first with `task infra:*:up` ([Setup](#setup)), then `go run`.
+
+You do not copy or edit `.env.defaults` for normal use — it supplies committed defaults (ports, stdio MCP command, Temporal host, etc.) and is loaded automatically before your `.env`.
+
+### Requirements
+
+| Requirement | Notes |
+|---|---|
+| **Go 1.26+** | `go version` |
+| **LLM API key** | `LLM_APIKEY` in `examples/.env` |
+| **Working directory** | Run commands from **`examples/`** |
+
+Supported providers: `openai`, `anthropic`, `gemini` — set `LLM_PROVIDER` and `LLM_MODEL` in `.env` (defaults in [`.env.defaults`](.env.defaults)).
+
+### Environment files
+
+Load order (later wins):
+
+| Layer | File / source | Purpose |
+|---|---|---|
+| 1 | [`.env.defaults`](.env.defaults) | Committed defaults — loaded automatically; do not put secrets here |
+| 2 | [`.env`](.env) | Your secrets and local overrides (gitignored) |
+| 3 | Process environment | `export`, root `Taskfile.yml` dotenv, or CI — highest precedence |
+
+Create `.env` once with at least your LLM key:
+
+```bash
+cd examples
+cat >> .env <<'EOF'
+LLM_APIKEY=your-key-here
+LLM_PROVIDER=openai
+LLM_MODEL=gpt-4o
+EOF
+```
+
+Never commit API keys. Override any default the same way — e.g. `AGENT_RUNTIME=temporal`, remote `A2A_URL`, or `MCP_TRANSPORT=streamable_http` + `MCP_STREAMABLE_HTTP_URL`.
+
+### Optional dependencies
+
+| Dependency | When needed |
+|---|---|
+| **Docker + Compose** | Weaviate, pgvector, Redis, Temporal, OTLP collector |
+| **[Task](https://taskfile.dev)** | `task infra:*:up` from `examples/` — see [Setup](#setup) |
+| **Node.js** | MCP stdio server (`npx`), AG-UI Next.js UI |
+| **Temporal server** | When `AGENT_RUNTIME=temporal` — see [Runtime](#runtime) |
+| **`EMBEDDING_OPENAI_APIKEY`** | pgvector and some memory/retriever examples |
+
+Full variable list: [Env vars](#env-vars) below and [`.env.defaults`](.env.defaults).
+
 ## Runtime
 
 | Mode | How to enable | Requirement |
@@ -33,8 +91,8 @@ These examples run with `AGENT_RUNTIME=local` (default) or `AGENT_RUNTIME=tempor
 | `agent_with_stream` | Streaming with `Stream` — **`TEXT_MESSAGE_*`**, **`TOOL_CALL_*`**, **`RUN_FINISHED`**; prints token usage from **`RUN_FINISHED`** result when present | — |
 | `agent_with_agui` | Go **`POST /agui` SSE** + **Next.js + CopilotKit** ([`agent_with_agui/README.md`](agent_with_agui/README.md)) — agent server, then `ui/` dev server | UI manual (`npm run dev` in `ui/`) |
 | `agent_with_stream_conversation` | Stream + conversation; avoid printing the same text twice (**`TEXT_MESSAGE_CONTENT`** deltas vs **`RUN_FINISHED`** body) | — |
-| `agent_with_run_async` | `RunAsync` — `resultCh`; `WithApprovalHandler` for approvals (same as `Run`) | — |
-| `agent_with_concurrent_runs` | Multiple `RunAsync` calls in parallel on a **single** `Agent` instance — fan-out with `WaitGroup`, results printed as they arrive | — |
+| `agent_with_nonblocking_run` | Non-blocking `Run` — wait on `AgentRun.Done()`, then `Get()`; `WithApprovalHandler` for approvals | — |
+| `agent_with_concurrent_runs` | Multiple `Run` calls in parallel on a **single** `Agent` instance — fan-out with `WaitGroup`, results via `Get` as they arrive | — |
 | `multiple_agents` | Multiple agents with `WithInstanceId` — sequential or concurrent | — |
 | `agent_with_subagents` | Main agent + math specialist — `WithSubAgents`; prints **`STEP_STARTED` / `STEP_FINISHED`** (sub-agent name) around each child run when using `Stream` | — |
 | `agent_with_json_response` | Structured LLM output — `WithResponseFormat` + `interfaces.JSONSchema` (JSON with schema; no tools) | — |
@@ -59,22 +117,13 @@ Set **`AGENT_RUNTIME=temporal`**. Start **`task infra:temporal:up`** and **`task
 | Example | What it demonstrates | Infra (Task, from `examples/`) |
 |---------|---------------------|--------------------------------|
 | `agent_with_temporal_client` | Caller-owned Temporal client — `WithTemporalClient` + `WithTaskQueue`; TLS, API key, Cloud | `infra:temporal:up`, `infra:temporal:wait` |
-| `agent_with_worker` | Agent and worker in **separate processes** — `DisableLocalWorker` + `NewAgentWorker`; **`Stream`** | `infra:temporal:up`, `infra:temporal:wait` |
-| `durable_agent` | Split-process durability scenarios — **[README](durable_agent/README.md)** | `infra:temporal:up`, `infra:temporal:wait` |
+| `agent_with_worker` | Agent and worker in **separate processes** — `DisableLocalWorker` + `NewAgentWorker`; **`Stream`**; events delivered via **Temporal Workflow Streams** | `infra:temporal:up`, `infra:temporal:wait` |
+| `durable_agent` | Split-process durability — **`Stream`** with Temporal Workflow Streams; kill worker/agent mid-run and restart to observe replay — **[README](durable_agent/README.md)** | `infra:temporal:up`, `infra:temporal:wait` |
+| `agent_with_reconnect` | **`GetAgentStream`** end to end — start a stream, simulate crash after first event, reconnect from saved `runID` + offset via `Events(..., WithOffset(...))`; prints per-event offsets so you can see what to persist — **[README](agent_with_reconnect/README.md)** | `infra:temporal:up`, `infra:temporal:wait` |
 
 ## Setup
 
-**`.env.defaults`** is loaded automatically: valid values for local Task infra (stdio MCP, A2A on `:9999`, Weaviate/pgvector ports, OTLP to LGTM). Create optional **`examples/.env`** (gitignored) for secrets and overrides:
-
-```bash
-# From examples/ — at minimum set keys; override anything else as needed
-cat >> .env <<'EOF'
-LLM_APIKEY=your-key
-EMBEDDING_OPENAI_APIKEY=your-openai-embeddings-key
-EOF
-```
-
-Override **`LLM_PROVIDER`** / **`LLM_MODEL`**, **`MCP_TRANSPORT=streamable_http`** + **`MCP_STREAMABLE_HTTP_URL`**, a remote **`A2A_URL`**, or retriever vars when not using the default local stack. Process environment (export / root **`Taskfile.yml`** `dotenv`) wins over both files. See [env vars](#env-vars) and **`examples/.env.defaults`**.
+For **`.env`** and credentials, see [Configuration](#configuration) first. Add **`EMBEDDING_OPENAI_APIKEY`** there when running pgvector or embedding-backed memory/retriever examples.
 
 **Task** — not installed by default; install via **[Task installation](https://taskfile.dev/installation/)** (platform-specific). Not needed for **`go run ./<example>`** when the overview table has no infra. Compose infra also needs **Docker**. From **`examples/`**: **`task infra:status`**, **`infra:deps:up`** / **`down`**, **`infra:*:up`** / **`down`**. From **repo root**: **`task examples:local`**, **`task examples:temporal`**, **`task examples:all`**. Contributors: run **`task examples:all`** before any PR to catch regressions across local and Temporal runtimes. New examples that can run non-interactively (one-shot, no REPL, no separate worker) should be listed in **`taskfiles/examples.yml`** (`EXAMPLES`, `EXAMPLES_WITH_PROMPTS`, or `EXAMPLES_TEMPORAL` as appropriate). **`task --dry`** only prints commands (no report file). To preview the report layout without running examples or infra, use **`task examples:local:plan`**, **`task examples:temporal:plan`**, or **`task examples:all:plan`**.
 
@@ -188,10 +237,10 @@ go run ./agent_with_stream_conversation "What is 5 * 8?"
 go run ./agent_with_subagents "What is 987 times 654?"
 ```
 
-### RunAsync + concurrent runs + multiple agents
+### Non-blocking Run + concurrent runs + multiple agents
 
 ```bash
-go run ./agent_with_run_async "What is 15 + 27?"
+go run ./agent_with_nonblocking_run "What is 15 + 27?"
 go run ./agent_with_concurrent_runs
 go run ./agent_with_concurrent_runs "Who wrote Hamlet?" "What is sqrt(144)?" "Name a primary color."
 go run ./multiple_agents "What is 7 times 8?"
@@ -302,23 +351,38 @@ AGENT_RUNTIME=temporal go run ./durable_agent/agent "Hello from remote agent!"  
 
 See **[durable_agent/README.md](durable_agent/README.md)** for durability and failure scenarios.
 
+#### Reconnect — resume a stream from a saved offset (`agent_with_reconnect`)
+
+Demonstrates `GetAgentStream`: the agent starts a stream, deliberately cancels it after the first text chunk (simulating a crash), then reconnects with `GetAgentStream(ctx, savedRunID)` and `Events(ctx, WithOffset(savedOffset))`. Events display their offset so you can see what to persist.
+
+For stream runs that must survive process restarts, capture `runID` from `agentStream.ID()` immediately and store it before consuming events — that is the pattern this example shows. See **[agent_with_reconnect/README.md](agent_with_reconnect/README.md)**.
+
+Single-process mode — embedded worker, no separate terminal needed:
+
+```bash
+AGENT_RUNTIME=temporal go run ./agent_with_reconnect/agent "What time is it?"
+```
+
+Optional separate-worker mode (to demonstrate agent+worker split):
+
+```bash
+AGENT_RUNTIME=temporal go run ./agent_with_reconnect/worker       # terminal 1
+AGENT_RUNTIME=temporal go run ./agent_with_reconnect/agent "What time is it?"   # terminal 2
+```
+
 ---
 
 ## Logging
 
-Examples send conversation (user prompt, assistant response) to **stdout** and internal logs to **stderr**. By default only errors are logged.
+Examples send conversation (user prompt, assistant response) to **stdout** and SDK logs to **stderr**. By default SDK logging is off (`LOG_ENABLE=false` → `NoopLogger`); example `fmt`/`log` output is unchanged.
 
-- **See logs while evaluating:** Set `LOG_LEVEL=info` or `LOG_LEVEL=debug` in `.env`, or run:
+- **Enable SDK logs for debugging:** Set `LOG_ENABLE=true` and optionally `LOG_LEVEL`:
   ```bash
-  LOG_LEVEL=debug go run ./simple_agent "Hello, what can you do?"
+  LOG_ENABLE=true LOG_LEVEL=debug go run ./simple_agent "Hello, what can you do?"
   ```
-- **Save logs to a file:** Redirect stderr to a file:
+- **Save logs to a file:**
   ```bash
-  LOG_LEVEL=info go run ./simple_agent "Hello" 2>debug.log
-  ```
-- **Suppress logs:** Show only conversation output:
-  ```bash
-  go run ./simple_agent "Hello" 2>/dev/null
+  LOG_ENABLE=true LOG_LEVEL=info go run ./simple_agent "Hello" 2>debug.log
   ```
 
 ## Run output
@@ -352,7 +416,8 @@ For memory examples, `SHOW_TELEMETRY=true` also prints `total_memory_recalls` an
 | `LLM_APIKEY` | API key |
 | `LLM_MODEL` | e.g. `gpt-4o`, `claude-3-5-sonnet-20241022` |
 | `LLM_BASEURL` | Optional (custom/proxy endpoints) |
-| `LOG_LEVEL` | `error` (default), `warn`, `info`, `debug` — logs go to stderr |
+| `LOG_ENABLE` | `false` (default) or `true` — when `false`, SDK uses `NoopLogger` (no stderr logs) |
+| `LOG_LEVEL` | `error` (default), `warn`, `info`, `debug` — applied when `LOG_ENABLE=true`; logs go to stderr |
 | `SHOW_LLM_USAGE` | Set to `true` to print token usage footer after each run (default: `false`) |
 | `SHOW_TELEMETRY` | Set to `true` to print run telemetry footer after each run (default: `false`) |
 | `SERPER_API_KEY` | For search tool |

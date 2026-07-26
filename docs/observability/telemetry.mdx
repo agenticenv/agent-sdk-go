@@ -98,7 +98,11 @@ See [Retrieval](/features/retrieval) and [Memory](/features/memory) for when eac
 ## Run
 
 ```go
-result, err := a.Run(ctx, "What's the weather in Tokyo?", nil)
+agentRun, err := a.Run(ctx, "What's the weather in Tokyo?", nil)
+if err != nil {
+    return err
+}
+result, err := agentRun.Get(ctx)
 if err != nil {
     return err
 }
@@ -133,10 +137,6 @@ for ev := range eventCh {
     fmt.Println(finished.Result.Telemetry.Run.TotalLLMCalls)
 }
 ```
-
-## RunAsync
-
-Same as `Run` — telemetry is on the final `AgentRunAsyncResult.Result.Telemetry` when the run completes.
 
 ## Token usage vs telemetry
 

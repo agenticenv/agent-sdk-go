@@ -1,23 +1,10 @@
 package agent
 
 import (
-	"context"
 	"testing"
 
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 )
-
-type registryMockTool struct {
-	name string
-}
-
-func (m registryMockTool) Name() string                      { return m.name }
-func (m registryMockTool) DisplayName() string               { return "Mock" }
-func (m registryMockTool) Description() string               { return "mock" }
-func (m registryMockTool) Parameters() interfaces.JSONSchema { return interfaces.JSONSchema{} }
-func (m registryMockTool) Execute(ctx context.Context, args map[string]any) (any, error) {
-	return nil, nil
-}
 
 func TestNewToolRegistry(t *testing.T) {
 	r := NewToolRegistry()
@@ -31,7 +18,7 @@ func TestNewToolRegistry(t *testing.T) {
 
 func TestToolRegistry_RegisterGet(t *testing.T) {
 	r := NewToolRegistry()
-	if err := r.Register(registryMockTool{name: "mock1"}); err != nil {
+	if err := r.Register(testTool(t, "mock1")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -50,10 +37,10 @@ func TestToolRegistry_RegisterGet(t *testing.T) {
 
 func TestToolRegistry_RegisterDuplicate(t *testing.T) {
 	r := NewToolRegistry()
-	if err := r.Register(registryMockTool{name: "mock1"}); err != nil {
+	if err := r.Register(testTool(t, "mock1")); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Register(registryMockTool{name: "mock1"}); err != ErrRegistryDuplicate {
+	if err := r.Register(testTool(t, "mock1")); err != ErrRegistryDuplicate {
 		t.Errorf("second Register err = %v, want ErrRegistryDuplicate", err)
 	}
 }
@@ -67,7 +54,7 @@ func TestToolRegistry_RegisterNil(t *testing.T) {
 
 func TestToolRegistry_Unregister(t *testing.T) {
 	r := NewToolRegistry()
-	if err := r.Register(registryMockTool{name: "a"}); err != nil {
+	if err := r.Register(testTool(t, "a")); err != nil {
 		t.Fatal(err)
 	}
 	if err := r.Unregister("a"); err != nil {
@@ -83,8 +70,8 @@ func TestToolRegistry_Unregister(t *testing.T) {
 
 func TestToolRegistry_ListOrder(t *testing.T) {
 	r := NewToolRegistry()
-	_ = r.Register(registryMockTool{name: "a"})
-	_ = r.Register(registryMockTool{name: "b"})
+	_ = r.Register(testTool(t, "a"))
+	_ = r.Register(testTool(t, "b"))
 
 	tools := r.List()
 	if len(tools) != 2 {
@@ -97,7 +84,7 @@ func TestToolRegistry_ListOrder(t *testing.T) {
 
 func TestRegisterTools(t *testing.T) {
 	r := NewToolRegistry()
-	if err := RegisterTools(r, registryMockTool{name: "a"}, registryMockTool{name: "b"}); err != nil {
+	if err := RegisterTools(r, testTool(t, "a"), testTool(t, "b")); err != nil {
 		t.Fatal(err)
 	}
 	if len(r.List()) != 2 {
@@ -106,7 +93,7 @@ func TestRegisterTools(t *testing.T) {
 }
 
 func TestNormalizeToolRegistry_fromWithTools(t *testing.T) {
-	c := &agentConfig{tools: []interfaces.Tool{registryMockTool{name: "a"}}}
+	c := &agentConfig{tools: []interfaces.Tool{testTool(t, "a")}}
 	if err := c.buildToolRegistry(); err != nil {
 		t.Fatal(err)
 	}
@@ -120,10 +107,10 @@ func TestNormalizeToolRegistry_fromWithTools(t *testing.T) {
 
 func TestNormalizeToolRegistry_userRegistryWins(t *testing.T) {
 	reg := NewToolRegistry()
-	_ = reg.Register(registryMockTool{name: "existing"})
+	_ = reg.Register(testTool(t, "existing"))
 	c := &agentConfig{
 		toolRegistry: reg,
-		tools:        []interfaces.Tool{registryMockTool{name: "from_with_tools"}},
+		tools:        []interfaces.Tool{testTool(t, "from_with_tools")},
 	}
 	if err := c.buildToolRegistry(); err != nil {
 		t.Fatal(err)

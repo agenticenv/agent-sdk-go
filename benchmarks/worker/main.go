@@ -44,7 +44,7 @@ func main() {
 	}
 	defer setup.CloseAgents(tree.Created)
 
-	opts, err := setup.AppendMemoryOptions(cfg, setup.RootOptions(cfg, llm, lgr, setup.RootAgentName, tree.RootPrompt, tree.SubAgents, cfg.Temporal.TaskQueue, false))
+	opts, err := setup.AppendMemoryOptions(cfg, setup.RootOptions(cfg, llm, lgr, setup.RootAgentName, tree.RootPrompt, tree.SubAgents, cfg.Temporal.TaskQueue))
 	if err != nil {
 		log.Fatalf("memory options: %v", err)
 	}

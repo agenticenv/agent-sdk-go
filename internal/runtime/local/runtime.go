@@ -19,7 +19,6 @@ import (
 )
 
 var _ sdkruntime.Runtime = (*LocalRuntime)(nil)
-var _ sdkruntime.EventBusRuntime = (*LocalRuntime)(nil)
 
 // LocalRuntime executes the agent loop in-process, embedding base.Runtime for shared
 // core methods and holding local-specific fields (logger, eventbus).
@@ -28,6 +27,13 @@ type LocalRuntime struct {
 
 	logger   logger.Logger
 	eventbus eventbus.EventBus
+	// ownsEventBus is true when this runtime created the bus (NewLocalRuntime).
+	// setEventBus clears it so a shared parent bus is not torn down by this runtime later.
+	ownsEventBus bool
+
+	// approvalHandler is the Run-path approval callback (agent WithApprovalHandler).
+	// Nil when unset. Stream uses CUSTOM events + Approve instead.
+	approvalHandler types.ApprovalHandler
 
 	// pendingApprovals holds token → resolve channel for tools awaiting human approval.
 	// Used by Approve() to unblock executeSingleTool when the caller responds via OnApproval
@@ -45,6 +51,7 @@ func NewLocalRuntime(opts ...Option) (*LocalRuntime, error) {
 		slog.String("scope", "runtime"),
 		slog.String("name", r.AgentSpec.Name))
 	r.eventbus = eventbus.NewInmem(r.logger)
+	r.ownsEventBus = true
 	return r, nil
 }
 
@@ -98,26 +105,54 @@ func (rt *LocalRuntime) publishLifecycleEvent(channel string, ev events.AgentEve
 	}
 }
 
-// Execute runs the agent loop synchronously and returns the final result.
-// Approval is handled inline via req.ApprovalHandler (no out-of-band tokens).
-func (rt *LocalRuntime) Execute(ctx context.Context, req *sdkruntime.ExecuteRequest) (*types.AgentRunResult, error) {
-	agentName := agentNameFromRuntime(rt)
-	rt.logger.Debug(ctx, "runtime execute",
+// Run starts the agent loop in a background goroutine and returns a [sdkruntime.RunHandle]
+// immediately. Approval is handled inline via rt.approvalHandler (no out-of-band tokens).
+// Use [sdkruntime.RunHandle.Get] or [sdkruntime.RunHandle.Done] to wait for completion.
+func (rt *LocalRuntime) Run(ctx context.Context, req *sdkruntime.RunRequest) (sdkruntime.RunHandle, error) {
+	if req == nil {
+		return nil, fmt.Errorf("local: nil RunRequest")
+	}
+
+	rt.logger.Debug(ctx, "runtime run",
 		slog.String("scope", "runtime"),
-		slog.String("agent", agentName),
+		slog.String("agent", rt.AgentSpec.Name),
 		slog.Int("inputLen", len(req.UserPrompt)))
 
-	// Apply agent timeout when the caller has not set a deadline.
-	runCtx := ctx
+	runID := uuid.New().String()
+	runCtx, runCancel := context.WithCancel(ctx)
 	if d := rt.AgentConfig.Limits.Timeout; d > 0 {
 		if _, hasDeadline := ctx.Deadline(); !hasDeadline {
-			var cancel context.CancelFunc
-			runCtx, cancel = context.WithTimeout(ctx, d)
-			defer cancel()
+			var timeoutCancel context.CancelFunc
+			runCtx, timeoutCancel = context.WithTimeout(runCtx, d)
+			prev := runCancel
+			runCancel = func() {
+				timeoutCancel()
+				prev()
+			}
 		}
 	}
 
-	conversationID := base.GetConversationID(req)
+	rt.shareEventBusWithSubAgents(req.SubAgents)
+
+	handle := newRunHandle(runID, runCancel)
+	go rt.driveRun(runCtx, req, handle)
+	return handle, nil
+}
+
+// driveRun drives the agent loop for a [runHandle] and signals completion via [runHandle.markDone].
+// Must be called in a goroutine started by [LocalRuntime.Run].
+func (rt *LocalRuntime) driveRun(runCtx context.Context, req *sdkruntime.RunRequest, handle *runHandle) {
+	defer func() {
+		if r := recover(); r != nil {
+			err := fmt.Errorf("local: panic in agent loop: %v", r)
+			rt.logger.Error(runCtx, "runtime run panicked",
+				slog.String("scope", "runtime"),
+				slog.String("runID", handle.id),
+				slog.Any("error", err))
+			handle.markDone(nil, err)
+		}
+	}()
+
 	memoryScope, memErr := rt.ResolveMemoryScope(runCtx)
 	if memErr != nil {
 		rt.logger.Warn(runCtx, "runtime memory scope resolve failed, continuing with empty scope",
@@ -125,179 +160,248 @@ func (rt *LocalRuntime) Execute(ctx context.Context, req *sdkruntime.ExecuteRequ
 			slog.Any("error", memErr))
 		memoryScope = interfaces.MemoryScope{}
 	}
-	runID := uuid.New().String()
 
-	tools := req.Tools
+	// EventTypes: empty by default; CUSTOM only when an approval handler is set.
+	eventTypes := []events.AgentEventType{}
+	if rt.approvalHandler != nil {
+		eventTypes = []events.AgentEventType{events.AgentEventTypeCustom}
+	}
 
 	loopResult, err := rt.RunAgentLoop(runCtx, AgentLoopInput{
 		UserPrompt:       req.UserPrompt,
-		RunID:            runID,
-		ConversationID:   conversationID,
+		RunID:            handle.id,
+		ConversationID:   req.ConversationID,
 		MemoryScope:      memoryScope,
 		StreamingEnabled: false,
 		ChannelName:      "",
-		ApprovalHandler:  req.ApprovalHandler,
+		EventTypes:       eventTypes,
+		ApprovalHandler:  rt.approvalHandler,
 		SubAgentRoutes:   buildSubAgentRoutes(req.SubAgents),
 		SubAgentDepth:    0,
 		MaxSubAgentDepth: req.MaxSubAgentDepth,
-		Tools:            tools,
+		Tools:            req.Tools,
 	})
 	if err != nil {
+		rt.logger.Error(runCtx, "runtime run failed",
+			slog.String("scope", "runtime"),
+			slog.String("runID", handle.id),
+			slog.Any("error", err))
+		handle.markDone(nil, err)
+		return
+	}
+
+	handle.markDone(&types.AgentRunResult{
+		Content:   loopResult.Content,
+		AgentName: strings.TrimSpace(rt.AgentSpec.Name),
+		Model:     rt.AgentConfig.LLM.Client.GetModel(),
+		Metadata:  map[string]any{},
+		RunID:     handle.id,
+		LLMUsage:  loopResult.LLMUsage,
+		Telemetry: loopResult.Telemetry,
+	}, nil)
+}
+
+// GetRunHandle always returns [types.ErrRunNotFound]. LocalRuntime does not
+// track runs durably; same-process live handles are managed by the agent run registry.
+// After a process crash there is nothing to reconnect to.
+// Never returns [types.ErrRunAlreadyCompleted] — Local cannot distinguish finished vs
+// unknown; the agent run registry handles in-process terminal checks.
+func (rt *LocalRuntime) GetRunHandle(_ context.Context, _ string) (sdkruntime.RunHandle, error) {
+	return nil, types.ErrRunNotFound
+}
+
+// Stream starts the agent loop in a background goroutine and returns a [sdkruntime.StreamHandle]
+// immediately. Subscribe via [sdkruntime.StreamHandle.Events] (offset 0 only on LocalRuntime).
+// RUN_STARTED is emitted before the loop begins; RUN_FINISHED or RUN_ERROR closes the channel.
+//
+// Cancelling ctx cancels the agent run. The context passed to [sdkruntime.StreamHandle.Events]
+// is independent on Temporal; on LocalRuntime Events ignores that ctx (channel already open).
+// Agent Limits.Timeout applies when ctx has no deadline.
+func (rt *LocalRuntime) Stream(ctx context.Context, req *sdkruntime.RunRequest) (sdkruntime.StreamHandle, error) {
+	if req == nil {
+		return nil, fmt.Errorf("local: nil RunRequest")
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
-	return &types.AgentRunResult{
-		Content:   loopResult.Content,
-		AgentName: strings.TrimSpace(agentName),
-		Model:     rt.AgentConfig.LLM.Client.GetModel(),
-		Metadata:  map[string]any{},
-		LLMUsage:  loopResult.LLMUsage,
-		Telemetry: loopResult.Telemetry,
-	}, nil
-}
-
-// ExecuteStream starts the agent loop in a goroutine and returns a channel of AgentEvent.
-// RUN_STARTED is emitted before the loop begins; RUN_FINISHED or RUN_ERROR closes the channel.
-func (rt *LocalRuntime) ExecuteStream(ctx context.Context, req *sdkruntime.ExecuteRequest) (<-chan events.AgentEvent, error) {
-	agentName := agentNameFromRuntime(rt)
-	rt.logger.Debug(ctx, "runtime execute stream",
+	rt.logger.Debug(ctx, "runtime stream",
 		slog.String("scope", "runtime"),
-		slog.String("agent", agentName),
+		slog.String("agent", rt.AgentSpec.Name),
 		slog.Int("inputLen", len(req.UserPrompt)))
 
-	conversationID := base.GetConversationID(req)
-	memoryScope, memErr := rt.ResolveMemoryScope(ctx)
-	if memErr != nil {
-		rt.logger.Warn(ctx, "runtime memory scope resolve failed, continuing with empty scope",
-			slog.String("scope", "runtime"),
-			slog.Any("error", memErr))
-		memoryScope = interfaces.MemoryScope{}
-	}
-	runID := uuid.New().String()
+	rt.shareEventBusWithSubAgents(req.SubAgents)
 
-	threadID := conversationID
+	runID := uuid.New().String()
+	threadID := req.ConversationID
 	if threadID == "" {
 		threadID = runID
 	}
 	channel := localChannelName(runID)
 
-	// Apply agent timeout.
-	runCtx := ctx
-	var runCancel context.CancelFunc
+	runCtx, runCancel := context.WithCancel(ctx)
 	if d := rt.AgentConfig.Limits.Timeout; d > 0 {
 		if _, hasDeadline := ctx.Deadline(); !hasDeadline {
-			runCtx, runCancel = context.WithTimeout(ctx, d)
+			var timeoutCancel context.CancelFunc
+			runCtx, timeoutCancel = context.WithTimeout(runCtx, d)
+			prev := runCancel
+			runCancel = func() {
+				timeoutCancel()
+				prev()
+			}
 		}
 	}
 
-	// Subscribe before launching the loop so no events are lost.
+	// Subscribe before starting the loop so no events are lost.
 	eventCh, closeSub, err := rt.subscribeToAgentEvents(runCtx, channel)
 	if err != nil {
-		if runCancel != nil {
-			runCancel()
-		}
+		runCancel()
 		return nil, err
 	}
 
-	outCh := make(chan events.AgentEvent, 64)
-
-	// Forward subscription events to the caller's channel.
-	go func() {
-		defer close(outCh)
-		for ev := range eventCh {
-			if ev != nil {
-				outCh <- ev
-			}
-		}
-	}()
-
-	// Emit RUN_STARTED before the loop so callers always see the lifecycle preamble.
+	handle := newStreamHandle(runID, runCancel, eventCh)
 	rt.publishLifecycleEvent(channel, events.NewAgentRunStartedEvent(threadID, runID))
+	go rt.driveStream(runCtx, req, handle, channel, threadID, closeSub)
+	return handle, nil
+}
 
-	// Run the agent loop in a goroutine; emit lifecycle terminal event on completion.
-	go func() {
-		var tools []interfaces.Tool
-		if req != nil {
-			tools = req.Tools
-		}
-		defer func() {
-			if runCancel != nil {
-				runCancel()
-			}
-			_ = closeSub()
-		}()
-		result, loopErr := rt.RunAgentLoop(runCtx, AgentLoopInput{
-			UserPrompt:       req.UserPrompt,
-			RunID:            runID,
-			ConversationID:   conversationID,
-			MemoryScope:      memoryScope,
-			StreamingEnabled: req.StreamingEnabled,
-			ChannelName:      channel,
-			ApprovalHandler:  req.ApprovalHandler,
-			SubAgentRoutes:   buildSubAgentRoutes(req.SubAgents),
-			SubAgentDepth:    0,
-			MaxSubAgentDepth: req.MaxSubAgentDepth,
-			Tools:            tools,
-		})
-
-		if loopErr != nil {
-			rt.logger.Error(runCtx, "runtime stream run failed",
+// driveStream drives the streaming agent loop for a [streamHandle], publishes the
+// terminal lifecycle event, and signals completion via [runHandle.markDone].
+// Must be called in a goroutine started by [LocalRuntime.Stream].
+func (rt *LocalRuntime) driveStream(
+	runCtx context.Context,
+	req *sdkruntime.RunRequest,
+	handle *streamHandle,
+	channel string,
+	threadID string,
+	closeSub func() error,
+) {
+	defer func() { _ = closeSub() }()
+	defer func() {
+		if r := recover(); r != nil {
+			err := fmt.Errorf("local: panic in agent loop: %v", r)
+			rt.logger.Error(runCtx, "runtime stream run panicked",
 				slog.String("scope", "runtime"),
-				slog.String("runID", runID),
-				slog.Any("error", loopErr))
-			rt.publishLifecycleEvent(channel, events.NewAgentRunErrorEvent(loopErr.Error()))
-			return
+				slog.String("runID", handle.id),
+				slog.Any("error", err))
+			rt.publishLifecycleEvent(channel, events.NewAgentRunErrorEvent(err.Error()))
+			handle.markDone(nil, err)
 		}
-
-		agentRunResult := &types.AgentRunResult{
-			Content:   result.Content,
-			AgentName: strings.TrimSpace(agentName),
-			Model:     rt.AgentConfig.LLM.Client.GetModel(),
-			Metadata:  map[string]any{},
-			LLMUsage:  result.LLMUsage,
-			Telemetry: result.Telemetry,
-		}
-		rt.publishLifecycleEvent(channel, events.NewAgentRunFinishedEvent(threadID, runID, agentRunResult))
 	}()
 
-	return outCh, nil
+	memoryScope, memErr := rt.ResolveMemoryScope(runCtx)
+	if memErr != nil {
+		rt.logger.Warn(runCtx, "runtime memory scope resolve failed, continuing with empty scope",
+			slog.String("scope", "runtime"),
+			slog.Any("error", memErr))
+		memoryScope = interfaces.MemoryScope{}
+	}
+
+	streamEventTypes := []events.AgentEventType{events.AgentEventAll}
+	if len(req.EventTypes) > 0 {
+		streamEventTypes = req.EventTypes
+	}
+
+	result, loopErr := rt.RunAgentLoop(runCtx, AgentLoopInput{
+		UserPrompt:       req.UserPrompt,
+		RunID:            handle.id,
+		ConversationID:   req.ConversationID,
+		MemoryScope:      memoryScope,
+		StreamingEnabled: req.EnableLLMStream,
+		ChannelName:      channel,
+		EventTypes:       streamEventTypes,
+		ApprovalHandler:  rt.approvalHandler,
+		SubAgentRoutes:   buildSubAgentRoutes(req.SubAgents),
+		SubAgentDepth:    0,
+		MaxSubAgentDepth: req.MaxSubAgentDepth,
+		Tools:            req.Tools,
+	})
+	if loopErr != nil {
+		rt.logger.Error(runCtx, "runtime stream run failed",
+			slog.String("scope", "runtime"),
+			slog.String("runID", handle.id),
+			slog.Any("error", loopErr))
+		rt.publishLifecycleEvent(channel, events.NewAgentRunErrorEvent(loopErr.Error()))
+		handle.markDone(nil, loopErr)
+		return
+	}
+
+	agentRunResult := &types.AgentRunResult{
+		Content:   result.Content,
+		AgentName: strings.TrimSpace(rt.AgentSpec.Name),
+		Model:     rt.AgentConfig.LLM.Client.GetModel(),
+		Metadata:  map[string]any{},
+		RunID:     handle.id,
+		LLMUsage:  result.LLMUsage,
+		Telemetry: result.Telemetry,
+	}
+	rt.publishLifecycleEvent(channel, events.NewAgentRunFinishedEvent(threadID, handle.id, agentRunResult))
+	handle.markDone(agentRunResult, nil)
+}
+
+// GetStreamHandle always returns [types.ErrStreamNotFound]. LocalRuntime does not
+// track streams durably; same-process live handles are managed by the agent stream registry.
+// After a process crash there is nothing to reconnect to.
+// Never returns [types.ErrRunAlreadyCompleted] — Local cannot distinguish finished vs
+// unknown; the agent stream registry handles in-process terminal checks.
+func (rt *LocalRuntime) GetStreamHandle(_ context.Context, _ string) (sdkruntime.StreamHandle, error) {
+	return nil, types.ErrStreamNotFound
 }
 
 // Approve resolves a pending tool approval registered during a streaming run.
 // When a tool requires approval, executeSingleTool registers a token and blocks; the
 // caller receives a CUSTOM event on the stream with that token and calls Approve to unblock.
+// Returns [types.ErrApprovalAlreadyResolved] when the token is unknown or was already
+// resolved (same sentinel as Temporal when CompleteActivity reports not found).
 func (rt *LocalRuntime) Approve(_ context.Context, approvalToken string, status types.ApprovalStatus) error {
 	val, ok := rt.pendingApprovals.LoadAndDelete(approvalToken)
 	if !ok {
-		return fmt.Errorf("local: no pending approval for token %q", approvalToken)
+		return types.ErrApprovalAlreadyResolved
 	}
 	ch := val.(chan types.ApprovalStatus)
 	ch <- status
 	return nil
 }
 
-// Close releases runtime resources.
+// Close releases runtime resources. When this runtime owns the event bus
+// ([ownsEventBus]), the bus is closed; shared buses from [setEventBus] are left alone.
 func (rt *LocalRuntime) Close() {
+	if rt.ownsEventBus && rt.eventbus != nil {
+		rt.eventbus.Close()
+		rt.ownsEventBus = false
+	}
 	rt.logger.Info(context.Background(), "runtime closed",
 		slog.String("scope", "runtime"),
 		slog.String("name", rt.AgentSpec.Name))
 }
 
-// GetEventBus returns the runtime's in-process event bus so pkg/agent can wire sub-agents
-// to the same bus for streaming fan-in and delegation events.
-func (rt *LocalRuntime) GetEventBus() eventbus.EventBus {
-	return rt.eventbus
-}
-
-// SetEventBus replaces the runtime's event bus. Called by pkg/agent when wiring a sub-agent
-// tree so all agents in the tree share the parent's bus.
-func (rt *LocalRuntime) SetEventBus(bus eventbus.EventBus) {
+// setEventBus replaces the runtime's event bus (parent sharing onto a sub-agent).
+// Clears ownsEventBus so Close does not tear down a bus owned by another runtime.
+func (rt *LocalRuntime) setEventBus(bus eventbus.EventBus) {
 	rt.eventbus = bus
+	rt.ownsEventBus = false
 }
 
-func agentNameFromRuntime(rt *LocalRuntime) string {
-	if rt == nil {
-		return ""
+// shareEventBusWithSubAgents sets this runtime's event bus on each nested LocalRuntime
+// in the SubAgentSpec tree. Called from Run and Stream with req.SubAgents.
+func (rt *LocalRuntime) shareEventBusWithSubAgents(subAgents []*sdkruntime.SubAgentSpec) {
+	for _, sub := range subAgents {
+		if sub != nil {
+			shareEventBusWithSubAgent(rt.eventbus, sub)
+		}
 	}
-	return rt.AgentSpec.Name
+}
+
+// shareEventBusWithSubAgent sets bus on sub.Runtime when it is a *LocalRuntime,
+// then recurses into Children.
+func shareEventBusWithSubAgent(bus eventbus.EventBus, sub *sdkruntime.SubAgentSpec) {
+	if sub == nil || bus == nil {
+		return
+	}
+	if lr, ok := sub.Runtime.(*LocalRuntime); ok {
+		lr.setEventBus(bus)
+	}
+	for _, child := range sub.Children {
+		shareEventBusWithSubAgent(bus, child)
+	}
 }

@@ -15,6 +15,7 @@ func (cfg *agentConfig) buildTemporalRuntime(remoteWorker bool) (*temporal.Tempo
 		temporal.WithLogger(cfg.logger),
 		temporal.WithAgentSpec(cfg.runtimeAgentSpec()),
 		temporal.WithAgentConfig(cfg.runtimeAgentConfig()),
+		temporal.WithApprovalHandler(cfg.approvalHandler),
 		temporal.WithPolicyFingerprint(toolPolicyFingerprint(cfg.toolApprovalPolicy)),
 		temporal.WithMCPFingerprint(mcpConfigFingerprint(cfg.mcpServers, mcpExtraClientNames(cfg.mcpClients))),
 		temporal.WithA2AFingerprint(a2aConfigFingerprint(cfg.a2aServers, a2aExtraClientNames(cfg.a2aClients))),
@@ -39,8 +40,6 @@ func (cfg *agentConfig) buildTemporalRuntime(remoteWorker bool) (*temporal.Tempo
 	if cfg.instanceId != "" {
 		options = append(options, temporal.WithInstanceId(cfg.instanceId))
 	}
-	enableRemote := !remoteWorker && cfg.enableRemoteWorkers
-	options = append(options, temporal.WithEnableRemoteWorkers(enableRemote))
 	return temporal.NewTemporalRuntime(options...)
 }
 
@@ -50,6 +49,7 @@ func (cfg *agentConfig) buildLocalRuntime() (*local.LocalRuntime, error) {
 		local.WithToolExecutionMode(cfg.agentToolExecutionMode),
 		local.WithAgentSpec(cfg.runtimeAgentSpec()),
 		local.WithAgentConfig(cfg.runtimeAgentConfig()),
+		local.WithApprovalHandler(cfg.approvalHandler),
 		local.WithTracer(cfg.tracer),
 		local.WithMetrics(cfg.metrics),
 	}

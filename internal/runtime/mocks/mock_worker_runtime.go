@@ -8,7 +8,6 @@ import (
 	context "context"
 	reflect "reflect"
 
-	events "github.com/agenticenv/agent-sdk-go/internal/events"
 	runtime "github.com/agenticenv/agent-sdk-go/internal/runtime"
 	types "github.com/agenticenv/agent-sdk-go/internal/types"
 	gomock "github.com/golang/mock/gomock"
@@ -63,34 +62,49 @@ func (mr *MockWorkerRuntimeMockRecorder) Close() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MockWorkerRuntime)(nil).Close))
 }
 
-// Execute mocks base method.
-func (m *MockWorkerRuntime) Execute(arg0 context.Context, arg1 *runtime.ExecuteRequest) (*types.AgentRunResult, error) {
+// GetRunHandle mocks base method.
+func (m *MockWorkerRuntime) GetRunHandle(arg0 context.Context, arg1 string) (runtime.RunHandle, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Execute", arg0, arg1)
-	ret0, _ := ret[0].(*types.AgentRunResult)
+	ret := m.ctrl.Call(m, "GetRunHandle", arg0, arg1)
+	ret0, _ := ret[0].(runtime.RunHandle)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// Execute indicates an expected call of Execute.
-func (mr *MockWorkerRuntimeMockRecorder) Execute(arg0, arg1 interface{}) *gomock.Call {
+// GetRunHandle indicates an expected call of GetRunHandle.
+func (mr *MockWorkerRuntimeMockRecorder) GetRunHandle(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Execute", reflect.TypeOf((*MockWorkerRuntime)(nil).Execute), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetRunHandle", reflect.TypeOf((*MockWorkerRuntime)(nil).GetRunHandle), arg0, arg1)
 }
 
-// ExecuteStream mocks base method.
-func (m *MockWorkerRuntime) ExecuteStream(arg0 context.Context, arg1 *runtime.ExecuteRequest) (<-chan events.AgentEvent, error) {
+// GetStreamHandle mocks base method.
+func (m *MockWorkerRuntime) GetStreamHandle(arg0 context.Context, arg1 string) (runtime.StreamHandle, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ExecuteStream", arg0, arg1)
-	ret0, _ := ret[0].(<-chan events.AgentEvent)
+	ret := m.ctrl.Call(m, "GetStreamHandle", arg0, arg1)
+	ret0, _ := ret[0].(runtime.StreamHandle)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// ExecuteStream indicates an expected call of ExecuteStream.
-func (mr *MockWorkerRuntimeMockRecorder) ExecuteStream(arg0, arg1 interface{}) *gomock.Call {
+// GetStreamHandle indicates an expected call of GetStreamHandle.
+func (mr *MockWorkerRuntimeMockRecorder) GetStreamHandle(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExecuteStream", reflect.TypeOf((*MockWorkerRuntime)(nil).ExecuteStream), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetStreamHandle", reflect.TypeOf((*MockWorkerRuntime)(nil).GetStreamHandle), arg0, arg1)
+}
+
+// Run mocks base method.
+func (m *MockWorkerRuntime) Run(arg0 context.Context, arg1 *runtime.RunRequest) (runtime.RunHandle, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Run", arg0, arg1)
+	ret0, _ := ret[0].(runtime.RunHandle)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Run indicates an expected call of Run.
+func (mr *MockWorkerRuntimeMockRecorder) Run(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Run", reflect.TypeOf((*MockWorkerRuntime)(nil).Run), arg0, arg1)
 }
 
 // Start mocks base method.
@@ -117,4 +131,19 @@ func (m *MockWorkerRuntime) Stop() {
 func (mr *MockWorkerRuntimeMockRecorder) Stop() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Stop", reflect.TypeOf((*MockWorkerRuntime)(nil).Stop))
+}
+
+// Stream mocks base method.
+func (m *MockWorkerRuntime) Stream(arg0 context.Context, arg1 *runtime.RunRequest) (runtime.StreamHandle, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Stream", arg0, arg1)
+	ret0, _ := ret[0].(runtime.StreamHandle)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Stream indicates an expected call of Stream.
+func (mr *MockWorkerRuntimeMockRecorder) Stream(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Stream", reflect.TypeOf((*MockWorkerRuntime)(nil).Stream), arg0, arg1)
 }

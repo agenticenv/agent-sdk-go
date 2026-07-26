@@ -3,7 +3,7 @@ title: "Configuration"
 description: "Configure NewAgent options — runtime, LLM, streaming, approvals, timeouts and workers"
 ---
 
-Configure agents by passing functional options to [`NewAgent`](/getting-started/quickstart). The same options apply to [`NewAgentWorker`](/advanced/worker-separation) when running a separate worker process.
+Configure agents by passing functional options to [`NewAgent`](/getting-started/quickstart). The same options apply to [`NewAgentWorker`](/advanced/distributed-execution) when running a separate worker process.
 
 Key defaults: **in-process runtime** (no Temporal options), **5 max iterations**, **parallel tool execution**, **5-minute timeout** on interactive mode. All options can be overridden at construction time; per-run overrides use [`AgentRunOptions`](#per-run-options).
 
@@ -40,7 +40,6 @@ A Temporal connection is **optional**. Omit Temporal options to use the in-proce
 | `WithInstanceId(id)` | Distinguish multiple agents on the same base task queue. See [Multiple Agents](/advanced/multiple-agents) |
 | `WithAgentMode(mode)` | `AgentModeInteractive` (default, 5 min timeout, worker precheck) or `AgentModeAutonomous` (60 min timeout, skips worker precheck) |
 | `DisableLocalWorker()` | Agent process does not poll the task queue — pair with `NewAgentWorker` in a separate process |
-| `EnableRemoteWorkers()` | Required with `DisableLocalWorker` when streaming or approvals flow across processes |
 | `WithDisableFingerprintCheck(disable)` | Skip agent config fingerprint check — break-glass option, not for production use |
 
 See [Runtimes](/runtimes/overview) and [Temporal runtime](/runtimes/temporal) for connection details.
@@ -64,11 +63,10 @@ agent.WithTemporalConfig(&agent.TemporalConfig{
 
 | Option | Description |
 |---|---|
-| `WithStream(enable)` | Enable partial token streaming via `Stream`. See [Streaming](/getting-started/streaming) |
 | `WithMaxIterations(n)` | Max LLM rounds per run (default: **5**). Each round is one LLM call; tool execution doesn't count separately. Increase for complex agents, multi-tool sequences, or runs with sub-agent delegation. See [Timeouts & Modes](/advanced/timeouts-and-modes) |
 | `WithTimeout(d)` | Default run timeout when the context has no deadline |
 | `WithApprovalTimeout(d)` | Max wait per approval — defaults to timeout minus 30s |
-| `WithApprovalHandler(fn)` | Callback for tool and delegation approvals on `Run` and `RunAsync` |
+| `WithApprovalHandler(fn)` | Callback for tool and delegation approvals on `Run` |
 | `WithAgentToolExecutionMode(mode)` | `Parallel` (default) or `Sequential` per LLM turn |
 
 Context deadlines always take precedence over `WithTimeout`. See [Timeouts & Modes](/advanced/timeouts-and-modes).
@@ -109,7 +107,7 @@ See [Tracing](/observability/tracing) and [Observability example](/examples/obse
 
 ## Per-run options
 
-Pass [`AgentRunOptions`](https://pkg.go.dev/github.com/agenticenv/agent-sdk-go/pkg/agent#AgentRunOptions) as the third argument to `Run`, `RunAsync`, and `Stream`:
+Pass [`AgentRunOptions`](https://pkg.go.dev/github.com/agenticenv/agent-sdk-go/pkg/agent#AgentRunOptions) as the third argument to `Run`. For `Stream`, use [`AgentStreamOptions`](https://pkg.go.dev/github.com/agenticenv/agent-sdk-go/pkg/agent#AgentStreamOptions) (same conversation fields):
 
 ```go
 opts := &agent.AgentRunOptions{
@@ -117,7 +115,11 @@ opts := &agent.AgentRunOptions{
         ID: "session-1",
     },
 }
-result, err := a.Run(ctx, "Hello", opts)
+agentRun, err := a.Run(ctx, "Hello", opts)
+if err != nil {
+    // handle start error
+}
+result, err := agentRun.Get(ctx)
 ```
 
 When conversation is enabled, pass the same `ID` on every call in a session to share history across turns.
@@ -137,7 +139,7 @@ See [Dynamic capabilities](/advanced/dynamic-capabilities).
 
 ## Agent and worker alignment
 
-When splitting client and worker across processes, `NewAgent` and `NewAgentWorker` must share identical configuration — the SDK validates this with a fingerprint check at activity entry. See [Worker separation](/advanced/worker-separation).
+When splitting client and worker across processes, `NewAgent` and `NewAgentWorker` must share identical configuration — the SDK validates this with a fingerprint check at activity entry. See [Distributed execution](/advanced/distributed-execution).
 
 ## Token usage
 

@@ -46,7 +46,6 @@ func main() {
 		agent.WithDescription("Agent that streams events via Stream"),
 		agent.WithSystemPrompt("You are a helpful assistant with access to tools. Use them when appropriate: current time, weather, math, random numbers, Wikipedia, and web search."),
 		agent.WithLLMClient(llmClient),
-		agent.WithStream(true),
 		agent.WithToolRegistry(reg),
 		agent.WithToolApprovalPolicy(agent.AutoToolApprovalPolicy()),
 		agent.WithLogger(config.NewLoggerFromLogConfig(cfg)),
@@ -66,12 +65,20 @@ func main() {
 
 	fmt.Println("user:", prompt)
 
-	eventCh, err := a.Stream(context.Background(), prompt, nil)
+	// runID is available synchronously — before any event arrives on the channel.
+	// Persist it before consuming eventCh when crash-durability or reconnect matters.
+	agentStream, err := a.Stream(context.Background(), prompt, nil)
 	if err != nil {
 		log.Printf("Stream failed: %v", err)
 		return
 	}
-
+	runID := agentStream.ID()
+	eventCh, err := agentStream.Events(context.Background())
+	if err != nil {
+		log.Printf("stream events: %v", err)
+		return
+	}
+	fmt.Println(shared.RunIDLine(runID))
 	fmt.Println("--- events ---")
 
 	streamed := false

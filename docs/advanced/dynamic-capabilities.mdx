@@ -5,7 +5,7 @@ description: "Add or remove tools, MCP servers, A2A agents, and sub-agents at ru
 
 **The problem:** You configured your agent with a fixed tool set at startup, but different users, tenants, or sessions need different capabilities — and you can't restart the process for each change.
 
-**The solution:** All capabilities are resolved from registries at execution time. Each `Run`, `Stream`, or `RunAsync` picks up the current registry state — no restart needed. Add tools for a premium user, remove them on logout, swap MCP servers per tenant, or register a specialist sub-agent when a feature flag is enabled.
+**The solution:** All capabilities are resolved from registries at execution time. Each `Run` or `Stream` picks up the current registry state — no restart needed. Add tools for a premium user, remove them on logout, swap MCP servers per tenant, or register a specialist sub-agent when a feature flag is enabled.
 
 Combine with static setup (`WithTools`, `WithMCPConfig`, etc.) by passing initial capabilities at `NewAgent`, then mutating registries as context changes.
 
@@ -30,11 +30,13 @@ a, _ := agent.NewAgent(
 )
 
 // First run — only tools already in the registry
-result, _ := a.Run(ctx, "What is 17 * 23?", nil)
+agentRun, _ := a.Run(ctx, "What is 17 * 23?", nil)
+result, _ := agentRun.Get(ctx)
 
 // Add a tool before the next run
 _ = a.ToolRegistry().Register(calculator.New())
-result, _ = a.Run(ctx, "What is 17 * 23?", nil)
+agentRun, _ = a.Run(ctx, "What is 17 * 23?", nil)
+result, _ = agentRun.Get(ctx)
 
 // Remove it again
 _ = a.ToolRegistry().Unregister("calculator")
@@ -57,7 +59,8 @@ cl, _ := mcpclient.NewClient("extra-server",
 )
 _ = mcpReg.RegisterClient(cl)
 // Next run includes tools from extra-server
-result, _ := a.Run(ctx, prompt, nil)
+agentRun, _ := a.Run(ctx, prompt, nil)
+result, _ := agentRun.Get(ctx)
 ```
 
 An unreachable server fails at run time when tools are resolved. See [MCP](/features/mcp).
@@ -83,7 +86,8 @@ math, _ := agent.NewAgent(
 )
 _ = a.SubAgentRegistry().Register(math)
 
-result, _ := a.Run(ctx, "What is 144 / 12?", nil)
+agentRun, _ := a.Run(ctx, "What is 144 / 12?", nil)
+result, _ := agentRun.Get(ctx)
 
 _ = a.SubAgentRegistry().Unregister("Math")
 ```

@@ -38,9 +38,13 @@ func Run(ctx context.Context, cfg setup.Config) (*RunOutcome, error) {
 	}
 	defer a.Close()
 
-	result, err := a.Run(ctx, cfg.UserPrompt, nil)
+	agentRun, err := a.Run(ctx, cfg.UserPrompt, nil)
 	if err != nil {
 		return nil, fmt.Errorf("agent run: %w", err)
+	}
+	result, err := agentRun.Get(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("agent run get result: %w", err)
 	}
 	return &RunOutcome{Result: result}, nil
 }
@@ -54,14 +58,22 @@ func runMemoryStoreRecall(ctx context.Context, cfg setup.Config) (*RunOutcome, e
 
 	scoped := memory.WithContextUserID(ctx, cfg.Memory.UserID)
 
-	storeResult, err := a.Run(scoped, cfg.Memory.StorePrompt, nil)
+	storeRun, err := a.Run(scoped, cfg.Memory.StorePrompt, nil)
 	if err != nil {
 		return nil, fmt.Errorf("memory store run: %w", err)
 	}
+	storeResult, err := storeRun.Get(scoped)
+	if err != nil {
+		return nil, fmt.Errorf("memory store run get result: %w", err)
+	}
 
-	recallResult, err := a.Run(scoped, cfg.Memory.RecallPrompt, nil)
+	recallRun, err := a.Run(scoped, cfg.Memory.RecallPrompt, nil)
 	if err != nil {
 		return nil, fmt.Errorf("memory recall run: %w", err)
+	}
+	recallResult, err := recallRun.Get(scoped)
+	if err != nil {
+		return nil, fmt.Errorf("memory recall run get result: %w", err)
 	}
 
 	return &RunOutcome{

@@ -71,6 +71,16 @@ func ShowTelemetry() bool {
 	return envBool("SHOW_TELEMETRY")
 }
 
+// RunIDLine returns a formatted line for printing the run ID at stream or async-run start.
+// Callers should print this immediately after receiving the runID from Stream or Run —
+// before consuming the channel — to illustrate that the ID is available synchronously.
+func RunIDLine(runID string) string {
+	if runID == "" {
+		return ""
+	}
+	return fmt.Sprintf("[run_id] %s", runID)
+}
+
 // PrintRunFooters prints usage and telemetry when SHOW_LLM_USAGE / SHOW_TELEMETRY are enabled.
 func PrintRunFooters(result *agent.AgentRunResult) {
 	if result == nil {

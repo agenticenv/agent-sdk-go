@@ -18,7 +18,7 @@ func TestHasTemporalRuntime(t *testing.T) {
 
 func TestBuildAgentRuntime_NoTemporalBackend_BuildsLocalRuntime(t *testing.T) {
 	// When no Temporal config is set, buildAgentRuntime falls back to LocalRuntime.
-	cfg := &agentConfig{Name: "n", LLMClient: stubLLM{}}
+	cfg := &agentConfig{Name: "n", LLMClient: testLLM(t)}
 	rt, err := cfg.buildAgentRuntime(false)
 	if err != nil {
 		t.Fatalf("expected local runtime to be built, got error: %v", err)

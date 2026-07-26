@@ -1,25 +1,11 @@
 package agent
 
 import (
-	"context"
 	"strings"
 	"testing"
 
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 )
-
-// mockTool implements interfaces.Tool for policy tests.
-type mockTool struct {
-	name string
-}
-
-func (m mockTool) Name() string                      { return m.name }
-func (m mockTool) DisplayName() string               { return "Mock" }
-func (m mockTool) Description() string               { return "mock" }
-func (m mockTool) Parameters() interfaces.JSONSchema { return interfaces.JSONSchema{} }
-func (m mockTool) Execute(ctx context.Context, args map[string]any) (any, error) {
-	return nil, nil
-}
 
 func TestToolPolicyFingerprint(t *testing.T) {
 	if toolPolicyFingerprint(nil) != "nil" {
@@ -51,7 +37,7 @@ func (unknownPolicyForFingerprintTest) RequiresApproval(interfaces.Tool) bool { 
 
 func TestRequireAllToolApprovalPolicy_RequiresApproval(t *testing.T) {
 	p := RequireAllToolApprovalPolicy{}
-	tool := mockTool{name: "any"}
+	tool := testTool(t, "any")
 	if !p.RequiresApproval(tool) {
 		t.Error("RequireAllToolApprovalPolicy should require approval for all tools")
 	}
@@ -59,7 +45,7 @@ func TestRequireAllToolApprovalPolicy_RequiresApproval(t *testing.T) {
 
 func TestAutoToolApprovalPolicy_RequiresApproval(t *testing.T) {
 	p := AutoToolApprovalPolicy()
-	tool := mockTool{name: "any"}
+	tool := testTool(t, "any")
 	if p.RequiresApproval(tool) {
 		t.Error("AutoToolApprovalPolicy should not require approval for any tool")
 	}
@@ -82,7 +68,7 @@ func TestAllowlistToolApprovalPolicy(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tool := mockTool{name: tt.toolName}
+		tool := testTool(t, tt.toolName)
 		got := allowed.RequiresApproval(tool)
 		if got != tt.expectApproval {
 			t.Errorf("tool %q: RequiresApproval = %v, want %v", tt.toolName, got, tt.expectApproval)
@@ -131,7 +117,7 @@ func TestAllowlistToolApprovalPolicy_configured(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tool := mockTool{name: tt.toolName}
+		tool := testTool(t, tt.toolName)
 		got := p.RequiresApproval(tool)
 		if got != tt.expectApproval {
 			t.Errorf("tool %q: RequiresApproval = %v, want %v", tt.toolName, got, tt.expectApproval)

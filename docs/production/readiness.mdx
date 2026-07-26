@@ -4,11 +4,11 @@ sidebarTitle: "Readiness"
 description: "Deploy agents to production with a checklist for timeouts, secrets, LLM fallback, and observability setup"
 ---
 
-Use this checklist before deploying agents built with Agent SDK for Go to production. It complements the [Temporal runtime](/runtimes/temporal) and [Worker separation](/advanced/worker-separation) guides.
+Use this checklist before deploying agents built with Agent SDK for Go to production. It complements the [Temporal runtime](/runtimes/temporal) and [Distributed execution](/advanced/distributed-execution) guides.
 
 ## Run limits and agent loops
 
-- **Bound run duration** — Set [`WithTimeout`](/advanced/timeouts-and-modes) and/or a context deadline on `Run`, `Stream`, and `RunAsync`. Context deadline always wins over agent timeout.
+- **Bound run duration** — Set [`WithTimeout`](/advanced/timeouts-and-modes) and/or a context deadline on `Run` and `Stream`. Context deadline always wins over agent timeout.
 - **Approval timeouts** — When tools require approval, set [`WithApprovalTimeout`](/advanced/timeouts-and-modes) less than the run timeout. Default is agent timeout − 30s.
 - **Max iterations** — Set [`WithMaxIterations`](/getting-started/configuration) to cap LLM rounds (default 5). Runs finish with `finish_reason: max_iterations` when hit.
 - **Sub-agent depth** — Set [`WithMaxSubAgentDepth`](/features/sub-agents) when using delegation (default 2).
@@ -28,9 +28,9 @@ See [LLM Providers](/getting-started/llm-providers) for the `LLMClient` interfac
 
 ## Error handling patterns
 
-- **Always check errors** — `Run`, `RunAsync`, and `Stream` all return errors. A `nil` result with a non-nil error means the run did not complete — do not access `result.Content`.
+- **Always check errors** — `Run` and `Stream` return start errors; `Get` / stream events surface run failures. A failed `Get` means the run did not complete successfully — do not access `result.Content`.
 - **Typed errors** — `context.DeadlineExceeded` means a timeout fired. `ErrMaxIterationsReached` means the agent hit `WithMaxIterations`. Log both with the run context (agent name, conversation ID).
-- **`RunAsync` errors** — Errors arrive on the channel as `AgentRunAsyncResult.Error`. Always select or range on the channel — an unread channel leaks the goroutine.
+- **Non-blocking `Run`** — Wait on `AgentRun.Done()`, then call `Get`. Cancelling the `Get` context only unblocks the waiter — use `AgentRun.Cancel` to cancel the run.
 - **`Stream` errors** — An `AgentEventTypeRunError` event carries the error message. Drain the channel to completion even after an error event; close from the producing side.
 - **Surface errors to users clearly** — Distinguish timeout errors ("request took too long"), provider errors ("AI service unavailable"), and logic errors ("agent reached its step limit") in your UI layer.
 - **Retries** — Retrying `Run` with the same `ConversationOptions.ID` will continue from the saved conversation history (if conversation is enabled). Beware of idempotency if tools have side effects.
@@ -53,8 +53,7 @@ See [Timeouts & Modes](/advanced/timeouts-and-modes) for the full failure behavi
 
 ## Split processes and Temporal
 
-- **Worker separation** — When using [`DisableLocalWorker`](/advanced/worker-separation), run [`NewAgentWorker`](/advanced/worker-separation) with **matching configuration** on a separate process.
-- **Remote workers** — Pass [`EnableRemoteWorkers()`](/advanced/worker-separation) when using streaming or approvals across processes.
+- **Distributed execution** — When using [`DisableLocalWorker`](/advanced/distributed-execution), run [`NewAgentWorker`](/advanced/distributed-execution) with **matching configuration** on a separate process. Streaming and approvals work across processes with no extra option — the agent subscribes to the run's event stream directly through the Temporal client.
 - **Distributed conversation** — Use Redis (not in-memory) for conversation when client and worker are split. Same config on both processes.
 - **Config fingerprint** — Keep task queue, tools, MCP/A2A setup, memory, hooks, and observability config aligned. Avoid [`WithDisableFingerprintCheck`](/getting-started/configuration) in production.
 - **Integration tests** — Exercise approval and streaming paths with split processes before deploy.
@@ -65,7 +64,7 @@ See [Timeouts & Modes](/advanced/timeouts-and-modes) for the full failure behavi
 - **LLM provider rate limits** — Most providers enforce requests-per-minute (RPM) and tokens-per-minute (TPM) limits. A `429` from the provider surfaces as an LLM activity error in Temporal (which retries it) or a run error in-process (which does not retry by default).
 - **Implement exponential backoff** — In your `LLMClient` wrapper, catch `429` responses and back off before retrying. Do not let unbounded retries exhaust your Temporal workflow timeout.
 - **Track token usage** — Monitor `agent.llm.tokens.input` and `agent.llm.tokens.output` OTLP metrics. Set alerts when per-minute token totals approach your provider limit. See [Metrics](/observability/metrics).
-- **Cap concurrent runs** — A burst of concurrent `RunAsync` calls multiplies LLM load. Use a semaphore or rate limiter in your API layer before calling the agent.
+- **Cap concurrent runs** — A burst of concurrent `Run` calls multiplies LLM load. Use a semaphore or rate limiter in your API layer before calling the agent.
 - **Autonomous vs interactive mode** — `AgentModeAutonomous` (60 min timeout) can queue many long-running workflows. Size your Temporal workers and provider quota to match expected concurrency.
 
 ## Cost controls
@@ -101,12 +100,12 @@ See [Timeouts & Modes](/advanced/timeouts-and-modes) for the full failure behavi
 - **Worker health checks** — Probe that workers are polling before accepting traffic. `AgentModeInteractive` with `DisableLocalWorker` performs a pre-check automatically — ensure at least one worker is registered on the task queue.
 - **Rolling deploys** — Temporal workflows replay on new workers. After an SDK upgrade, verify workflow replay compatibility in staging before rolling out to production workers.
 
-See [Worker Separation](/advanced/worker-separation) and [Multiple Agents](/advanced/multiple-agents).
+See [Distributed Execution](/advanced/distributed-execution) and [Multiple Agents](/advanced/multiple-agents).
 
 ## Operations
 
 - **Graceful shutdown** — Call `Agent.Close()` to flush OTLP exporters. Call `AgentWorker.Stop()` on worker processes.
-- **Streaming UX** — Live stream events are not backfilled after disconnect. Design interactive UIs to wait for the current turn — see [Temporal streaming guarantees](/runtimes/temporal#streaming-and-approvals).
+- **Streaming UX** — Live stream events are not automatically backfilled after disconnect. On the Temporal runtime, use [`GetAgentStream`](/examples/reconnect) with the saved `runID` and last event offset (`Events(..., WithOffset(...))`) to resume the stream after a process crash. Persist `runID` (`stream.ID()`) and offset before consuming each event. See [Reconnect example](/examples/reconnect) and [Temporal streaming](/runtimes/temporal#streaming-and-approvals).
 - **Health checks** — Verify Temporal connectivity, worker availability, Redis/Postgres backends, and OTLP collector health in your deployment probes.
 
 ## Pre-deploy checklist
@@ -116,7 +115,7 @@ See [Worker Separation](/advanced/worker-separation) and [Multiple Agents](/adva
 | LLM fallback | Failover strategy or wrapper in place; fallback path tested |
 | Rate limits | Backoff on 429; token/request quota sized for target concurrency |
 | Cost controls | `MaxTokens`, `MaxIterations` set; token metrics monitored |
-| Error handling | All `Run`/`Stream`/`RunAsync` errors checked and surfaced cleanly |
+| Error handling | All `Run`/`Get`/`Stream` errors checked and surfaced cleanly |
 | Timeouts | `WithTimeout`, context deadlines, `WithApprovalTimeout` set for your SLA |
 | Iterations | `WithMaxIterations` and `WithMaxSubAgentDepth` bounded |
 | Approvals | Policy matches risk for each agent and specialist |
@@ -143,7 +142,7 @@ Run these against your target environment to confirm configuration:
 
 <CardGroup cols={2}>
 
-  <Card title="Worker Separation" icon="server" href="/advanced/worker-separation" horizontal>
+  <Card title="Distributed Execution" icon="server" href="/advanced/distributed-execution" horizontal>
     Split client and worker processes
   </Card>
 

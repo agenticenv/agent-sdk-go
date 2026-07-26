@@ -54,7 +54,11 @@ a, err := agent.NewAgent(
     }),
 )
 
-result, err := a.Run(context.Background(), prompt, nil)
+agentRun, err := a.Run(context.Background(), prompt, nil)
+if err != nil {
+    log.Fatal(err)
+}
+result, err := agentRun.Get(context.Background())
 ```
 
 `Execute` blocks on `WorkflowRunner.Run` — the agent run stays open until the workflow finishes or a timeout fires.

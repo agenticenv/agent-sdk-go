@@ -12,13 +12,19 @@ Serialize any event with `event.ToJSON()` and forward it over **SSE, WebSocket, 
 
 ## Basic integration
 
-When using conversation, pass the session ID in `AgentRunOptions` — the AG-UI client uses it to thread messages correctly across turns:
+When using conversation, pass the session ID in `AgentStreamOptions` — the AG-UI client uses it to thread messages correctly across turns:
 
 ```go
-opts := &agent.AgentRunOptions{
+opts := &agent.AgentStreamOptions{
     ConversationOptions: &agent.ConversationOptions{ID: sessionID},
 }
-eventCh, err := a.Stream(ctx, prompt, opts)
+agentStream, err := a.Stream(ctx, prompt, opts)
+if err != nil {
+    return err
+}
+runID := agentStream.ID()
+_ = runID // the RUN_STARTED event also carries runID via its RunID field
+eventCh, err := agentStream.Events(ctx)
 ```
 
 Enable streaming, then forward serialized events to your frontend over SSE, WebSocket, or Redis:
@@ -26,10 +32,15 @@ Enable streaming, then forward serialized events to your frontend over SSE, WebS
 ```go
 a, err := agent.NewAgent(
     agent.WithLLMClient(llmClient),
-    agent.WithStream(true),
 )
 
-eventCh, err := a.Stream(ctx, prompt, nil)
+agentStream, err := a.Stream(ctx, prompt, nil)
+if err != nil {
+    return err
+}
+runID := agentStream.ID()
+_ = runID
+eventCh, err := agentStream.Events(ctx)
 if err != nil {
     return err
 }

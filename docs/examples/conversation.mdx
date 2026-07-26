@@ -37,11 +37,15 @@ a, err := agent.NewAgent(
     agent.WithConversation(conv),
 )
 
-result, err := a.Run(ctx, prompt, &agent.AgentRunOptions{
-    ConversationOptions: &agent.ConversationRunOptions{
+agentRun, err := a.Run(ctx, prompt, &agent.AgentRunOptions{
+    ConversationOptions: &agent.ConversationOptions{
         ID: "session-123",
     },
 })
+if err != nil {
+    log.Fatal(err)
+}
+result, err := agentRun.Get(ctx)
 ```
 
 Use a distributed store (Redis, not in-memory) when agent client and worker run in separate processes. See [Conversation](/features/conversation).

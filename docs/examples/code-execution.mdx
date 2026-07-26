@@ -49,7 +49,11 @@ a, err := agent.NewAgent(
     }),
 )
 
-result, err := a.Run(context.Background(), prompt, nil)
+agentRun, err := a.Run(context.Background(), prompt, nil)
+if err != nil {
+    log.Fatal(err)
+}
+result, err := agentRun.Get(context.Background())
 ```
 
 `Execute` blocks until `SandboxRuntime.Execute` returns the program output and exit code.

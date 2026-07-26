@@ -2,23 +2,24 @@ package temporal
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
 
-	"github.com/agenticenv/agent-sdk-go/internal/eventbus"
 	"github.com/agenticenv/agent-sdk-go/internal/events"
 	sdkruntime "github.com/agenticenv/agent-sdk-go/internal/runtime"
 	"github.com/agenticenv/agent-sdk-go/internal/runtime/base"
+	"github.com/agenticenv/agent-sdk-go/internal/store"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
 	"github.com/nexus-rpc/sdk-go/nexus"
 	"github.com/stretchr/testify/mock"
 	enumspb "go.temporal.io/api/enums/v1"
 	taskqueuepb "go.temporal.io/api/taskqueue/v1"
+	workflowpb "go.temporal.io/api/workflow/v1"
 	workflowservice "go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/activity"
 	temporalmocks "go.temporal.io/sdk/mocks"
@@ -48,12 +49,6 @@ func (n *noopTemporalWorker) Stop()                     { n.stopped = true }
 
 var _ worker.Worker = (*noopTemporalWorker)(nil)
 
-func TestGetEventTaskQueue(t *testing.T) {
-	if got := getEventTaskQueue("my-queue"); got != "my-queue-events" {
-		t.Errorf("getEventTaskQueue(%q) = %q, want my-queue-events", "my-queue", got)
-	}
-}
-
 func TestAgentNameFromRuntime(t *testing.T) {
 	if agentNameFromRuntime(nil) != "" {
 		t.Fatal("nil rt")
@@ -63,80 +58,6 @@ func TestAgentNameFromRuntime(t *testing.T) {
 	}
 	if got := agentNameFromRuntime(rt); got != "n" {
 		t.Fatalf("got %q", got)
-	}
-}
-
-func TestSyntheticStreamCompleteEvent(t *testing.T) {
-	ev := syntheticStreamCompleteEvent(nil, "threadID", "runID", "root")
-	fin, _ := ev.(*events.AgentRunFinishedEvent)
-	if ev == nil || ev.Type() != events.AgentEventTypeRunFinished || fin.Result == nil || fin.Result.AgentName != "root" {
-		t.Fatalf("nil resp: %+v", ev)
-	}
-
-	ev2 := syntheticStreamCompleteEvent(&types.AgentRunResult{
-		Content:   "body",
-		AgentName: "from-result",
-		LLMUsage:  &types.LLMUsage{TotalTokens: 9},
-	}, "threadID", "runID", "root")
-
-	fin2, _ := ev2.(*events.AgentRunFinishedEvent)
-	result := fin2.Result
-	if result == nil {
-		t.Fatalf("expected AgentRunResult, got nil")
-	}
-	if result.LLMUsage == nil {
-		t.Fatal("llm usage should be set")
-	}
-	if result.Content != "body" || result.AgentName != "from-result" || result.LLMUsage.TotalTokens != 9 {
-		t.Fatalf("with AgentName: %+v", ev2)
-	}
-
-	ev3 := syntheticStreamCompleteEvent(&types.AgentRunResult{Content: "c", AgentName: ""}, "threadID", "runID", "fallback")
-	fin3, _ := ev3.(*events.AgentRunFinishedEvent)
-	result = fin3.Result
-	if result == nil {
-		t.Fatalf("expected AgentRunResult, got nil")
-	}
-	if result.AgentName != "fallback" {
-		t.Fatalf("fallback name: got %q", result.AgentName)
-	}
-
-	ev4 := syntheticStreamCompleteEvent(&types.AgentRunResult{Content: "only"}, "threadID", "runID", "")
-	fin4, _ := ev4.(*events.AgentRunFinishedEvent)
-	result = fin4.Result
-	if result == nil {
-		t.Fatalf("expected AgentRunResult, got nil")
-	}
-	if result.AgentName != "" {
-		t.Fatalf("empty rootName with empty resp.AgentName: got %q", result.AgentName)
-	}
-}
-
-func TestResolveEventPipeline(t *testing.T) {
-	l := logger.NoopLogger()
-	rt := &TemporalRuntime{
-		logger:    l,
-		taskQueue: "tq",
-	}
-	ewf, etq, err := rt.resolveEventPipeline(context.Background(), "My Agent")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if etq != "tq-events" {
-		t.Fatalf("event task queue = %q", etq)
-	}
-	if !strings.HasPrefix(ewf, "agent-event-My-Agent-") {
-		t.Fatalf("event workflow id = %q", ewf)
-	}
-	ewf2, etq2, err := rt.resolveEventPipeline(context.Background(), "My Agent")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ewf2 != ewf || etq2 != etq {
-		t.Fatalf("second call same agent should match: %q/%q vs %q/%q", ewf, etq, ewf2, etq2)
-	}
-	if rt.activeEventWorkflowID == "" {
-		t.Fatal("activeEventWorkflowID should be set")
 	}
 }
 
@@ -154,51 +75,41 @@ func TestSubAgentQuery(t *testing.T) {
 
 func TestAgent_BeginRunEndRun(t *testing.T) {
 	l := logger.DefaultLogger("error")
-	a := &TemporalRuntime{logger: l}
+	a := &TemporalRuntime{
+		logger:     l,
+		activeRuns: store.NewKV[string, *runHandle](),
+	}
+	h := &runHandle{}
 
 	// First run: begin then end, map should be empty after cleanup.
-	cleanup1 := a.beginRun("wf1")
-	a.runMu.Lock()
-	if _, ok := a.activeRunWorkflowIDs["wf1"]; !ok {
+	a.activeRuns.Set("wf1", h)
+	if _, ok := a.activeRuns.Get("wf1"); !ok {
 		t.Error("wf1 should be in active set after beginRun")
 	}
-	a.runMu.Unlock()
-	cleanup1()
-	a.runMu.Lock()
-	if _, ok := a.activeRunWorkflowIDs["wf1"]; ok {
+	a.activeRuns.Delete("wf1")
+	if _, ok := a.activeRuns.Get("wf1"); ok {
 		t.Error("wf1 should be removed from active set after cleanup")
 	}
-	a.runMu.Unlock()
 
 	// Concurrent runs: two distinct workflow IDs are both tracked simultaneously.
-	cleanup2 := a.beginRun("wf2")
-	cleanup3 := a.beginRun("wf3")
-	a.runMu.Lock()
-	if _, ok := a.activeRunWorkflowIDs["wf2"]; !ok {
+	a.activeRuns.Set("wf2", h)
+	a.activeRuns.Set("wf3", h)
+	if _, ok := a.activeRuns.Get("wf2"); !ok {
 		t.Error("wf2 should be in active set")
 	}
-	if _, ok := a.activeRunWorkflowIDs["wf3"]; !ok {
+	if _, ok := a.activeRuns.Get("wf3"); !ok {
 		t.Error("wf3 should be in active set")
 	}
-	a.runMu.Unlock()
 
 	// Ending one run does not affect the other.
-	cleanup2()
-	a.runMu.Lock()
-	if _, ok := a.activeRunWorkflowIDs["wf2"]; ok {
+	a.activeRuns.Delete("wf2")
+	if _, ok := a.activeRuns.Get("wf2"); ok {
 		t.Error("wf2 should be removed after its cleanup")
 	}
-	if _, ok := a.activeRunWorkflowIDs["wf3"]; !ok {
+	if _, ok := a.activeRuns.Get("wf3"); !ok {
 		t.Error("wf3 should still be in active set")
 	}
-	a.runMu.Unlock()
-	cleanup3()
-}
-
-func TestEventChannelName(t *testing.T) {
-	if got := eventChannelName("run-abc"); got != "agent_event_run-abc" {
-		t.Errorf("eventChannelName = %q", got)
-	}
+	a.activeRuns.Delete("wf3")
 }
 
 func TestRetryPolicy(t *testing.T) {
@@ -216,19 +127,6 @@ func TestKeyvalsToAny(t *testing.T) {
 	}
 }
 
-func TestTemporalRuntime_SetEventBus_GetEventBus(t *testing.T) {
-	l := logger.NoopLogger()
-	rt := &TemporalRuntime{logger: l}
-	if rt.GetEventBus() != nil {
-		t.Fatal("zero-value runtime should have nil event bus until set")
-	}
-	bus := eventbus.NewInmem(l)
-	rt.SetEventBus(bus)
-	if rt.GetEventBus() != bus {
-		t.Fatal("GetEventBus should return the bus set by SetEventBus")
-	}
-}
-
 func TestGetWorkflowID_Format(t *testing.T) {
 	rt := &TemporalRuntime{}
 	run := rt.getWorkflowID("runID", "MyAgent", false)
@@ -242,27 +140,6 @@ func TestGetWorkflowID_Format(t *testing.T) {
 	// Spaces/special chars sanitized like event workflow IDs.
 	if got := rt.getWorkflowID("runID", "  my agent  ", false); !strings.HasPrefix(got, "agent-run-my-agent-") {
 		t.Fatalf("sanitize run id: %q", got)
-	}
-}
-
-func TestGetEventWorkflowID_Format(t *testing.T) {
-	rt := &TemporalRuntime{}
-	id := rt.getEventWorkflowID("AgentX")
-	if !strings.HasPrefix(id, "agent-event-AgentX-") || len(id) < len("agent-event-AgentX-")+8 {
-		t.Fatalf("unexpected event workflow id: %q", id)
-	}
-	id2 := rt.getEventWorkflowID("AgentX")
-	if id2 != id {
-		t.Fatalf("expected stable id for same runtime+name: %q vs %q", id, id2)
-	}
-	other := (&TemporalRuntime{}).getEventWorkflowID("AgentX")
-	if other == id {
-		t.Fatalf("different TemporalRuntime should not share event workflow id: %q", id)
-	}
-	// Same runtime: sanitized name shares the per-runtime suffix.
-	wantHello := fmt.Sprintf("agent-event-hello-world-%s", rt.eventWorkflowIDSuffix)
-	if got := rt.getEventWorkflowID("  hello world  "); got != wantHello {
-		t.Fatalf("sanitize: got %q want %q", got, wantHello)
 	}
 }
 
@@ -326,6 +203,16 @@ func describeTaskQueueWithPollers() *workflowservice.DescribeTaskQueueResponse {
 	}
 }
 
+// describeWorkflowRunning returns a DescribeWorkflowExecution response indicating the workflow is still running.
+// Used in unit tests to satisfy the pre-check inside Events() without a real Temporal server.
+func describeWorkflowRunning() *workflowservice.DescribeWorkflowExecutionResponse {
+	return &workflowservice.DescribeWorkflowExecutionResponse{
+		WorkflowExecutionInfo: &workflowpb.WorkflowExecutionInfo{
+			Status: enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING,
+		},
+	}
+}
+
 func TestTemporalRuntime_Run_Success(t *testing.T) {
 	tc := temporalmocks.NewClient(t)
 	wfRun := temporalmocks.NewWorkflowRun(t)
@@ -335,6 +222,8 @@ func TestTemporalRuntime_Run_Success(t *testing.T) {
 		Return(describeTaskQueueWithPollers(), nil)
 	tc.On("ExecuteWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(wfRun, nil)
+	tc.On("GetWorkflow", mock.Anything, mock.Anything, "").Return(wfRun).Maybe()
+	tc.On("CancelWorkflow", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	wfRun.On("Get", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 		p := args.Get(1).(**types.AgentRunResult)
 		if p != nil {
@@ -352,13 +241,21 @@ func TestTemporalRuntime_Run_Success(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	resp, err := rt.Execute(context.Background(), &sdkruntime.ExecuteRequest{UserPrompt: "hi"})
+	handle, err := rt.Run(context.Background(), &sdkruntime.RunRequest{UserPrompt: "hi"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
+	}
+	resp, err := handle.Get(context.Background())
+	if err != nil {
+		t.Fatalf("Get: %v", err)
 	}
 	if resp.AgentName != want.AgentName || resp.Content != want.Content || resp.Model != want.Model {
 		t.Fatalf("resp = %+v, want %+v", resp, want)
 	}
+	if resp.RunID != handle.ID() {
+		t.Fatalf("RunID = %q, want handle ID %q", resp.RunID, handle.ID())
+	}
+	waitHandleDone(t, handle.Done())
 }
 
 func TestTemporalRuntime_Run_NoWorkers(t *testing.T) {
@@ -379,7 +276,7 @@ func TestTemporalRuntime_Run_NoWorkers(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 
-	_, err = rt.Execute(ctx, &sdkruntime.ExecuteRequest{UserPrompt: "hi"})
+	_, err = rt.Run(ctx, &sdkruntime.RunRequest{UserPrompt: "hi"})
 	if err == nil {
 		t.Fatal("expected error when no workers")
 	}
@@ -405,7 +302,7 @@ func TestTemporalRuntime_Run_ExecuteWorkflowError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = rt.Execute(context.Background(), &sdkruntime.ExecuteRequest{UserPrompt: "hi"})
+	_, err = rt.Run(context.Background(), &sdkruntime.RunRequest{UserPrompt: "hi"})
 	if err == nil || err.Error() != "start failed" {
 		t.Fatalf("got %v, want start failed", err)
 	}
@@ -418,6 +315,8 @@ func TestTemporalRuntime_Run_WorkflowGetError(t *testing.T) {
 		Return(describeTaskQueueWithPollers(), nil)
 	tc.On("ExecuteWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(wfRun, nil)
+	tc.On("GetWorkflow", mock.Anything, mock.Anything, "").Return(wfRun).Maybe()
+	tc.On("CancelWorkflow", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	wfRun.On("Get", mock.Anything, mock.Anything).Return(errors.New("workflow failed"))
 
 	rt, err := NewTemporalRuntime(
@@ -430,31 +329,40 @@ func TestTemporalRuntime_Run_WorkflowGetError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = rt.Execute(context.Background(), &sdkruntime.ExecuteRequest{UserPrompt: "hi"})
+	handle, err := rt.Run(context.Background(), &sdkruntime.RunRequest{UserPrompt: "hi"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	_, err = handle.Get(context.Background())
 	if err == nil || err.Error() != "workflow failed" {
 		t.Fatalf("got %v, want workflow failed", err)
 	}
+	waitHandleDone(t, handle.Done())
 }
 
-func TestTemporalRuntime_ExecuteStream_Success(t *testing.T) {
+func TestTemporalRuntime_Stream_Success(t *testing.T) {
 	tc := temporalmocks.NewClient(t)
-	// Do not use NewWorkflowRun(t): custom WorkflowRun avoid AssertExpectations flake against async Get.
+	// Do not use NewWorkflowRun(t): avoids AssertExpectations flake on async Get.
 	wfRun := &temporalmocks.WorkflowRun{}
 
-	var localChannel string
 	tc.On("DescribeTaskQueue", mock.Anything, "tq", enumspb.TASK_QUEUE_TYPE_WORKFLOW).
 		Return(describeTaskQueueWithPollers(), nil)
 	tc.On("ExecuteWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Run(func(args mock.Arguments) {
-			in := args.Get(3).(AgentWorkflowInput)
-			localChannel = in.LocalChannelName
-		}).Return(wfRun, nil)
+		Return(wfRun, nil)
+	tc.On("GetWorkflow", mock.Anything, mock.Anything, "").Return(wfRun).Maybe()
 	wfRun.On("Get", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 		p := args.Get(1).(**types.AgentRunResult)
 		if p != nil {
 			*p = &types.AgentRunResult{AgentName: "root"}
 		}
 	}).Return(nil)
+	// Events gate (running), then Subscribe ends via failed poll + terminal describe.
+	tc.On("DescribeWorkflowExecution", mock.Anything, mock.Anything, mock.Anything).
+		Return(describeWorkflowRunning(), nil).Once()
+	stubWorkflowStreamSubscribeEnd(tc)
+	tc.On("DescribeWorkflowExecution", mock.Anything, mock.Anything, mock.Anything).
+		Return(describeWorkflowCompleted(), nil).Maybe()
+	tc.On("CancelWorkflow", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	rt, err := NewTemporalRuntime(
 		WithTemporalClient(tc, "tq"),
@@ -467,34 +375,52 @@ func TestTemporalRuntime_ExecuteStream_Success(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	outCh, err := rt.ExecuteStream(ctx, &sdkruntime.ExecuteRequest{UserPrompt: "hi"})
+	h, err := rt.Stream(ctx, &sdkruntime.RunRequest{UserPrompt: "hi"})
 	if err != nil {
-		t.Fatalf("ExecuteStream: %v", err)
+		t.Fatalf("Stream: %v", err)
 	}
-	if localChannel == "" {
-		t.Fatal("expected workflow input to set local channel")
+	outCh, err := h.Events(ctx, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
 	}
 
-	var sawComplete bool
+	var sawStarted, sawComplete bool
 	for ev := range outCh {
-		if ev != nil && ev.Type() == events.AgentEventTypeRunFinished {
+		if ev == nil {
+			continue
+		}
+		switch ev.Type() {
+		case events.AgentEventTypeRunStarted:
+			sawStarted = true
+		case events.AgentEventTypeRunFinished:
 			sawComplete = true
-			break
 		}
 	}
-	if !sawComplete {
-		t.Fatal("expected complete event on stream")
+	if !sawStarted {
+		t.Fatal("expected RUN_STARTED event on stream")
 	}
+	if !sawComplete {
+		t.Fatal("expected RUN_FINISHED event on stream")
+	}
+	waitHandleDone(t, h.Done())
 }
 
-func TestTemporalRuntime_ExecuteStream_WorkflowGetError(t *testing.T) {
+func TestTemporalRuntime_Stream_WorkflowGetError(t *testing.T) {
 	tc := temporalmocks.NewClient(t)
-	wfRun := temporalmocks.NewWorkflowRun(t)
+	// Do not use NewWorkflowRun(t): avoids AssertExpectations flake on async Get.
+	wfRun := &temporalmocks.WorkflowRun{}
 	tc.On("DescribeTaskQueue", mock.Anything, "tq", enumspb.TASK_QUEUE_TYPE_WORKFLOW).
 		Return(describeTaskQueueWithPollers(), nil)
 	tc.On("ExecuteWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(wfRun, nil)
+	tc.On("GetWorkflow", mock.Anything, mock.Anything, "").Return(wfRun).Maybe()
 	wfRun.On("Get", mock.Anything, mock.Anything).Return(errors.New("stream wf err"))
+	tc.On("DescribeWorkflowExecution", mock.Anything, mock.Anything, mock.Anything).
+		Return(describeWorkflowRunning(), nil).Once()
+	stubWorkflowStreamSubscribeEnd(tc)
+	tc.On("DescribeWorkflowExecution", mock.Anything, mock.Anything, mock.Anything).
+		Return(describeWorkflowCompleted(), nil).Maybe()
+	tc.On("CancelWorkflow", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	rt, err := NewTemporalRuntime(
 		WithTemporalClient(tc, "tq"),
@@ -506,21 +432,30 @@ func TestTemporalRuntime_ExecuteStream_WorkflowGetError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	outCh, err := rt.ExecuteStream(context.Background(), &sdkruntime.ExecuteRequest{UserPrompt: "hi"})
+	ctx := context.Background()
+	h, err := rt.Stream(ctx, &sdkruntime.RunRequest{UserPrompt: "hi"})
 	if err != nil {
-		t.Fatalf("ExecuteStream: %v", err)
+		t.Fatalf("Stream: %v", err)
+	}
+	outCh, err := h.Events(ctx, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
 	}
 
 	var sawErr bool
 	for ev := range outCh {
-		if ev != nil && ev.Type() == events.AgentEventTypeRunError && ev.(*events.AgentRunErrorEvent).Message == "stream wf err" {
-			sawErr = true
+		if ev != nil && ev.Type() == events.AgentEventTypeRunError {
+			errEv, ok := ev.(*events.AgentRunErrorEvent)
+			if ok && errEv.Message == "stream wf err" {
+				sawErr = true
+			}
 			break
 		}
 	}
 	if !sawErr {
-		t.Fatal("expected error event on stream")
+		t.Fatal("expected RUN_ERROR event with correct message on stream")
 	}
+	waitHandleDone(t, h.Done())
 }
 
 func TestTemporalRuntime_Start_Idempotent(t *testing.T) {
@@ -642,25 +577,21 @@ func TestTemporalRuntime_Close_StopsWorkers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ew := &noopTemporalWorker{}
 	aw := &noopTemporalWorker{}
-	rt.eventWorker = ew
 	rt.agentWorker = aw
 
 	rt.Close()
-	if !ew.stopped || !aw.stopped {
-		t.Fatalf("event stopped=%v agent stopped=%v", ew.stopped, aw.stopped)
+	if !aw.stopped {
+		t.Fatalf("agent worker should be stopped after Close")
 	}
 }
 
-func TestTemporalRuntime_Close_ActiveWorkflows(t *testing.T) {
+// TestTemporalRuntime_Close_ActiveWorkflows_CancelSucceeds verifies Close() prefers a graceful
+// CancelWorkflow over TerminateWorkflow when cancellation succeeds.
+func TestTemporalRuntime_Close_ActiveWorkflows_CancelSucceeds(t *testing.T) {
 	tc := temporalmocks.NewClient(t)
-	wfRun := temporalmocks.NewWorkflowRun(t)
 
-	tc.On("TerminateWorkflow", mock.Anything, "run-w1", "", "agent closed").Return(nil).Once()
-	tc.On("SignalWorkflow", mock.Anything, "evt-w1", "", eventWorkflowCompleteSignal, nil).Return(nil).Once()
-	tc.On("GetWorkflow", mock.Anything, "evt-w1", "").Return(wfRun).Once()
-	wfRun.On("Get", mock.Anything, nil).Return(nil).Once()
+	tc.On("CancelWorkflow", mock.Anything, "run-w1", "").Return(nil).Once()
 
 	rt, err := NewTemporalRuntime(
 		WithTemporalClient(tc, "tq"),
@@ -670,12 +601,510 @@ func TestTemporalRuntime_Close_ActiveWorkflows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rt.runMu.Lock()
-	rt.activeRunWorkflowIDs = map[string]struct{}{"run-w1": {}}
-	rt.activeEventWorkflowID = "evt-w1"
-	rt.runMu.Unlock()
+	rt.activeRuns.Set("run-w1", &runHandle{})
+
+	rt.Close()
+	tc.AssertExpectations(t) // no TerminateWorkflow call expected/set up; would fail if invoked
+}
+
+// TestTemporalRuntime_Close_ActiveWorkflows_CancelFailsFallsBackToTerminate verifies Close()
+// falls back to TerminateWorkflow only when CancelWorkflow itself errors.
+func TestTemporalRuntime_Close_ActiveWorkflows_CancelFailsFallsBackToTerminate(t *testing.T) {
+	tc := temporalmocks.NewClient(t)
+
+	tc.On("CancelWorkflow", mock.Anything, "run-w1", "").Return(errors.New("cancel failed")).Once()
+	tc.On("TerminateWorkflow", mock.Anything, "run-w1", "", "agent closed").Return(nil).Once()
+
+	rt, err := NewTemporalRuntime(
+		WithTemporalClient(tc, "tq"),
+		WithAgentSpec(sdkruntime.AgentSpec{Name: "agent-a"}),
+		WithAgentConfig(sdkruntime.AgentConfig{LLM: sdkruntime.AgentLLM{Client: stubLLM{}}}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.activeRuns.Set("run-w1", &runHandle{})
 
 	rt.Close()
 	tc.AssertExpectations(t)
-	wfRun.AssertExpectations(t)
+}
+
+func describeWorkflowCompleted() *workflowservice.DescribeWorkflowExecutionResponse {
+	return &workflowservice.DescribeWorkflowExecutionResponse{
+		WorkflowExecutionInfo: &workflowpb.WorkflowExecutionInfo{
+			Status: enumspb.WORKFLOW_EXECUTION_STATUS_COMPLETED,
+		},
+	}
+}
+
+func TestTemporalRuntime_GetRunHandle_Running(t *testing.T) {
+	tc := temporalmocks.NewClient(t)
+	runID := "run-abc"
+	workflowID := "agent-run-agent-a-" + runID
+
+	release := make(chan struct{})
+	want := &types.AgentRunResult{Content: "ok"}
+	wfRun := blockingWorkflowRun(release, want, nil)
+
+	tc.On("DescribeWorkflowExecution", mock.Anything, workflowID, "").
+		Return(describeWorkflowRunning(), nil).Once()
+	tc.On("GetWorkflow", mock.Anything, workflowID, "").Return(wfRun).Maybe()
+	tc.On("CancelWorkflow", mock.Anything, workflowID, "").Return(nil).Maybe()
+
+	rt, err := NewTemporalRuntime(
+		WithTemporalClient(tc, "tq"),
+		WithDisableLocalWorker(true),
+		WithAgentSpec(sdkruntime.AgentSpec{Name: "agent-a"}),
+		WithAgentConfig(sdkruntime.AgentConfig{LLM: sdkruntime.AgentLLM{Client: stubLLM{}}}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	h, err := rt.GetRunHandle(context.Background(), runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.ID() != runID {
+		t.Fatalf("ID: got %q want %q", h.ID(), runID)
+	}
+
+	// Drain await (GetWorkflow) so mock expectations are met before teardown.
+	close(release)
+	got, err := h.Get(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.Content != "ok" || got.RunID != runID {
+		t.Fatalf("Get: %+v", got)
+	}
+	waitHandleDone(t, h.Done())
+}
+
+func TestTemporalRuntime_GetRunHandle_NotFound(t *testing.T) {
+	tc := temporalmocks.NewClient(t)
+	runID := "missing"
+	workflowID := "agent-run-agent-a-" + runID
+
+	tc.On("DescribeWorkflowExecution", mock.Anything, workflowID, "").
+		Return(nil, errors.New("workflow not found for ID")).Once()
+
+	rt, err := NewTemporalRuntime(
+		WithTemporalClient(tc, "tq"),
+		WithDisableLocalWorker(true),
+		WithAgentSpec(sdkruntime.AgentSpec{Name: "agent-a"}),
+		WithAgentConfig(sdkruntime.AgentConfig{LLM: sdkruntime.AgentLLM{Client: stubLLM{}}}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = rt.GetRunHandle(context.Background(), runID)
+	if !errors.Is(err, types.ErrRunNotFound) {
+		t.Fatalf("got %v, want ErrRunNotFound", err)
+	}
+}
+
+func TestTemporalRuntime_GetRunHandle_AlreadyCompleted(t *testing.T) {
+	tc := temporalmocks.NewClient(t)
+	runID := "done-run"
+	workflowID := "agent-run-agent-a-" + runID
+
+	tc.On("DescribeWorkflowExecution", mock.Anything, workflowID, "").
+		Return(describeWorkflowCompleted(), nil).Once()
+
+	rt, err := NewTemporalRuntime(
+		WithTemporalClient(tc, "tq"),
+		WithDisableLocalWorker(true),
+		WithAgentSpec(sdkruntime.AgentSpec{Name: "agent-a"}),
+		WithAgentConfig(sdkruntime.AgentConfig{LLM: sdkruntime.AgentLLM{Client: stubLLM{}}}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = rt.GetRunHandle(context.Background(), runID)
+	if !errors.Is(err, types.ErrRunAlreadyCompleted) {
+		t.Fatalf("got %v, want ErrRunAlreadyCompleted", err)
+	}
+}
+
+func TestTemporalRuntime_GetRunHandle_EmptyRunID(t *testing.T) {
+	rt := &TemporalRuntime{logger: logger.NoopLogger()}
+	_, err := rt.GetRunHandle(context.Background(), "  ")
+	if !errors.Is(err, types.ErrRunNotFound) {
+		t.Fatalf("got %v, want ErrRunNotFound", err)
+	}
+}
+
+func TestTemporalRuntime_GetStreamHandle_Running(t *testing.T) {
+	tc := temporalmocks.NewClient(t)
+	runID := "stream-abc"
+	workflowID := "agent-stream-agent-a-" + runID
+
+	release := make(chan struct{})
+	wfRun := blockingWorkflowRun(release, &types.AgentRunResult{Content: "ok"}, nil)
+
+	tc.On("DescribeWorkflowExecution", mock.Anything, workflowID, "").
+		Return(describeWorkflowRunning(), nil).Once()
+	tc.On("GetWorkflow", mock.Anything, workflowID, "").Return(wfRun).Maybe()
+	tc.On("CancelWorkflow", mock.Anything, workflowID, "").Return(nil).Maybe()
+
+	rt, err := NewTemporalRuntime(
+		WithTemporalClient(tc, "tq"),
+		WithDisableLocalWorker(true),
+		WithAgentSpec(sdkruntime.AgentSpec{Name: "agent-a"}),
+		WithAgentConfig(sdkruntime.AgentConfig{LLM: sdkruntime.AgentLLM{Client: stubLLM{}}}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	h, err := rt.GetStreamHandle(context.Background(), runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.ID() != runID {
+		t.Fatalf("ID: got %q want %q", h.ID(), runID)
+	}
+	t.Cleanup(func() {
+		close(release)
+		waitHandleDone(t, h.Done())
+	})
+}
+
+func TestTemporalRuntime_GetStreamHandle_NotFound(t *testing.T) {
+	tc := temporalmocks.NewClient(t)
+	runID := "missing"
+	workflowID := "agent-stream-agent-a-" + runID
+
+	tc.On("DescribeWorkflowExecution", mock.Anything, workflowID, "").
+		Return(nil, errors.New("workflow not found for ID")).Once()
+
+	rt, err := NewTemporalRuntime(
+		WithTemporalClient(tc, "tq"),
+		WithDisableLocalWorker(true),
+		WithAgentSpec(sdkruntime.AgentSpec{Name: "agent-a"}),
+		WithAgentConfig(sdkruntime.AgentConfig{LLM: sdkruntime.AgentLLM{Client: stubLLM{}}}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = rt.GetStreamHandle(context.Background(), runID)
+	if !errors.Is(err, types.ErrStreamNotFound) {
+		t.Fatalf("got %v, want ErrStreamNotFound", err)
+	}
+}
+
+func TestTemporalRuntime_GetStreamHandle_AlreadyCompleted(t *testing.T) {
+	tc := temporalmocks.NewClient(t)
+	runID := "done-stream"
+	workflowID := "agent-stream-agent-a-" + runID
+
+	tc.On("DescribeWorkflowExecution", mock.Anything, workflowID, "").
+		Return(describeWorkflowCompleted(), nil).Once()
+
+	rt, err := NewTemporalRuntime(
+		WithTemporalClient(tc, "tq"),
+		WithDisableLocalWorker(true),
+		WithAgentSpec(sdkruntime.AgentSpec{Name: "agent-a"}),
+		WithAgentConfig(sdkruntime.AgentConfig{LLM: sdkruntime.AgentLLM{Client: stubLLM{}}}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = rt.GetStreamHandle(context.Background(), runID)
+	if !errors.Is(err, types.ErrRunAlreadyCompleted) {
+		t.Fatalf("got %v, want ErrRunAlreadyCompleted", err)
+	}
+}
+
+func TestTemporalRuntime_GetStreamHandle_EmptyRunID(t *testing.T) {
+	rt := &TemporalRuntime{logger: logger.NoopLogger()}
+	_, err := rt.GetStreamHandle(context.Background(), "  ")
+	if !errors.Is(err, types.ErrStreamNotFound) {
+		t.Fatalf("got %v, want ErrStreamNotFound", err)
+	}
+}
+
+func TestTemporalRuntime_Run_NilRequest(t *testing.T) {
+	rt := &TemporalRuntime{logger: logger.NoopLogger()}
+	_, err := rt.Run(context.Background(), nil)
+	if err == nil || !strings.Contains(err.Error(), "nil RunRequest") {
+		t.Fatalf("got %v, want nil RunRequest error", err)
+	}
+}
+
+func TestTemporalRuntime_Stream_NilRequest(t *testing.T) {
+	rt := &TemporalRuntime{logger: logger.NoopLogger()}
+	_, err := rt.Stream(context.Background(), nil)
+	if err == nil || !strings.Contains(err.Error(), "nil RunRequest") {
+		t.Fatalf("got %v, want nil RunRequest error", err)
+	}
+}
+
+func TestTemporalRuntime_Stream_NoWorkers(t *testing.T) {
+	tc := temporalmocks.NewClient(t)
+	tc.On("DescribeTaskQueue", mock.Anything, "tq", enumspb.TASK_QUEUE_TYPE_WORKFLOW).
+		Return(&workflowservice.DescribeTaskQueueResponse{Pollers: nil}, nil)
+
+	rt, err := NewTemporalRuntime(
+		WithTemporalClient(tc, "tq"),
+		WithDisableLocalWorker(true),
+		WithAgentSpec(sdkruntime.AgentSpec{Name: "agent-a"}),
+		WithAgentConfig(sdkruntime.AgentConfig{LLM: sdkruntime.AgentLLM{Client: stubLLM{}}}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	_, err = rt.Stream(ctx, &sdkruntime.RunRequest{UserPrompt: "hi"})
+	if err == nil {
+		t.Fatal("expected error when no workers")
+	}
+	if !strings.Contains(err.Error(), "no workers available") {
+		t.Fatalf("unexpected err: %v", err)
+	}
+}
+
+func TestTemporalRuntime_Stream_ExecuteWorkflowError(t *testing.T) {
+	tc := temporalmocks.NewClient(t)
+	tc.On("DescribeTaskQueue", mock.Anything, "tq", enumspb.TASK_QUEUE_TYPE_WORKFLOW).
+		Return(describeTaskQueueWithPollers(), nil)
+	tc.On("ExecuteWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, errors.New("stream start failed"))
+
+	rt, err := NewTemporalRuntime(
+		WithTemporalClient(tc, "tq"),
+		WithDisableLocalWorker(true),
+		WithAgentSpec(sdkruntime.AgentSpec{Name: "agent-a"}),
+		WithAgentConfig(sdkruntime.AgentConfig{LLM: sdkruntime.AgentLLM{Client: stubLLM{}}}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = rt.Stream(context.Background(), &sdkruntime.RunRequest{UserPrompt: "hi"})
+	if err == nil || err.Error() != "stream start failed" {
+		t.Fatalf("got %v, want stream start failed", err)
+	}
+}
+
+func TestTemporalRuntime_GetRunHandle_NilClient(t *testing.T) {
+	rt := &TemporalRuntime{logger: logger.NoopLogger()}
+	_, err := rt.GetRunHandle(context.Background(), "run-1")
+	if err == nil || !strings.Contains(err.Error(), "requires a Temporal client") {
+		t.Fatalf("got %v, want client required error", err)
+	}
+}
+
+func TestTemporalRuntime_GetRunHandle_DescribeError(t *testing.T) {
+	tc := temporalmocks.NewClient(t)
+	runID := "run-desc-err"
+	workflowID := "agent-run-agent-a-" + runID
+
+	tc.On("DescribeWorkflowExecution", mock.Anything, workflowID, "").
+		Return(nil, errors.New("describe unavailable")).Once()
+
+	rt, err := NewTemporalRuntime(
+		WithTemporalClient(tc, "tq"),
+		WithDisableLocalWorker(true),
+		WithAgentSpec(sdkruntime.AgentSpec{Name: "agent-a"}),
+		WithAgentConfig(sdkruntime.AgentConfig{LLM: sdkruntime.AgentLLM{Client: stubLLM{}}}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = rt.GetRunHandle(context.Background(), runID)
+	if err == nil || err.Error() != "describe unavailable" {
+		t.Fatalf("got %v, want describe unavailable", err)
+	}
+}
+
+func TestTemporalRuntime_GetStreamHandle_NilClient(t *testing.T) {
+	rt := &TemporalRuntime{logger: logger.NoopLogger()}
+	_, err := rt.GetStreamHandle(context.Background(), "run-1")
+	if err == nil || !strings.Contains(err.Error(), "requires a Temporal client") {
+		t.Fatalf("got %v, want client required error", err)
+	}
+}
+
+func TestTemporalRuntime_GetStreamHandle_DescribeError(t *testing.T) {
+	tc := temporalmocks.NewClient(t)
+	runID := "stream-desc-err"
+	workflowID := "agent-stream-agent-a-" + runID
+
+	tc.On("DescribeWorkflowExecution", mock.Anything, workflowID, "").
+		Return(nil, errors.New("describe unavailable")).Once()
+
+	rt, err := NewTemporalRuntime(
+		WithTemporalClient(tc, "tq"),
+		WithDisableLocalWorker(true),
+		WithAgentSpec(sdkruntime.AgentSpec{Name: "agent-a"}),
+		WithAgentConfig(sdkruntime.AgentConfig{LLM: sdkruntime.AgentLLM{Client: stubLLM{}}}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = rt.GetStreamHandle(context.Background(), runID)
+	if err == nil || err.Error() != "describe unavailable" {
+		t.Fatalf("got %v, want describe unavailable", err)
+	}
+}
+
+func TestTemporalRuntime_GetStreamHandle_EventsWithOffset(t *testing.T) {
+	tc := temporalmocks.NewClient(t)
+	runID := "stream-reconnect"
+	workflowID := "agent-stream-agent-a-" + runID
+
+	release := make(chan struct{})
+	wfRun := blockingWorkflowRun(release, &types.AgentRunResult{Content: "ok", AgentName: "agent-a"}, nil)
+
+	// GetStreamHandle + Events status gate (running); Subscribe ends via terminal describe.
+	tc.On("DescribeWorkflowExecution", mock.Anything, workflowID, mock.Anything).
+		Return(describeWorkflowRunning(), nil).Twice()
+	stubWorkflowStreamSubscribeEnd(tc)
+	tc.On("DescribeWorkflowExecution", mock.Anything, workflowID, mock.Anything).
+		Return(describeWorkflowCompleted(), nil).Maybe()
+	tc.On("GetWorkflow", mock.Anything, workflowID, "").Return(wfRun).Maybe()
+	tc.On("CancelWorkflow", mock.Anything, workflowID, "").Return(nil).Maybe()
+
+	rt, err := NewTemporalRuntime(
+		WithTemporalClient(tc, "tq"),
+		WithDisableLocalWorker(true),
+		WithAgentSpec(sdkruntime.AgentSpec{Name: "agent-a"}),
+		WithAgentConfig(sdkruntime.AgentConfig{LLM: sdkruntime.AgentLLM{Client: stubLLM{}}}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	h, err := rt.GetStreamHandle(context.Background(), runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ch, err := h.Events(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+
+	close(release)
+	evs := collectStreamEvents(t, ch, 3*time.Second)
+	gotTypes := streamEventTypes(evs)
+
+	for _, typ := range gotTypes {
+		if typ == events.AgentEventTypeRunStarted {
+			t.Fatal("fromOffset > 0 should skip synthetic RUN_STARTED")
+		}
+	}
+	sawFinished := false
+	for _, typ := range gotTypes {
+		if typ == events.AgentEventTypeRunFinished {
+			sawFinished = true
+		}
+	}
+	if !sawFinished {
+		t.Fatal("expected RUN_FINISHED after reconnect Events")
+	}
+	waitHandleDone(t, h.Done())
+}
+
+func TestTemporalRuntime_Approve_CompleteActivity(t *testing.T) {
+	tc := temporalmocks.NewClient(t)
+	token := base64.StdEncoding.EncodeToString([]byte("task-token-bytes"))
+	tc.On("CompleteActivity", mock.Anything, []byte("task-token-bytes"), types.ApprovalStatusApproved, mock.Anything).
+		Return(nil).Once()
+
+	rt, err := NewTemporalRuntime(
+		WithTemporalClient(tc, "tq"),
+		WithDisableLocalWorker(true),
+		WithAgentSpec(sdkruntime.AgentSpec{Name: "agent-a"}),
+		WithAgentConfig(sdkruntime.AgentConfig{LLM: sdkruntime.AgentLLM{Client: stubLLM{}}}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := rt.Approve(context.Background(), token, types.ApprovalStatusApproved); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+}
+
+// TestTemporalRuntime_Approve_SecondCallAlreadyResolved completes the same token twice;
+// the second CompleteActivity "not found" must surface as ErrApprovalAlreadyResolved.
+func TestTemporalRuntime_Approve_SecondCallAlreadyResolved(t *testing.T) {
+	tc := temporalmocks.NewClient(t)
+	token := base64.StdEncoding.EncodeToString([]byte("task-token-bytes"))
+	tc.On("CompleteActivity", mock.Anything, []byte("task-token-bytes"), types.ApprovalStatusApproved, mock.Anything).
+		Return(nil).Once()
+	tc.On("CompleteActivity", mock.Anything, []byte("task-token-bytes"), types.ApprovalStatusApproved, mock.Anything).
+		Return(errors.New("activity task not found")).Once()
+
+	rt, err := NewTemporalRuntime(
+		WithTemporalClient(tc, "tq"),
+		WithDisableLocalWorker(true),
+		WithAgentSpec(sdkruntime.AgentSpec{Name: "agent-a"}),
+		WithAgentConfig(sdkruntime.AgentConfig{LLM: sdkruntime.AgentLLM{Client: stubLLM{}}}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := rt.Approve(context.Background(), token, types.ApprovalStatusApproved); err != nil {
+		t.Fatalf("first Approve: %v", err)
+	}
+	err = rt.Approve(context.Background(), token, types.ApprovalStatusApproved)
+	if !errors.Is(err, types.ErrApprovalAlreadyResolved) {
+		t.Fatalf("second Approve: got %v, want ErrApprovalAlreadyResolved", err)
+	}
+}
+
+func TestTemporalRuntime_OnApproval_AlreadyResolved(t *testing.T) {
+	tc := temporalmocks.NewClient(t)
+	token := base64.StdEncoding.EncodeToString([]byte("task-token-bytes"))
+	tc.On("CompleteActivity", mock.Anything, []byte("task-token-bytes"), types.ApprovalStatusRejected, mock.Anything).
+		Return(errors.New("activity task not found")).Once()
+
+	rt, err := NewTemporalRuntime(
+		WithTemporalClient(tc, "tq"),
+		WithDisableLocalWorker(true),
+		WithAgentSpec(sdkruntime.AgentSpec{Name: "agent-a"}),
+		WithAgentConfig(sdkruntime.AgentConfig{LLM: sdkruntime.AgentLLM{Client: stubLLM{}}}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = rt.OnApproval(context.Background(), token, types.ApprovalStatusRejected)
+	if !errors.Is(err, types.ErrApprovalAlreadyResolved) {
+		t.Fatalf("got %v, want ErrApprovalAlreadyResolved", err)
+	}
+}
+
+func TestTemporalStatusToRunStatus(t *testing.T) {
+	cases := []struct {
+		in   enumspb.WorkflowExecutionStatus
+		want types.RunStatus
+	}{
+		{enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING, types.StatusRunning},
+		{enumspb.WORKFLOW_EXECUTION_STATUS_COMPLETED, types.StatusCompleted},
+		{enumspb.WORKFLOW_EXECUTION_STATUS_FAILED, types.StatusFailed},
+		{enumspb.WORKFLOW_EXECUTION_STATUS_CANCELED, types.StatusCancelled},
+		{enumspb.WORKFLOW_EXECUTION_STATUS_TIMED_OUT, types.StatusFailed},
+		{enumspb.WORKFLOW_EXECUTION_STATUS_TERMINATED, types.StatusCancelled},
+		{enumspb.WORKFLOW_EXECUTION_STATUS_UNSPECIFIED, types.StatusPending},
+	}
+	for _, tc := range cases {
+		if got := temporalStatusToRunStatus(tc.in); got != tc.want {
+			t.Fatalf("%v: got %q want %q", tc.in, got, tc.want)
+		}
+	}
 }

@@ -30,11 +30,6 @@ func NewConversation(opts ...Option) *InMemoryConversation {
 	return c
 }
 
-// Deprecated: use NewConversation instead.
-func NewInMemoryConversation(opts ...Option) *InMemoryConversation {
-	return NewConversation(opts...)
-}
-
 type Option func(*InMemoryConversation)
 
 // WithMaxSize sets the maximum number of messages to store per conversation.

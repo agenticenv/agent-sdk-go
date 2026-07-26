@@ -34,6 +34,8 @@ Go 1.26+. No infrastructure required for in-process mode. A running [Temporal](h
 import (
     "context"
     "fmt"
+    "time"
+
     "github.com/agenticenv/agent-sdk-go/pkg/agent"
     "github.com/agenticenv/agent-sdk-go/pkg/llm"
     "github.com/agenticenv/agent-sdk-go/pkg/llm/openai"
@@ -50,26 +52,93 @@ a, _ := agent.NewAgent(
 )
 defer a.Close()
 
-result, _ := a.Run(context.Background(), "Hello", nil)
+// --- Run (blocking) ---
+run, _ := a.Run(context.Background(), "Reply with a short greeting.", nil)
+result, _ := run.Get(context.Background())
 fmt.Println(result.Content)
+
+// --- Non-blocking ---
+run, _ = a.Run(context.Background(), "Explain durable agents in two short paragraphs.", nil)
+select {
+case <-run.Done():
+    result, _ = run.Get(context.Background())
+    fmt.Println(result.Content)
+case <-time.After(5 * time.Second):
+    fmt.Println("still running, check back later")
+}
+
+// --- Stream (AG-UI events: text deltas, tools, approvals, lifecycle, …) ---
+stream, _ := a.Stream(context.Background(), "Write a four-line poem about the ocean.", nil)
+events, _ := stream.Events(context.Background())
+for event := range events {
+    switch e := event.(type) {
+    case *agent.AgentTextMessageContentEvent:
+        fmt.Print(e.Delta)
+    case *agent.AgentToolCallStartEvent:
+        fmt.Println("\n[tool call]", e.ToolCallName)
+    case *agent.AgentCustomEvent:
+        // tool / delegation approval (when approval policy requires it)
+        if e.Name == string(agent.AgentCustomEventNameToolApproval) {
+            if v, err := agent.ParseCustomEventApproval(e); err == nil {
+                // NOTE: replace with real approval logic — this auto-approves for demonstration
+                _ = a.OnApproval(context.Background(), v.ApprovalToken, agent.ApprovalStatusApproved)
+            }
+        }
+    // also RunFinished, ToolCallResult, …
+    }
+}
 ```
 
-**Temporal** (durable, production):
+**Temporal** (durable execution):
 
 ```go
 a, _ := agent.NewAgent(
-    agent.WithTemporalConfig(&agent.TemporalConfig{
-        Host: "localhost", Port: 7233,
-        Namespace: "default", TaskQueue: "my-app",
-    }),
     agent.WithSystemPrompt("You are a helpful assistant."),
-    agent.WithLLMClient(llmClient), // same llmClient as above
+    agent.WithLLMClient(llmClient),
+    agent.WithTemporalConfig(&agent.TemporalConfig{
+        Host:      "localhost",
+        Port:      7233,
+        Namespace: "default",
+        TaskQueue: "agent-task-queue",
+    }),
 )
 defer a.Close()
 
-result, _ := a.Run(context.Background(), "Hello", nil)
+// --- Run (blocking) ---
+run, _ := a.Run(context.Background(), "Reply with a short greeting.", nil)
+result, _ := run.Get(context.Background())
 fmt.Println(result.Content)
+
+// --- Non-blocking ---
+run, _ = a.Run(context.Background(), "Explain durable agents in two short paragraphs.", nil)
+select {
+case <-run.Done():
+    result, _ = run.Get(context.Background())
+    fmt.Println(result.Content)
+case <-time.After(5 * time.Second):
+    fmt.Println("still running, check back later")
+}
+
+// --- Stream (AG-UI events: text deltas, tools, approvals, lifecycle, …) ---
+stream, _ := a.Stream(context.Background(), "Write a four-line poem about the ocean.", nil)
+savedRunID := stream.ID() // persist before consuming events
+events, _ := stream.Events(context.Background())
+for event := range events {
+    // persist event.Offset() before handling — needed for WithOffset on reconnect
+    // handle AG-UI events (see in-process example)
+    _ = event
+}
+
+// --- Reconnect after a process crash (Temporal only) ---
+savedOffset := int64(0) // last event Offset() persisted before handling it
+s, _ := a.GetAgentStream(context.Background(), savedRunID)
+ch, _ := s.Events(context.Background(), agent.WithOffset(savedOffset))
+for event := range ch {
+    _ = event
+}
 ```
+
+> Crashes and process restarts don't have to mean lost work or missed approvals — the [durable agent example](examples/durable_agent) shows how a run keeps executing durably even if your process crashes, and how to reconnect to an active run and stream its remaining events once it's back. For the stream reconnect protocol (`GetAgentStream` + `WithOffset`), see the [reconnect example](examples/agent_with_reconnect).
 
 ## Features
 
@@ -85,7 +154,8 @@ fmt.Println(result.Content)
 - **Token usage** — aggregate prompt, completion, and reasoning token counts per run
 - **Hooks & guardrails** — middleware at LLM, tool, retrieval, and memory lifecycle points
 - **Execution config** — per-operation timeouts and max attempts via `With*ExecutionConfig`
-- **Durable execution** — crash-resilient runs via Temporal; horizontal worker scaling
+- **Durable execution** — crash-resilient runs via Temporal; reconnect to active runs and resume event streams after a restart
+- **Distributed execution** — leverage Temporal to decouple client triggers from worker execution, scaling agent workloads horizontally across separate processes or nodes.
 - **Observability** — OpenTelemetry traces, metrics, and structured logs
 
 ## CLI (`agctl`)

@@ -73,6 +73,7 @@ func (v *AgentCustomEventApprovalValue) ToJSON() ([]byte, error) { return json.M
 type AgentCustomEventDelegationValue struct {
 	AgentName     string         `json:"agentName,omitempty"`
 	SubAgentName  string         `json:"subAgentName,omitempty"`
+	ToolCallID    string         `json:"toolCallId,omitempty"` // workflow-side ID; used for pending-approval tracking on Events/reconnect
 	Args          map[string]any `json:"args,omitempty"`
 	ApprovalToken string         `json:"approvalToken,omitempty"`
 }

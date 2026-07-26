@@ -49,11 +49,11 @@ For advanced tuning (metrics export interval, headers, sampling), use [`observab
 
 ## Agent API metrics
 
-Emitted by `Agent.Run`, `RunAsync`, and `Stream`:
+Emitted by `Agent.Run` and `Agent.Stream`:
 
 | Metric | Kind | Description |
 |---|---|---|
-| `agent.run.started` | counter | Each `Run` / `RunAsync` invocation |
+| `agent.run.started` | counter | Each `Run` invocation |
 | `agent.run.completed` | counter | Successful run |
 | `agent.run.failed` | counter | Failed run — includes `error` attribute |
 | `agent.run.duration_ms` | histogram | Run wall-clock time in ms |

@@ -106,11 +106,6 @@ func NewConversation(opts ...Option) (*RedisConversation, error) {
 	return c, nil
 }
 
-// Deprecated: use NewConversation instead.
-func NewRedisConversation(opts ...Option) (*RedisConversation, error) {
-	return NewConversation(opts...)
-}
-
 // Close releases the Redis connection only when we own it (not using WithClient).
 func (c *RedisConversation) Close() error {
 	if c.ownClient && c.client != nil {

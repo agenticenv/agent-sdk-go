@@ -36,7 +36,6 @@ func main() {
 		agent.WithLLMClient(llmClient),
 		agent.WithToolRegistry(reg),
 		agent.WithToolApprovalPolicy(agent.AutoToolApprovalPolicy()),
-		agent.WithStream(true),
 		config.A2AInboundServerOption(cfg),
 		agent.WithLogger(config.NewLoggerFromLogConfig(cfg)),
 		agent.WithLogLevel(cfg.LogLevel),

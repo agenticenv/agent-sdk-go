@@ -26,7 +26,7 @@ flowchart LR
         RAG["Retrieval"]
     end
 
-    App -->|"Run / RunAsync / Stream"| Agent
+    App -->|"Run / Stream"| Agent
     Agent -->|"dispatches to"| Runtime
     Runtime <-->|"fire"| Hooks
     Runtime <-->|"generate"| LLM
@@ -112,7 +112,7 @@ flowchart TD
     WF --> CW
 ```
 
-By default `NewAgent` embeds a local worker in the same process — no separate binary needed for development. For production, split client and worker — see [Worker separation](/advanced/worker-separation).
+By default `NewAgent` embeds a local worker in the same process — no separate binary needed for development. For production, split client and worker — see [Distributed execution](/advanced/distributed-execution).
 
 ## Related
 

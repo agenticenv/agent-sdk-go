@@ -329,7 +329,7 @@ func (a *Agent) buildSDKAgentCard() *a2a.AgentCard {
 			a2a.NewAgentInterface(baseURL, a2a.TransportProtocolJSONRPC),
 		},
 		Capabilities: a2a.AgentCapabilities{
-			Streaming: a.streamEnabled && a.LLMClient != nil && a.LLMClient.IsStreamSupported(),
+			Streaming: a.LLMClient != nil && a.LLMClient.IsStreamSupported(),
 		},
 		DefaultInputModes:  inModes,
 		DefaultOutputModes: outModes,
@@ -419,14 +419,14 @@ var _ a2asrv.AgentExecutor = (*agentA2AExecutor)(nil)
 
 // Execute implements [a2asrv.AgentExecutor].
 //
-// The executor has two paths selected at call time based on whether the agent was
-// configured with [WithStream] and the LLM client supports streaming:
+// The executor has two paths selected at call time based on whether the LLM
+// client supports streaming ([interfaces.LLMClient.IsStreamSupported]):
 //
-// Non-streaming path (default):
+// Non-streaming path (LLM does not support streaming):
 // Text is collected from the incoming message, passed to [Agent.Run], and the
 // complete result is yielded as a single [a2a.Message] with role ROLE_AGENT.
 //
-// Streaming path (when [WithStream] and LLM.IsStreamSupported):
+// Streaming path (LLM.IsStreamSupported):
 // Emits [a2a.NewSubmittedTask] + [a2a.TaskStateWorking] then calls [Agent.Stream].
 // Each [events.AgentTextMessageContentEvent] delta is forwarded as an
 // [a2a.TaskArtifactUpdateEvent] (first delta creates the artifact; subsequent
@@ -440,9 +440,7 @@ func (e *agentA2AExecutor) Execute(ctx context.Context, execCtx *a2asrv.Executor
 	return func(yield func(a2a.Event, error) bool) {
 		inputText := collectMessageText(execCtx.Message)
 
-		streaming := e.agent.streamEnabled &&
-			e.agent.LLMClient != nil &&
-			e.agent.LLMClient.IsStreamSupported()
+		streaming := e.agent.LLMClient != nil && e.agent.LLMClient.IsStreamSupported()
 
 		ctx, sp := e.agent.tracer.StartSpan(ctx, "a2a.execute",
 			interfaces.Attribute{Key: "agent.name", Value: e.agent.Name},
@@ -454,7 +452,14 @@ func (e *agentA2AExecutor) Execute(ctx context.Context, execCtx *a2asrv.Executor
 
 		if !streaming {
 			// Non-streaming: one blocking Run, one Message reply.
-			result, err := e.agent.Run(ctx, inputText, nil)
+			agentRun, err := e.agent.Run(ctx, inputText, nil)
+			if err != nil {
+				sp.RecordError(err)
+				errMsg := a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart(err.Error()))
+				yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateFailed, errMsg), nil)
+				return
+			}
+			result, err := agentRun.Get(ctx)
 			if err != nil {
 				sp.RecordError(err)
 				errMsg := a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart(err.Error()))
@@ -473,7 +478,14 @@ func (e *agentA2AExecutor) Execute(ctx context.Context, execCtx *a2asrv.Executor
 			return
 		}
 
-		streamCh, err := e.agent.Stream(ctx, inputText, nil)
+		agentStream, err := e.agent.Stream(ctx, inputText, nil)
+		if err != nil {
+			sp.RecordError(err)
+			errMsg := a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart(err.Error()))
+			yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateFailed, errMsg), nil)
+			return
+		}
+		streamCh, err := agentStream.Events(ctx)
 		if err != nil {
 			sp.RecordError(err)
 			errMsg := a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart(err.Error()))
