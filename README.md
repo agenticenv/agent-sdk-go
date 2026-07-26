@@ -104,7 +104,7 @@ a, _ := agent.NewAgent(
 )
 defer a.Close()
 
-// --- Run (blocking) ---
+// --- Run ---
 run, _ := a.Run(context.Background(), "Reply with a short greeting.", nil)
 result, _ := run.Get(context.Background())
 fmt.Println(result.Content)
