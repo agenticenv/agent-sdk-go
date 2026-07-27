@@ -69,12 +69,24 @@ func (h *streamHandle) Approve(ctx context.Context, approvalToken string, status
 // fromOffset == 0 emits synthetic RUN_STARTED; fromOffset > 0 resumes after reconnect.
 // Returns [types.ErrRunNotFound] / [types.ErrRunAlreadyCompleted] from the
 // pre-subscribe workflow describe check.
+//
+// ctx controls the subscription lifetime only — cancelling it stops this subscriber
+// without affecting the agent run. The pre-subscribe status check uses its own bounded
+// context so a short-deadline subscription ctx does not cause the check to fail before
+// the subscription can start.
 func (h *streamHandle) Events(ctx context.Context, fromOffset int64) (<-chan events.AgentEvent, error) {
 	if h.rt == nil || h.rt.temporalClient == nil {
 		return nil, fmt.Errorf("temporal: stream handle %q is not configured for Events", h.id)
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
-	status, err := h.rt.getRunStatus(ctx, h.workflowID)
+	// Use a separate bounded ctx for the status gate so the subscription-lifetime ctx
+	// (which may have a short deadline) does not race with a slow describe RPC.
+	describeCtx, describeCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer describeCancel()
+	status, err := h.rt.getRunStatus(describeCtx, h.workflowID)
 	if err != nil {
 		return nil, err
 	}
@@ -110,24 +122,44 @@ func (h *streamHandle) deliverEvents(ctx context.Context, fromOffset int64, outC
 	sc := newStreamClient(h.rt.temporalClient, h.workflowID)
 	defer func() { _ = sc.Close(context.Background()) }()
 
+	// Subscribe ends when the caller disconnects (Events ctx) OR the run finishes (Done).
+	// Run stop must unblock Events without requiring an Events ctx deadline.
+	subscribeCtx, subscribeCancel := context.WithCancel(ctx)
+	defer subscribeCancel()
+	go func() {
+		select {
+		case <-h.Done():
+			subscribeCancel()
+		case <-subscribeCtx.Done():
+		}
+	}()
+
 	// staleMessageIDs tracks messageIDs whose prior attempt tokens should be discarded.
 	// Cleared per-messageID when the new attempt's TEXT/REASONING _START event arrives.
 	staleMessageIDs := make(map[string]struct{})
 
-	for item, err := range sc.Subscribe(ctx, newStreamSubscribeOptions(fromOffset, []string{streamTopicEvents, streamTopicRetry})) {
+loop:
+	for item, err := range sc.Subscribe(subscribeCtx, newStreamSubscribeOptions(fromOffset, []string{streamTopicEvents, streamTopicRetry})) {
 		if err != nil {
 			if ctx.Err() != nil {
-				// Caller disconnected (ctx cancelled) — exit cleanly without touching the run.
-				return
+				select {
+				case <-h.Done():
+					// Run also finished — deliver terminal below.
+				default:
+					// Caller disconnected (Events ctx) — leave the run alone.
+					return
+				}
+			} else {
+				select {
+				case <-h.Done():
+					// Run stop cancelled subscribe — deliver terminal below.
+				default:
+					h.rt.logger.Warn(ctx, "stream: subscribe error, falling back to terminal result fetch",
+						slog.String("scope", "runtime"),
+						slog.Any("error", err))
+				}
 			}
-			// Genuine subscribe failure (not ctx cancellation, and not a clean terminal end,
-			// which the iterator reports by ending the loop without an error). Break out and
-			// still attempt to deliver a terminal event below, so the channel-close contract
-			// (RUN_FINISHED/RUN_ERROR before close) holds even when the stream connection itself failed.
-			h.rt.logger.Warn(ctx, "stream: subscribe error, falling back to terminal result fetch",
-				slog.String("scope", "runtime"),
-				slog.Any("error", err))
-			break
+			break loop
 		}
 
 		// Handle retry control signals: mark the messageID as stale, do not forward.
@@ -185,23 +217,42 @@ func (h *streamHandle) deliverEvents(ctx context.Context, fromOffset int64, outC
 		select {
 		case outCh <- ev:
 		case <-ctx.Done():
-			return
+			select {
+			case <-h.Done():
+				break loop
+			default:
+				return
+			}
+		case <-h.Done():
+			break loop
 		}
 	}
 
-	result, err := h.Get(ctx)
+	// Run lifetime owns the terminal wait — do not require Events ctx deadline.
+	result, err := h.Get(context.Background())
 	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-			termCtx, termCancel := context.WithTimeout(context.Background(), 15*time.Second)
-			_ = h.rt.temporalClient.TerminateWorkflow(termCtx, h.workflowID, "", "run timeout")
-			termCancel()
-			outCh <- events.NewAgentRunErrorEvent("request timed out (approval expired or deadline exceeded)")
-			return
-		}
-		outCh <- events.NewAgentRunErrorEvent(err.Error())
+		outCh <- events.NewAgentRunErrorEvent(terminalStreamErrorMessage(h.StopCause(), err))
 		return
 	}
 	outCh <- syntheticStreamCompleteEvent(result, h.threadID, h.id, rootName)
+}
+
+// terminalStreamErrorMessage maps run-stop cause + workflow Get error to a stable Events message.
+// Context sentinel errors (deadline / cancel) are returned as their canonical string so callers
+// get a predictable message regardless of what Temporal wraps around them.
+func terminalStreamErrorMessage(stopCause, getErr error) string {
+	switch {
+	case errors.Is(stopCause, context.DeadlineExceeded) || errors.Is(getErr, context.DeadlineExceeded):
+		return "context deadline exceeded"
+	case errors.Is(stopCause, context.Canceled) || errors.Is(getErr, context.Canceled):
+		return "context canceled"
+	case getErr != nil:
+		return getErr.Error()
+	case stopCause != nil:
+		return stopCause.Error()
+	default:
+		return "run failed"
+	}
 }
 
 // syntheticStreamCompleteEvent builds a root [RUN_FINISHED] event from the workflow result.

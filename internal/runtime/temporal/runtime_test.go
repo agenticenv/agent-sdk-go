@@ -586,34 +586,57 @@ func TestTemporalRuntime_Close_StopsWorkers(t *testing.T) {
 	}
 }
 
-// TestTemporalRuntime_Close_ActiveWorkflows_CancelSucceeds verifies Close() prefers a graceful
-// CancelWorkflow over TerminateWorkflow when cancellation succeeds.
-func TestTemporalRuntime_Close_ActiveWorkflows_CancelSucceeds(t *testing.T) {
+func TestStopWorkflow_TimeoutTerminatesImmediately(t *testing.T) {
 	tc := temporalmocks.NewClient(t)
+	done := make(chan struct{})
+	tc.On("TerminateWorkflow", mock.Anything, "wf-timeout", "", "run timeout").
+		Run(func(mock.Arguments) { close(done) }).
+		Return(nil).Once()
 
-	tc.On("CancelWorkflow", mock.Anything, "run-w1", "").Return(nil).Once()
-
-	rt, err := NewTemporalRuntime(
-		WithTemporalClient(tc, "tq"),
-		WithAgentSpec(sdkruntime.AgentSpec{Name: "agent-a"}),
-		WithAgentConfig(sdkruntime.AgentConfig{LLM: sdkruntime.AgentLLM{Client: stubLLM{}}}),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rt.activeRuns.Set("run-w1", &runHandle{})
-
-	rt.Close()
-	tc.AssertExpectations(t) // no TerminateWorkflow call expected/set up; would fail if invoked
+	rt := &TemporalRuntime{temporalClient: tc, logger: logger.NoopLogger()}
+	rt.stopWorkflow(context.Background(), "wf-timeout", context.DeadlineExceeded, done)
+	tc.AssertExpectations(t)
 }
 
-// TestTemporalRuntime_Close_ActiveWorkflows_CancelFailsFallsBackToTerminate verifies Close()
-// falls back to TerminateWorkflow only when CancelWorkflow itself errors.
-func TestTemporalRuntime_Close_ActiveWorkflows_CancelFailsFallsBackToTerminate(t *testing.T) {
+// TestStopWorkflow_CancelFallsBackToTerminate: Cancel RPC succeeds but Done never closes
+// (no worker) → Terminate after the hardcoded 3s grace.
+func TestStopWorkflow_CancelFallsBackToTerminate(t *testing.T) {
 	tc := temporalmocks.NewClient(t)
+	done := make(chan struct{})
+	tc.On("CancelWorkflow", mock.Anything, "wf-cancel", "").Return(nil).Once()
+	tc.On("TerminateWorkflow", mock.Anything, "wf-cancel", "", "run cancelled").
+		Run(func(mock.Arguments) { close(done) }).
+		Return(nil).Once()
 
-	tc.On("CancelWorkflow", mock.Anything, "run-w1", "").Return(errors.New("cancel failed")).Once()
-	tc.On("TerminateWorkflow", mock.Anything, "run-w1", "", "agent closed").Return(nil).Once()
+	rt := &TemporalRuntime{temporalClient: tc, logger: logger.NoopLogger()}
+	start := time.Now()
+	rt.stopWorkflow(context.Background(), "wf-cancel", context.Canceled, done)
+	if elapsed := time.Since(start); elapsed < 3*time.Second {
+		t.Fatalf("expected ~3s grace before terminate, finished in %v", elapsed)
+	}
+	tc.AssertExpectations(t)
+}
+
+func TestStopWorkflow_CancelCompletesWithoutTerminate(t *testing.T) {
+	tc := temporalmocks.NewClient(t)
+	done := make(chan struct{})
+	tc.On("CancelWorkflow", mock.Anything, "wf-soft", "").
+		Run(func(mock.Arguments) { close(done) }).
+		Return(nil).Once()
+
+	rt := &TemporalRuntime{temporalClient: tc, logger: logger.NoopLogger()}
+	rt.stopWorkflow(context.Background(), "wf-soft", context.Canceled, done)
+	tc.AssertExpectations(t)
+}
+
+// TestTemporalRuntime_Close_ActiveRuns_TerminatesDirectly: Close sends TerminateWorkflow
+// (not CancelWorkflow) for active runs so shutdown is immediate with no 3s grace period.
+func TestTemporalRuntime_Close_ActiveRuns_TerminatesDirectly(t *testing.T) {
+	tc := temporalmocks.NewClient(t)
+	done := make(chan struct{})
+	tc.On("TerminateWorkflow", mock.Anything, "run-w1", "", "agent closed").
+		Run(func(mock.Arguments) { close(done) }).
+		Return(nil).Once()
 
 	rt, err := NewTemporalRuntime(
 		WithTemporalClient(tc, "tq"),
@@ -623,7 +646,30 @@ func TestTemporalRuntime_Close_ActiveWorkflows_CancelFailsFallsBackToTerminate(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	rt.activeRuns.Set("run-w1", &runHandle{})
+	rt.activeRuns.Set("run-w1", &runHandle{doneCh: done})
+
+	rt.Close()
+	tc.AssertExpectations(t)
+}
+
+// TestTemporalRuntime_Close_ActiveStreams_TerminatesDirectly: Close sends TerminateWorkflow
+// (not CancelWorkflow) for active streams, same direct-terminate path as runs.
+func TestTemporalRuntime_Close_ActiveStreams_TerminatesDirectly(t *testing.T) {
+	tc := temporalmocks.NewClient(t)
+	done := make(chan struct{})
+	tc.On("TerminateWorkflow", mock.Anything, "stream-w1", "", "agent closed").
+		Run(func(mock.Arguments) { close(done) }).
+		Return(nil).Once()
+
+	rt, err := NewTemporalRuntime(
+		WithTemporalClient(tc, "tq"),
+		WithAgentSpec(sdkruntime.AgentSpec{Name: "agent-a"}),
+		WithAgentConfig(sdkruntime.AgentConfig{LLM: sdkruntime.AgentLLM{Client: stubLLM{}}}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.activeStreams.Set("stream-w1", &streamHandle{runHandle: &runHandle{doneCh: done}})
 
 	rt.Close()
 	tc.AssertExpectations(t)

@@ -2,6 +2,7 @@ package temporal
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -40,6 +41,10 @@ type runHandle struct {
 	mu  sync.Mutex
 	res *types.AgentRunResult
 	err error
+	// stopCause is set by driveRun/driveStream when the run context ends
+	// (DeadlineExceeded = WithTimeout / Stream|Run ctx deadline; Canceled = Cancel()).
+	// Events uses it to emit a clear terminal error without requiring an Events ctx deadline.
+	stopCause error
 }
 
 // newRunHandle creates a handle for runID / workflowID.
@@ -114,6 +119,25 @@ func (h *runHandle) Get(ctx context.Context) (*types.AgentRunResult, error) {
 // Done returns the channel closed when the workflow finishes.
 func (h *runHandle) Done() <-chan struct{} { return h.doneCh }
 
+// setStopCause records why the run context ended. First writer wins.
+func (h *runHandle) setStopCause(err error) {
+	if err == nil {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.stopCause == nil {
+		h.stopCause = err
+	}
+}
+
+// StopCause returns the run-context error that stopped the run, or nil.
+func (h *runHandle) StopCause() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.stopCause
+}
+
 // awaitCompletion waits for the Temporal workflow result and closes Done.
 // Uses context.Background so a cancelled Get caller does not abort the wait.
 // Burns cancelOnce (clears cancel without calling it) so later Cancel is already-completed,
@@ -139,6 +163,16 @@ func (h *runHandle) awaitCompletion() {
 		result.RunID = h.id
 	}
 	h.mu.Lock()
+	// Map raw Temporal termination errors to clean sentinel values so callers
+	// can use errors.Is rather than string-matching Temporal internals.
+	if err != nil {
+		switch {
+		case errors.Is(h.stopCause, context.DeadlineExceeded):
+			err = context.DeadlineExceeded
+		case errors.Is(h.stopCause, context.Canceled):
+			err = context.Canceled
+		}
+	}
 	h.err = err
 	h.res = result
 	h.mu.Unlock()
