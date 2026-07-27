@@ -761,7 +761,7 @@ func TestExecuteSingleTool_ApprovalHandlerRejects(t *testing.T) {
 
 func TestExecuteSingleTool_StreamingApproveUnblocks(t *testing.T) {
 	// Streaming path: ChannelName set, no ApprovalHandler.
-	// We call rt.Approve from a goroutine to unblock executeSingleTool.
+	// We call rt.approve from a goroutine to unblock executeSingleTool.
 	tool := stubTool{name: "guarded", result: "stream-ok", needsApproval: true}
 	rt, tools := newLoopRT(t, 5, &seqLLMClient{}, tool)
 
@@ -819,7 +819,7 @@ func TestExecuteSingleTool_StreamingApproveUnblocks(t *testing.T) {
 	tok := capturedToken
 	mu.Unlock()
 
-	require.NoError(t, rt.Approve(context.Background(), tok, types.ApprovalStatusApproved))
+	require.NoError(t, rt.approve(context.Background(), tok, types.ApprovalStatusApproved))
 
 	<-done
 	require.NoError(t, resultErr)

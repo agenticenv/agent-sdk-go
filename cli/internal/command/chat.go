@@ -158,7 +158,7 @@ func (c *ChatCmd) Run(cfg *config.Config) error {
 				if ok2 && strings.TrimSpace(strings.ToLower(line2)) == "y" {
 					status = sdkagent.ApprovalStatusApproved
 				}
-				if err := a.OnApproval(context.Background(), approvalToken, status); err != nil {
+				if err := agentStream.Approve(context.Background(), approvalToken, status); err != nil {
 					log.Printf("approval failed: %v", err)
 				}
 			default:

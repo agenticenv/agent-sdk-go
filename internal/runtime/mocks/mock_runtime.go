@@ -37,20 +37,6 @@ func (m *MockRuntime) EXPECT() *MockRuntimeMockRecorder {
 	return m.recorder
 }
 
-// Approve mocks base method.
-func (m *MockRuntime) Approve(arg0 context.Context, arg1 string, arg2 types.ApprovalStatus) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Approve", arg0, arg1, arg2)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// Approve indicates an expected call of Approve.
-func (mr *MockRuntimeMockRecorder) Approve(arg0, arg1, arg2 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Approve", reflect.TypeOf((*MockRuntime)(nil).Approve), arg0, arg1, arg2)
-}
-
 // Close mocks base method.
 func (m *MockRuntime) Close() {
 	m.ctrl.T.Helper()
@@ -91,6 +77,20 @@ func (m *MockRuntime) GetStreamHandle(arg0 context.Context, arg1 string) (runtim
 func (mr *MockRuntimeMockRecorder) GetStreamHandle(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetStreamHandle", reflect.TypeOf((*MockRuntime)(nil).GetStreamHandle), arg0, arg1)
+}
+
+// OnApproval mocks base method.
+func (m *MockRuntime) OnApproval(arg0 context.Context, arg1 string, arg2 types.ApprovalStatus) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "OnApproval", arg0, arg1, arg2)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// OnApproval indicates an expected call of OnApproval.
+func (mr *MockRuntimeMockRecorder) OnApproval(arg0, arg1, arg2 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "OnApproval", reflect.TypeOf((*MockRuntime)(nil).OnApproval), arg0, arg1, arg2)
 }
 
 // Run mocks base method.
@@ -239,6 +239,20 @@ func NewMockStreamHandle(ctrl *gomock.Controller) *MockStreamHandle {
 // EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockStreamHandle) EXPECT() *MockStreamHandleMockRecorder {
 	return m.recorder
+}
+
+// Approve mocks base method.
+func (m *MockStreamHandle) Approve(arg0 context.Context, arg1 string, arg2 types.ApprovalStatus) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Approve", arg0, arg1, arg2)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Approve indicates an expected call of Approve.
+func (mr *MockStreamHandleMockRecorder) Approve(arg0, arg1, arg2 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Approve", reflect.TypeOf((*MockStreamHandle)(nil).Approve), arg0, arg1, arg2)
 }
 
 // Cancel mocks base method.

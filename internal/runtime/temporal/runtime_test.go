@@ -167,33 +167,33 @@ func TestTruncateUTF8String(t *testing.T) {
 
 func TestApprove_InvalidStatus(t *testing.T) {
 	rt := &TemporalRuntime{}
-	err := rt.Approve(context.Background(), "dGVzdA==", types.ApprovalStatusPending)
+	err := rt.approve(context.Background(), "dGVzdA==", types.ApprovalStatusPending)
 	if err == nil || !strings.Contains(err.Error(), "invalid approval status") {
-		t.Fatalf("Approve = %v", err)
+		t.Fatalf("approve = %v", err)
 	}
 }
 
 func TestApprove_InvalidToken(t *testing.T) {
 	rt := &TemporalRuntime{}
-	err := rt.Approve(context.Background(), "not-valid-base64!!!", types.ApprovalStatusApproved)
+	err := rt.approve(context.Background(), "not-valid-base64!!!", types.ApprovalStatusApproved)
 	if err == nil || !strings.Contains(err.Error(), "invalid approval token") {
-		t.Fatalf("Approve = %v", err)
+		t.Fatalf("approve = %v", err)
 	}
 }
 
 func TestOnApproval_InvalidStatus(t *testing.T) {
 	rt := &TemporalRuntime{}
-	err := rt.OnApproval(context.Background(), "dGVzdA==", types.ApprovalStatusNone)
+	err := rt.approve(context.Background(), "dGVzdA==", types.ApprovalStatusNone)
 	if err == nil || !strings.Contains(err.Error(), "invalid approval status") {
-		t.Fatalf("OnApproval = %v", err)
+		t.Fatalf("approve = %v", err)
 	}
 }
 
 func TestOnApproval_InvalidToken(t *testing.T) {
 	rt := &TemporalRuntime{}
-	err := rt.OnApproval(context.Background(), "###", types.ApprovalStatusRejected)
+	err := rt.approve(context.Background(), "###", types.ApprovalStatusRejected)
 	if err == nil || !strings.Contains(err.Error(), "invalid approval token") {
-		t.Fatalf("OnApproval = %v", err)
+		t.Fatalf("approve = %v", err)
 	}
 }
 
@@ -1033,8 +1033,8 @@ func TestTemporalRuntime_Approve_CompleteActivity(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := rt.Approve(context.Background(), token, types.ApprovalStatusApproved); err != nil {
-		t.Fatalf("Approve: %v", err)
+	if err := rt.approve(context.Background(), token, types.ApprovalStatusApproved); err != nil {
+		t.Fatalf("approve: %v", err)
 	}
 }
 
@@ -1058,12 +1058,12 @@ func TestTemporalRuntime_Approve_SecondCallAlreadyResolved(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := rt.Approve(context.Background(), token, types.ApprovalStatusApproved); err != nil {
-		t.Fatalf("first Approve: %v", err)
+	if err := rt.approve(context.Background(), token, types.ApprovalStatusApproved); err != nil {
+		t.Fatalf("first approve: %v", err)
 	}
-	err = rt.Approve(context.Background(), token, types.ApprovalStatusApproved)
+	err = rt.approve(context.Background(), token, types.ApprovalStatusApproved)
 	if !errors.Is(err, types.ErrApprovalAlreadyResolved) {
-		t.Fatalf("second Approve: got %v, want ErrApprovalAlreadyResolved", err)
+		t.Fatalf("second approve: got %v, want ErrApprovalAlreadyResolved", err)
 	}
 }
 
@@ -1083,7 +1083,7 @@ func TestTemporalRuntime_OnApproval_AlreadyResolved(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = rt.OnApproval(context.Background(), token, types.ApprovalStatusRejected)
+	err = rt.approve(context.Background(), token, types.ApprovalStatusRejected)
 	if !errors.Is(err, types.ErrApprovalAlreadyResolved) {
 		t.Fatalf("got %v, want ErrApprovalAlreadyResolved", err)
 	}

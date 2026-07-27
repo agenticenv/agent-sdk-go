@@ -1362,7 +1362,7 @@ func (rt *TemporalRuntime) AgentWorkflowCleanupActivity(ctx context.Context, inp
 
 // AgentToolApprovalActivity blocks until the driver completes it via CompleteActivity.
 // Publishes a CUSTOM (tool_approval / delegation) event to the WorkflowStream so the client
-// can display the approval UI and call OnApproval with the task token.
+// can display the approval UI and call StreamHandle.Approve with the task token.
 // StreamWorkflowID is the workflow whose stream receives the approval event (root or sub-agent root).
 func (rt *TemporalRuntime) AgentToolApprovalActivity(ctx context.Context, input AgentToolApprovalInput) (types.ApprovalStatus, error) {
 	if err := rt.verifyAgentFingerprint(ctx, input.AgentFingerprint, nil); err != nil {

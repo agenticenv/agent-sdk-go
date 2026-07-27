@@ -22,8 +22,8 @@ import (
 // Per-run lifecycle (status, cancel, wait-for-result, event subscription) lives on the
 // handles returned by [Runtime.Run] / [Runtime.GetRunHandle] and
 // [Runtime.Stream] / [Runtime.GetStreamHandle] — not on Runtime itself.
-// Runtime starts or reconnects to runs, resolves out-of-band approvals, and releases
-// shared resources.
+// Runtime starts or reconnects to runs and releases shared resources. Stream approvals go through
+// [StreamHandle.Approve]; [Runtime.OnApproval] remains only for deprecated agent-level compat.
 type Runtime interface {
 	// Run starts one blocking-style agent run and returns a [RunHandle] immediately.
 	// The run continues asynchronously; use [RunHandle.Get] or [RunHandle.Done] to wait for
@@ -46,9 +46,16 @@ type Runtime interface {
 	// Stream starts one streaming agent run and returns a [StreamHandle] immediately.
 	// It does not subscribe to events; call [StreamHandle.Events] on the returned handle.
 	// The runtime mints the run ID exposed by [StreamHandle.ID]. For approvals (tool or
-	// delegation), subscribe via [StreamHandle.Events] and handle CUSTOM events. When using
-	// conversation, set [RunRequest.ConversationID] on the request.
+	// delegation), subscribe via [StreamHandle.Events], handle CUSTOM events, then call
+	// [StreamHandle.Approve]. When using conversation, set [RunRequest.ConversationID] on the request.
 	Stream(ctx context.Context, req *RunRequest) (StreamHandle, error)
+
+	// OnApproval completes a pending stream approval by token. Prefer [StreamHandle.Approve].
+	// Returns [types.ErrApprovalAlreadyResolved] when the token was already completed.
+	//
+	// Deprecated: Use [StreamHandle.Approve] on the handle from [Runtime.Stream] or
+	// [Runtime.GetStreamHandle] instead. This method will be removed in v0.4.0.
+	OnApproval(ctx context.Context, approvalToken string, status types.ApprovalStatus) error
 
 	// GetStreamHandle returns a [StreamHandle] for an existing streaming run identified by
 	// runID (e.g. after a process restart). Use this instead of [Runtime.Stream]
@@ -60,11 +67,6 @@ type Runtime interface {
 	// Returns [ErrRunAlreadyCompleted] when the run has already finished.
 	// Returns [ErrStreamOffsetNotSupported] when the runtime cannot replay at the requested offset.
 	GetStreamHandle(ctx context.Context, runID string) (StreamHandle, error)
-
-	// Approve completes a pending tool approval when the runtime uses out-of-band approval
-	// (e.g. Temporal CompleteActivity). Returns [ErrApprovalAlreadyResolved] when the token
-	// was already completed.
-	Approve(ctx context.Context, approvalToken string, status types.ApprovalStatus) error
 
 	// Close releases runtime resources (connections, workers, background goroutines).
 	Close()
@@ -122,6 +124,11 @@ type StreamHandle interface {
 	// Done returns a channel that is closed when the stream run finishes (success or failure).
 	// Safe to call multiple times; always returns the same channel.
 	Done() <-chan struct{}
+
+	// Approve completes a tool approval request using the token from the approval event
+	// and the chosen status (e.g., [ApprovalStatusApproved] or [ApprovalStatusRejected]).
+	// Returns [ErrApprovalAlreadyResolved] when the token was already completed.
+	Approve(ctx context.Context, approvalToken string, status types.ApprovalStatus) error
 
 	// Events subscribes to this run's event stream starting at fromOffset.
 	// fromOffset == 0 means from the beginning of the run (first-time subscriber).

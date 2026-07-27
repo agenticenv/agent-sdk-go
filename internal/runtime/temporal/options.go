@@ -151,7 +151,7 @@ func WithMetrics(m interfaces.Metrics) Option {
 }
 
 // WithApprovalHandler sets the Run-path approval callback (from agent WithApprovalHandler).
-// Stream uses CUSTOM events + Approve/OnApproval instead.
+// Stream uses CUSTOM events + StreamHandle.Approve instead.
 func WithApprovalHandler(fn types.ApprovalHandler) Option {
 	return func(rt *TemporalRuntime) { rt.approvalHandler = fn }
 }

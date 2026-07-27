@@ -2,6 +2,7 @@ package local
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/agenticenv/agent-sdk-go/internal/events"
@@ -30,11 +31,21 @@ type streamHandle struct {
 // newStreamHandle creates a live stream handle for runID, embedding a new [runHandle].
 // cancel aborts the run context; eventCh is the receive-only event stream
 // (subscribe-before-start), handed out once by [streamHandle.Events].
-func newStreamHandle(id string, cancel context.CancelFunc, eventCh <-chan events.AgentEvent) *streamHandle {
+func newStreamHandle(id string, rt *LocalRuntime, cancel context.CancelFunc, eventCh <-chan events.AgentEvent) *streamHandle {
 	return &streamHandle{
-		runHandle: newRunHandle(id, cancel),
+		runHandle: newRunHandle(id, rt, cancel),
 		eventCh:   eventCh,
 	}
+}
+
+// Approve completes a tool or delegation approval using the token from the CUSTOM event
+// and the chosen status (e.g. [types.ApprovalStatusApproved] or [types.ApprovalStatusRejected]).
+// Returns [types.ErrApprovalAlreadyResolved] when the token was already completed.
+func (h *streamHandle) Approve(ctx context.Context, approvalToken string, status types.ApprovalStatus) error {
+	if h.rt == nil {
+		return fmt.Errorf("local: stream handle %q is not configured", h.id)
+	}
+	return h.rt.approve(ctx, approvalToken, status)
 }
 
 // Events returns this run's in-process event channel (subscribe-before-start).

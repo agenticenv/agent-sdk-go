@@ -202,7 +202,7 @@ func copyApprovalArgs(src map[string]any) map[string]any {
 // Set opts.DisableTokenStreaming = true to receive a single complete message instead.
 //
 // For approvals (tool or delegation), receive [AgentEventTypeCustom] events from the Events channel
-// and call [Agent.OnApproval] with the token extracted from the payload.
+// and call [AgentStream.Approve] with the token extracted from the payload.
 // When using [WithConversation], pass the conversation ID in opts.
 func (a *Agent) Stream(ctx context.Context, input string, opts *AgentStreamOptions) (AgentStream, error) {
 	ctx = a.attachMemoryScopeContext(ctx)

@@ -11,19 +11,19 @@ import (
 )
 
 func TestRunHandle_ID(t *testing.T) {
-	h := newRunHandle("run-1", func() {})
+	h := newRunHandle("run-1", nil, func() {})
 	require.Equal(t, "run-1", h.ID())
 }
 
 func TestRunHandle_Status_InitiallyRunning(t *testing.T) {
-	h := newRunHandle("run-1", func() {})
+	h := newRunHandle("run-1", nil, func() {})
 	st, err := h.Status(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, types.StatusRunning, st)
 }
 
 func TestRunHandle_Complete_Success(t *testing.T) {
-	h := newRunHandle("run-1", func() {})
+	h := newRunHandle("run-1", nil, func() {})
 	want := &types.AgentRunResult{Content: "ok", RunID: "run-1"}
 
 	h.markDone(want, nil)
@@ -44,7 +44,7 @@ func TestRunHandle_Complete_Success(t *testing.T) {
 }
 
 func TestRunHandle_Complete_Failure(t *testing.T) {
-	h := newRunHandle("run-1", func() {})
+	h := newRunHandle("run-1", nil, func() {})
 	wantErr := errors.New("loop failed")
 
 	h.markDone(nil, wantErr)
@@ -59,7 +59,7 @@ func TestRunHandle_Complete_Failure(t *testing.T) {
 }
 
 func TestRunHandle_Complete_ContextCanceledSetsCancelled(t *testing.T) {
-	h := newRunHandle("run-1", func() {})
+	h := newRunHandle("run-1", nil, func() {})
 
 	h.markDone(nil, context.Canceled)
 
@@ -73,7 +73,7 @@ func TestRunHandle_Complete_ContextCanceledSetsCancelled(t *testing.T) {
 }
 
 func TestRunHandle_Complete_DeadlineExceededSetsFailed(t *testing.T) {
-	h := newRunHandle("run-1", func() {})
+	h := newRunHandle("run-1", nil, func() {})
 
 	h.markDone(nil, context.DeadlineExceeded)
 
@@ -84,7 +84,7 @@ func TestRunHandle_Complete_DeadlineExceededSetsFailed(t *testing.T) {
 
 func TestRunHandle_Cancel_InvokesCancelFunc(t *testing.T) {
 	cancelled := false
-	h := newRunHandle("run-1", func() { cancelled = true })
+	h := newRunHandle("run-1", nil, func() { cancelled = true })
 
 	require.NoError(t, h.Cancel(context.Background()))
 	require.True(t, cancelled)
@@ -117,19 +117,19 @@ func TestRunHandle_Cancel_InvokesCancelFunc(t *testing.T) {
 }
 
 func TestRunHandle_Cancel_NilCancelFunc(t *testing.T) {
-	h := newRunHandle("run-1", nil)
+	h := newRunHandle("run-1", nil, nil)
 	require.ErrorIs(t, h.Cancel(context.Background()), types.ErrRunAlreadyCompleted)
 }
 
 func TestRunHandle_Cancel_AfterComplete(t *testing.T) {
-	h := newRunHandle("run-1", func() {})
+	h := newRunHandle("run-1", nil, func() {})
 	h.markDone(&types.AgentRunResult{Content: "done"}, nil)
 
 	require.ErrorIs(t, h.Cancel(context.Background()), types.ErrRunAlreadyCompleted)
 }
 
 func TestRunHandle_Get_UnblocksOnContextCancel(t *testing.T) {
-	h := newRunHandle("run-1", func() {})
+	h := newRunHandle("run-1", nil, func() {})
 	ctx, cancel := context.WithCancel(context.Background())
 
 	errCh := make(chan error, 1)
@@ -155,7 +155,7 @@ func TestRunHandle_Get_UnblocksOnContextCancel(t *testing.T) {
 }
 
 func TestRunHandle_Get_WaitsForComplete(t *testing.T) {
-	h := newRunHandle("run-1", func() {})
+	h := newRunHandle("run-1", nil, func() {})
 	want := &types.AgentRunResult{Content: "later"}
 
 	done := make(chan struct{})
@@ -177,6 +177,6 @@ func TestRunHandle_Get_WaitsForComplete(t *testing.T) {
 }
 
 func TestRunHandle_Done_SameChannel(t *testing.T) {
-	h := newRunHandle("run-1", func() {})
+	h := newRunHandle("run-1", nil, func() {})
 	require.Equal(t, h.Done(), h.Done())
 }

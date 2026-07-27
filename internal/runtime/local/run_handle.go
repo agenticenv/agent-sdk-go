@@ -21,6 +21,7 @@ var _ sdkruntime.RunHandle = (*runHandle)(nil)
 // when finished. Cancel only cancels the run context; markDone closes Done.
 type runHandle struct {
 	id     string
+	rt     *LocalRuntime
 	doneCh chan struct{}
 
 	cancelOnce sync.Once
@@ -35,9 +36,10 @@ type runHandle struct {
 
 // newRunHandle creates a live handle for runID. cancel aborts the run context;
 // pass a non-nil cancel from context.WithCancel (or WithTimeout).
-func newRunHandle(id string, cancel context.CancelFunc) *runHandle {
+func newRunHandle(id string, rt *LocalRuntime, cancel context.CancelFunc) *runHandle {
 	return &runHandle{
 		id:     id,
+		rt:     rt,
 		doneCh: make(chan struct{}),
 		cancel: cancel,
 		status: types.StatusRunning,

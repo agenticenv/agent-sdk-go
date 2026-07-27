@@ -37,6 +37,20 @@ func (m *MockAgentStream) EXPECT() *MockAgentStreamMockRecorder {
 	return m.recorder
 }
 
+// Approve mocks base method.
+func (m *MockAgentStream) Approve(arg0 context.Context, arg1 string, arg2 types.ApprovalStatus) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Approve", arg0, arg1, arg2)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Approve indicates an expected call of Approve.
+func (mr *MockAgentStreamMockRecorder) Approve(arg0, arg1, arg2 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Approve", reflect.TypeOf((*MockAgentStream)(nil).Approve), arg0, arg1, arg2)
+}
+
 // Cancel mocks base method.
 func (m *MockAgentStream) Cancel(arg0 context.Context) error {
 	m.ctrl.T.Helper()

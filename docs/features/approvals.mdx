@@ -5,7 +5,7 @@ description: "Configure human-in-the-loop approval for tool calls, MCP invocatio
 
 Before registry tools, MCP tools, or sub-agent delegation execute, the SDK can pause and wait for **human approval**. One agent-level policy governs all three paths.
 
-When an approval is required, the run **pauses at that tool call** and delivers an `ApprovalRequest` to your handler (or a `CUSTOM` event on the stream). The run resumes only after `req.Respond()` or `OnApproval()` is called with `Approved` or `Rejected`. If rejected, the tool call is skipped and the LLM receives a clear refusal message, then continues generating a response without that tool result. The overall run does not fail on rejection — only on timeout.
+When an approval is required, the run **pauses at that tool call** and delivers an `ApprovalRequest` to your handler (or a `CUSTOM` event on the stream). The run resumes only after `req.Respond()` or `AgentStream.Approve()` is called with `Approved` or `Rejected`. If rejected, the tool call is skipped and the LLM receives a clear refusal message, then continues generating a response without that tool result. The overall run does not fail on rejection — only on timeout.
 
 ## Policies
 
@@ -74,7 +74,7 @@ For a **non-blocking** wait, use the same handler and select on `agentRun.Done()
 
 ### Error handling
 
-`Respond` (and stream `OnApproval`) succeed once per approval token. A second call returns `ErrApprovalAlreadyResolved` — already answered or timed out; usually safe to ignore:
+`Respond` (and stream `Approve`) succeed once per approval token. A second call returns `ErrApprovalAlreadyResolved` — already answered or timed out; usually safe to ignore:
 
 ```go
 a, err := agent.NewAgent(
@@ -91,13 +91,22 @@ a, err := agent.NewAgent(
 )
 ```
 
-On Temporal, approval state is durable across reconnects — calling `Respond` / `OnApproval` again after a crash returns the same sentinel.
+On Temporal, approval state is durable across reconnects — calling `Respond` / `Approve` again after a crash returns the same sentinel.
 
 ## Stream
 
-On `Stream`, approval and delegation requests arrive as `AgentEventTypeCustom` events — not via `WithApprovalHandler`. Parse the event, then call [`OnApproval`](https://pkg.go.dev/github.com/agenticenv/agent-sdk-go/pkg/agent#Agent.OnApproval):
+On `Stream`, approval and delegation requests arrive as `AgentEventTypeCustom` events — not via `WithApprovalHandler`. Parse the event, then call [`Approve`](https://pkg.go.dev/github.com/agenticenv/agent-sdk-go/pkg/agent#AgentStream.Approve) on the stream handle:
 
 ```go
+stream, err := a.Stream(ctx, prompt, nil)
+if err != nil {
+    return err
+}
+eventCh, err := stream.Events(ctx)
+if err != nil {
+    return err
+}
+
 for ev := range eventCh {
     if ev == nil || ev.Type() != agent.AgentEventTypeCustom {
         continue
@@ -107,27 +116,27 @@ for ev := range eventCh {
         continue
     }
     if v, err := agent.ParseCustomEventApproval(ce); err == nil {
-        err := a.OnApproval(ctx, v.ApprovalToken, agent.ApprovalStatusApproved)
+        err := stream.Approve(ctx, v.ApprovalToken, agent.ApprovalStatusApproved)
         if errors.Is(err, agent.ErrApprovalAlreadyResolved) {
             continue
         }
         if err != nil {
-            log.WithError(err).Error("OnApproval failed")
+            log.WithError(err).Error("Approve failed")
         }
     } else if d, err := agent.ParseCustomEventDelegation(ce); err == nil {
-        err := a.OnApproval(ctx, d.ApprovalToken, agent.ApprovalStatusApproved)
+        err := stream.Approve(ctx, d.ApprovalToken, agent.ApprovalStatusApproved)
         if errors.Is(err, agent.ErrApprovalAlreadyResolved) {
             continue
         }
         if err != nil {
-            log.WithError(err).Error("OnApproval failed")
+            log.WithError(err).Error("Approve failed")
         }
     }
 }
 ```
 
 <Warning>
-`Run` uses `req.Respond()` in `WithApprovalHandler`. `Stream` uses `OnApproval` with the token from the CUSTOM event. Do not mix the two paths.
+`Run` uses `req.Respond()` in `WithApprovalHandler`. `Stream` uses `AgentStream.Approve` with the token from the CUSTOM event. Do not mix the two paths.
 </Warning>
 
 ## Sub-agent approval
@@ -179,7 +188,7 @@ for ev := range eventCh {
         continue
     }
     if v, err := agent.ParseCustomEventApproval(ce); err == nil {
-        err := a.OnApproval(ctx, v.ApprovalToken, agent.ApprovalStatusApproved)
+        err := stream.Approve(ctx, v.ApprovalToken, agent.ApprovalStatusApproved)
         if errors.Is(err, agent.ErrApprovalAlreadyResolved) {
             continue // answered before the crash
         }
@@ -190,7 +199,7 @@ for ev := range eventCh {
 }
 ```
 
-The CUSTOM approval event is delivered once. If you already responded before the crash, `OnApproval` returns `ErrApprovalAlreadyResolved`. If you crashed before responding, the token stays open until you answer.
+The CUSTOM approval event is delivered once. If you already responded before the crash, `Approve` returns `ErrApprovalAlreadyResolved`. If you crashed before responding, the token stays open until you answer.
 
 ## Example
 

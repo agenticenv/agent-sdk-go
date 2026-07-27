@@ -201,7 +201,7 @@ func runStream(ctx context.Context, a *agent.Agent, scanner *bufio.Scanner, prom
 	fmt.Println(shared.RunIDLine(runID))
 
 	fmt.Println("--- stream start ---")
-	drainStreamEvents(ctx, a, scanner, prompt, runID, eventCh, 0)
+	drainStreamEvents(ctx, agentStream, scanner, prompt, runID, eventCh, 0)
 	fmt.Println("--- stream end ---")
 	fmt.Println()
 }
@@ -235,7 +235,7 @@ func reconnectStream(ctx context.Context, a *agent.Agent, scanner *bufio.Scanner
 	}
 
 	fmt.Println("--- stream resumed ---")
-	drainStreamEvents(ctx, a, scanner, state.Prompt, state.RunID, eventCh, state.Offset)
+	drainStreamEvents(ctx, agentStream, scanner, state.Prompt, state.RunID, eventCh, state.Offset)
 	fmt.Println("--- stream end ---")
 	fmt.Println()
 }
@@ -247,7 +247,7 @@ func reconnectStream(ctx context.Context, a *agent.Agent, scanner *bufio.Scanner
 //   - clears the state file on terminal events (RUN_FINISHED, RUN_ERROR)
 func drainStreamEvents(
 	ctx context.Context,
-	a *agent.Agent,
+	agentStream agent.AgentStream,
 	scanner *bufio.Scanner,
 	prompt string,
 	runID string,
@@ -308,11 +308,11 @@ func drainStreamEvents(
 			if v, ok := shared.ToolApprovalValueFromEvent(ev); ok {
 				args, _ := json.Marshal(v.Args)
 				fmt.Printf("\n[approval] agent=%s kind=tool target=%s args=%s\n", v.AgentName, v.ToolName, string(args))
-				handleApprovalTokenPrompt(ctx, a, scanner, v.ApprovalToken)
+				handleApprovalTokenPrompt(ctx, agentStream, scanner, v.ApprovalToken)
 			} else if v, ok := shared.DelegationApprovalValueFromEvent(ev); ok {
 				args, _ := json.Marshal(v.Args)
 				fmt.Printf("\n[approval] agent=%s kind=delegation target=delegate:%s args=%s\n", v.AgentName, v.SubAgentName, string(args))
-				handleApprovalTokenPrompt(ctx, a, scanner, v.ApprovalToken)
+				handleApprovalTokenPrompt(ctx, agentStream, scanner, v.ApprovalToken)
 			}
 
 		case agent.AgentEventTypeRunError:
@@ -339,25 +339,25 @@ func drainStreamEvents(
 	}
 }
 
-func handleApprovalTokenPrompt(ctx context.Context, a *agent.Agent, scanner *bufio.Scanner, token string) {
+func handleApprovalTokenPrompt(ctx context.Context, agentStream agent.AgentStream, scanner *bufio.Scanner, token string) {
 	for {
 		fmt.Print("approve? (y/n)> ")
 		if !scanner.Scan() {
 			fmt.Println("EOF, rejecting.")
-			_ = a.OnApproval(ctx, token, agent.ApprovalStatusRejected)
+			_ = agentStream.Approve(ctx, token, agent.ApprovalStatusRejected)
 			return
 		}
 		ans := strings.ToLower(strings.TrimSpace(scanner.Text()))
 		switch ans {
 		case "y", "yes":
-			if err := a.OnApproval(ctx, token, agent.ApprovalStatusApproved); err != nil {
+			if err := agentStream.Approve(ctx, token, agent.ApprovalStatusApproved); err != nil {
 				fmt.Printf("[approval error] %v\n", err)
 			} else {
 				fmt.Println("[approved]")
 			}
 			return
 		case "n", "no":
-			if err := a.OnApproval(ctx, token, agent.ApprovalStatusRejected); err != nil {
+			if err := agentStream.Approve(ctx, token, agent.ApprovalStatusRejected); err != nil {
 				fmt.Printf("[approval error] %v\n", err)
 			} else {
 				fmt.Println("[rejected]")

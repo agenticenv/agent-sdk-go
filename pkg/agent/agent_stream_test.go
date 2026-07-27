@@ -286,6 +286,27 @@ func TestAgent_GetAgentStream_StatusAndCancelDelegate(t *testing.T) {
 	}
 }
 
+func TestAgent_GetAgentStream_ApproveDelegates(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	mockRT := rtmocks.NewMockRuntime(ctrl)
+	h := rtmocks.NewMockStreamHandle(ctrl)
+	mockRT.EXPECT().GetStreamHandle(gomock.Any(), "s1").Return(h, nil)
+	h.EXPECT().ID().Return("s1").AnyTimes()
+	done := make(chan struct{})
+	h.EXPECT().Done().Return((<-chan struct{})(done)).AnyTimes()
+	h.EXPECT().Approve(gomock.Any(), "tok", types.ApprovalStatusApproved).Return(nil)
+
+	a := testAgentWithRuntime(mockRT)
+	agentStream, err := a.GetAgentStream(context.Background(), "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := agentStream.Approve(context.Background(), "tok", ApprovalStatusApproved); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAgent_Stream_GetAndDone(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

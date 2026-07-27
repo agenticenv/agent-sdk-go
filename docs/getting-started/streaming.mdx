@@ -183,7 +183,7 @@ Stream events are typed [`AgentEvent`](https://pkg.go.dev/github.com/agenticenv/
 |---|---|
 | `AgentEventTypeCustom` | Approval or delegation requests during `Stream` |
 
-Parse approval events with `ParseCustomEventApproval` / `ParseCustomEventDelegation`, then call [`OnApproval`](/features/approvals) with the `ApprovalToken`. See [Approvals](/features/approvals) for the full flow.
+Parse approval events with `ParseCustomEventApproval` / `ParseCustomEventDelegation`, then call [`AgentStream.Approve`](/features/approvals) with the `ApprovalToken`. See [Approvals](/features/approvals) for the full flow.
 
 ## Displaying streamed text
 

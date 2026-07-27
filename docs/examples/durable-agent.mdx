@@ -26,7 +26,7 @@ The agent uses **`Stream`**. The REPL prints event types as they arrive:
 
 - `TEXT_MESSAGE_CONTENT` — token deltas
 - Tool lifecycle events
-- `CUSTOM` — tool and delegation **approvals** (respond with `OnApproval` in the sample)
+- `CUSTOM` — tool and delegation **approvals** (respond with `AgentStream.Approve` in the sample)
 - `RUN_FINISHED` / errors
 
 Events are delivered by the runtime as a durable ordered stream. Each event carries a monotonic offset.
@@ -171,7 +171,7 @@ Send a prompt from the agent. Outcome depends on timing (same as scenario 2):
 
 ## Approvals in this example
 
-`agent/main.go` handles **`CUSTOM`** approval events — parse with `ParseCustomEventApproval` / `ParseCustomEventDelegation` and call `OnApproval` with the token (same pattern as [Approvals](/features/approvals)). Shared opts in `opts/opts.go` do not register tools by default, so simple prompts usually skip this path.
+`agent/main.go` handles **`CUSTOM`** approval events — parse with `ParseCustomEventApproval` / `ParseCustomEventDelegation` and call `AgentStream.Approve` with the token (same pattern as [Approvals](/features/approvals)). Shared opts in `opts/opts.go` do not register tools by default, so simple prompts usually skip this path.
 
 If you add tools that require approval and ignore prompts, tools are skipped with a clear message rather than hanging indefinitely.
 

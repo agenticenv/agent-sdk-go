@@ -656,7 +656,7 @@ func TestStream_ContextCancelledAborts(t *testing.T) {
 
 func TestApprove_UnknownToken(t *testing.T) {
 	rt := newLocalRT(t, &seqLLMClient{})
-	err := rt.Approve(context.Background(), "nonexistent-token", types.ApprovalStatusApproved)
+	err := rt.approve(context.Background(), "nonexistent-token", types.ApprovalStatusApproved)
 	require.ErrorIs(t, err, types.ErrApprovalAlreadyResolved)
 }
 
@@ -667,7 +667,7 @@ func TestApprove_ResolvesRegisteredChannel(t *testing.T) {
 	resultCh := make(chan types.ApprovalStatus, 1)
 	rt.pendingApprovals.Store(token, resultCh)
 
-	err := rt.Approve(context.Background(), token, types.ApprovalStatusApproved)
+	err := rt.approve(context.Background(), token, types.ApprovalStatusApproved)
 	require.NoError(t, err)
 
 	select {
@@ -678,7 +678,7 @@ func TestApprove_ResolvesRegisteredChannel(t *testing.T) {
 	}
 
 	_, loaded := rt.pendingApprovals.Load(token)
-	require.False(t, loaded, "token must be removed after Approve")
+	require.False(t, loaded, "token must be removed after approve")
 }
 
 func TestApprove_RejectsViaSameToken(t *testing.T) {
@@ -688,7 +688,7 @@ func TestApprove_RejectsViaSameToken(t *testing.T) {
 	resultCh := make(chan types.ApprovalStatus, 1)
 	rt.pendingApprovals.Store(token, resultCh)
 
-	err := rt.Approve(context.Background(), token, types.ApprovalStatusRejected)
+	err := rt.approve(context.Background(), token, types.ApprovalStatusRejected)
 	require.NoError(t, err)
 
 	status := <-resultCh
@@ -702,8 +702,8 @@ func TestApprove_DoubleApproveSecondErrors(t *testing.T) {
 	resultCh := make(chan types.ApprovalStatus, 1)
 	rt.pendingApprovals.Store(token, resultCh)
 
-	require.NoError(t, rt.Approve(context.Background(), token, types.ApprovalStatusApproved))
-	err := rt.Approve(context.Background(), token, types.ApprovalStatusApproved)
+	require.NoError(t, rt.approve(context.Background(), token, types.ApprovalStatusApproved))
+	err := rt.approve(context.Background(), token, types.ApprovalStatusApproved)
 	require.ErrorIs(t, err, types.ErrApprovalAlreadyResolved)
 }
 
@@ -749,7 +749,7 @@ outer:
 				if parseErr == nil && val.ApprovalToken != "" {
 					approvalToken = val.ApprovalToken
 					go func(tok string) {
-						_ = rt.Approve(context.Background(), tok, types.ApprovalStatusApproved)
+						_ = rt.approve(context.Background(), tok, types.ApprovalStatusApproved)
 					}(approvalToken)
 				}
 			}
