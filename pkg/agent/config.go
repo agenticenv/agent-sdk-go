@@ -411,7 +411,7 @@ func WithLogLevel(level string) Option {
 // WithApprovalHandler registers the approval callback once at [NewAgent] construction time for
 // [Agent.Run]. Required when tools need approval. The callback receives req
 // with req.Respond set; call req.Respond(Approved|Rejected). Agent only; [Agent.Stream] uses
-// [Agent.OnApproval] on CUSTOM events instead.
+// [AgentStream.Approve] on CUSTOM events instead.
 func WithApprovalHandler(fn types.ApprovalHandler) Option {
 	return func(c *agentConfig) { c.approvalHandler = fn }
 }

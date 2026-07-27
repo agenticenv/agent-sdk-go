@@ -351,7 +351,7 @@ func TestAgent_OnApproval(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	mockRT := rtmocks.NewMockRuntime(ctrl)
-	mockRT.EXPECT().Approve(gomock.Any(), "tok", types.ApprovalStatusApproved).Return(nil)
+	mockRT.EXPECT().OnApproval(gomock.Any(), "tok", types.ApprovalStatusApproved).Return(nil)
 
 	a := testAgentWithRuntime(mockRT)
 	if err := a.OnApproval(context.Background(), "tok", types.ApprovalStatusApproved); err != nil {

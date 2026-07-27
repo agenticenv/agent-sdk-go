@@ -66,7 +66,7 @@ type TemporalRuntime struct {
 	logger logger.Logger
 
 	// approvalHandler is the Run-path approval callback (agent WithApprovalHandler).
-	// Nil when unset. Stream uses CUSTOM events + Approve/OnApproval instead.
+	// Nil when unset. Stream uses CUSTOM events + StreamHandle.Approve instead.
 	approvalHandler types.ApprovalHandler
 
 	// Fingerprint inputs captured at construction; per-run digest from [computeAgentFingerprintFromRuntime].
@@ -305,7 +305,10 @@ func (rt *TemporalRuntime) getActiveWorkflowIDs() []string {
 	return ids
 }
 
-func (rt *TemporalRuntime) Approve(ctx context.Context, approvalToken string, status types.ApprovalStatus) error {
+// approve completes a tool approval request using the token from the approval event
+// and the chosen status (e.g., [ApprovalStatusApproved] or [ApprovalStatusRejected]).
+// Returns [ErrApprovalAlreadyResolved] when the token was already completed.
+func (rt *TemporalRuntime) approve(ctx context.Context, approvalToken string, status types.ApprovalStatus) error {
 	if status != types.ApprovalStatusApproved && status != types.ApprovalStatusRejected {
 		return fmt.Errorf("invalid approval status: %s", status)
 	}
@@ -575,8 +578,8 @@ func (rt *TemporalRuntime) driveRun(
 					return errors.New("invalid approval status")
 				}
 				approvalResponseCh <- approvalResponse{approvalToken: token, status: status}
-				// TODO: Respond always returns nil today (async OnApproval in driveRun). Later, surface
-				// types.ErrApprovalAlreadyResolved (and other OnApproval errors) to the handler so a
+				// TODO: Respond always returns nil today (async approve in driveRun). Later, surface
+				// types.ErrApprovalAlreadyResolved (and other approve errors) to the handler so a
 				// second UI can dismiss the prompt. Dual-process GetRunHandle is unsupported; document
 				// that only the owner process should handle approvals.
 				return nil
@@ -585,7 +588,7 @@ func (rt *TemporalRuntime) driveRun(
 			rt.approvalHandler(approvalCtx, apprReq)
 			cancel()
 		case resp := <-approvalResponseCh:
-			if err := rt.OnApproval(runCtx, resp.approvalToken, resp.status); err != nil {
+			if err := rt.approve(runCtx, resp.approvalToken, resp.status); err != nil {
 				if errors.Is(err, types.ErrApprovalAlreadyResolved) {
 					rt.logger.Debug(runCtx, "runtime approval already resolved",
 						slog.String("scope", "runtime"))
@@ -659,6 +662,12 @@ func (rt *TemporalRuntime) GetRunHandle(ctx context.Context, runID string) (runt
 	rt.activeRuns.Set(workflowID, handle)
 	go rt.driveRun(runCtx, runCancel, workflowID, handle, approvalEventCh, streamClient, subscribeCancel)
 	return handle, nil
+}
+
+// OnApproval is a deprecated Runtime-interface wrapper around [TemporalRuntime.approve].
+// Prefer [runtime.StreamHandle.Approve]. Removed in v0.4.0.
+func (rt *TemporalRuntime) OnApproval(ctx context.Context, approvalToken string, status types.ApprovalStatus) error {
+	return rt.approve(ctx, approvalToken, status)
 }
 
 // Stream starts the agent Temporal workflow and returns a [runtime.StreamHandle] immediately.
@@ -940,32 +949,6 @@ func (rt *TemporalRuntime) isPendingApproval(ctx context.Context, workflowID str
 		return true
 	}
 	return pending
-}
-
-// OnApproval completes a tool approval when using ExecuteStream. Pass the string from ev.Approval
-// (see the streaming examples) along with the chosen status.
-//
-// Returns [types.ErrApprovalAlreadyResolved] when the approval token refers to an activity that
-// has already been completed. This can happen after Events (reconnect) replays a CUSTOM event for an
-// approval that was resolved while the subscriber was disconnected. Treat it as informational.
-func (rt *TemporalRuntime) OnApproval(ctx context.Context, approvalToken string, status types.ApprovalStatus) error {
-	if status != types.ApprovalStatusApproved && status != types.ApprovalStatusRejected {
-		return fmt.Errorf("invalid approval status: %s", status)
-	}
-	taskToken, err := base64.StdEncoding.DecodeString(approvalToken)
-	if err != nil {
-		return fmt.Errorf("invalid approval token: %w", err)
-	}
-	if err := rt.temporalClient.CompleteActivity(ctx, taskToken, status, nil); err != nil {
-		if isNotFoundError(err) {
-			rt.logger.Debug(ctx, "runtime: approval already resolved, returning sentinel",
-				slog.String("scope", "runtime"),
-				slog.String("status", string(status)))
-			return types.ErrApprovalAlreadyResolved
-		}
-		return err
-	}
-	return nil
 }
 
 // isNotFoundError reports whether err is a Temporal "not found" service error, which is returned

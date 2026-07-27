@@ -149,7 +149,7 @@ func main() {
 				if approved {
 					status = agent.ApprovalStatusApproved
 				}
-				if err := mainAgent.OnApproval(context.Background(), tv.ApprovalToken, status); err != nil {
+				if err := agentStream.Approve(context.Background(), tv.ApprovalToken, status); err != nil {
 					fmt.Printf("[%s] approval error: %v\n", eventType, err)
 				}
 				continue
@@ -167,7 +167,7 @@ func main() {
 				if approved {
 					status = agent.ApprovalStatusApproved
 				}
-				if err := mainAgent.OnApproval(context.Background(), dv.ApprovalToken, status); err != nil {
+				if err := agentStream.Approve(context.Background(), dv.ApprovalToken, status); err != nil {
 					fmt.Printf("[%s] approval error: %v\n", eventType, err)
 				}
 			}

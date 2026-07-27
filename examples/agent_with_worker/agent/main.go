@@ -138,11 +138,11 @@ func runStream(ctx context.Context, a *agent.Agent, scanner *bufio.Scanner, prom
 			if v, ok := shared.ToolApprovalValueFromEvent(ev); ok {
 				args, _ := json.Marshal(v.Args)
 				fmt.Printf("\n[approval] agent=%s kind=tool target=%s args=%s\n", v.AgentName, v.ToolName, string(args))
-				handleApprovalTokenPrompt(ctx, a, scanner, v.ApprovalToken)
+				handleApprovalTokenPrompt(ctx, agentStream, scanner, v.ApprovalToken)
 			} else if v, ok := shared.DelegationApprovalValueFromEvent(ev); ok {
 				args, _ := json.Marshal(v.Args)
 				fmt.Printf("\n[approval] agent=%s kind=delegation target=delegate:%s args=%s\n", v.AgentName, v.SubAgentName, string(args))
-				handleApprovalTokenPrompt(ctx, a, scanner, v.ApprovalToken)
+				handleApprovalTokenPrompt(ctx, agentStream, scanner, v.ApprovalToken)
 			}
 
 		case agent.AgentEventTypeRunError:
@@ -169,25 +169,25 @@ func runStream(ctx context.Context, a *agent.Agent, scanner *bufio.Scanner, prom
 	fmt.Println()
 }
 
-func handleApprovalTokenPrompt(ctx context.Context, a *agent.Agent, scanner *bufio.Scanner, token string) {
+func handleApprovalTokenPrompt(ctx context.Context, agentStream agent.AgentStream, scanner *bufio.Scanner, token string) {
 	for {
 		fmt.Print("approve? (y/n)> ")
 		if !scanner.Scan() {
 			fmt.Println("EOF, rejecting.")
-			_ = a.OnApproval(ctx, token, agent.ApprovalStatusRejected)
+			_ = agentStream.Approve(ctx, token, agent.ApprovalStatusRejected)
 			return
 		}
 		ans := strings.ToLower(strings.TrimSpace(scanner.Text()))
 		switch ans {
 		case "y", "yes":
-			if err := a.OnApproval(ctx, token, agent.ApprovalStatusApproved); err != nil {
+			if err := agentStream.Approve(ctx, token, agent.ApprovalStatusApproved); err != nil {
 				fmt.Printf("[approval error] %v\n", err)
 			} else {
 				fmt.Println("[approved]")
 			}
 			return
 		case "n", "no":
-			if err := a.OnApproval(ctx, token, agent.ApprovalStatusRejected); err != nil {
+			if err := agentStream.Approve(ctx, token, agent.ApprovalStatusRejected); err != nil {
 				fmt.Printf("[approval error] %v\n", err)
 			} else {
 				fmt.Println("[rejected]")

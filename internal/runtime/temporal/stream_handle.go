@@ -52,6 +52,19 @@ func newStreamHandle(
 	}
 }
 
+// Approve completes a pending tool or delegation approval for this stream run.
+// Pass the approval token from the CUSTOM event Value and the chosen status.
+//
+// Returns [types.ErrApprovalAlreadyResolved] when the approval token refers to an activity that
+// has already been completed. This can happen after Events (reconnect) replays a CUSTOM event for an
+// approval that was resolved while the subscriber was disconnected. Treat it as informational.
+func (h *streamHandle) Approve(ctx context.Context, approvalToken string, status types.ApprovalStatus) error {
+	if h.rt == nil {
+		return fmt.Errorf("temporal: stream handle %q is not configured", h.id)
+	}
+	return h.rt.approve(ctx, approvalToken, status)
+}
+
 // Events subscribes to this run's event stream starting at fromOffset.
 // fromOffset == 0 emits synthetic RUN_STARTED; fromOffset > 0 resumes after reconnect.
 // Returns [types.ErrRunNotFound] / [types.ErrRunAlreadyCompleted] from the

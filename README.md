@@ -41,6 +41,7 @@ import (
     "github.com/agenticenv/agent-sdk-go/pkg/llm/openai"
 )
 
+// errors omitted for brevity
 llmClient, _ := openai.NewClient(
     llm.WithAPIKey("sk-..."),
     llm.WithModel("gpt-4o"),
@@ -80,8 +81,8 @@ for event := range events {
         // tool / delegation approval (when approval policy requires it)
         if e.Name == string(agent.AgentCustomEventNameToolApproval) {
             if v, err := agent.ParseCustomEventApproval(e); err == nil {
-                // NOTE: replace with real approval logic — this auto-approves for demonstration
-                _ = a.OnApproval(context.Background(), v.ApprovalToken, agent.ApprovalStatusApproved)
+                // replace with real approval logic — this auto-approves for demonstration
+                _ = stream.Approve(context.Background(), v.ApprovalToken, agent.ApprovalStatusApproved)
             }
         }
     // also RunFinished, ToolCallResult, …
@@ -125,12 +126,12 @@ savedRunID := stream.ID() // persist before consuming events
 events, _ := stream.Events(context.Background())
 for event := range events {
     // persist event.Offset() before handling — needed for WithOffset on reconnect
-    // handle AG-UI events (see in-process example)
     _ = event
 }
 
 // --- Reconnect after a process crash ---
-savedOffset := int64(0) // last event Offset() persisted before handling it
+// replace with last persisted offset from your storage
+savedOffset := int64(0)
 s, _ := a.GetAgentStream(context.Background(), savedRunID)
 ch, _ := s.Events(context.Background(), agent.WithOffset(savedOffset))
 for event := range ch {

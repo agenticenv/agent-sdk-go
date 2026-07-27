@@ -6,10 +6,11 @@ import (
 	"github.com/agenticenv/agent-sdk-go/internal/types"
 )
 
-// ErrApprovalAlreadyResolved is returned by [Agent.OnApproval] when the approval token refers to
-// an activity task that has already been completed (approved or rejected). This can happen when a
-// reconnecting subscriber replays a CUSTOM approval event for an approval that was resolved while
-// the subscriber was disconnected. Treat it as informational — the run is already advancing.
+// ErrApprovalAlreadyResolved is returned by [AgentStream.Approve] (and the deprecated
+// [Agent.OnApproval]) when the approval token refers to an activity task that has already been
+// completed (approved or rejected). This can happen when a reconnecting subscriber replays a
+// CUSTOM approval event for an approval that was resolved while the subscriber was disconnected.
+// Treat it as informational — the run is already advancing.
 var ErrApprovalAlreadyResolved = types.ErrApprovalAlreadyResolved
 
 type ApprovalStatus = types.ApprovalStatus
@@ -31,7 +32,7 @@ type ApprovalSender = types.ApprovalSender
 // Register once at [NewAgent] via [WithApprovalHandler] (construction-time, not per-call).
 // req.Respond is always set: call req.Respond(ApprovalStatusApproved) or Rejected when ready.
 // The handler may return immediately after starting async work. Multiple invocations may run
-// concurrently when tools are invoked in parallel. For streaming approvals use [Agent.OnApproval].
+// concurrently when tools are invoked in parallel. For streaming approvals use [AgentStream.Approve].
 type ApprovalHandler = types.ApprovalHandler
 
 // ApprovalRequestName classifies approval callbacks (aligned with CUSTOM event roles).
@@ -45,7 +46,7 @@ const (
 // ApprovalRequest describes a pending tool approval for [Agent.Run].
 // Name + Value mirror CUSTOM stream events; use [ParseToolApproval] / [ParseDelegationApproval].
 // Respond is always set; call it once with ApprovalStatusApproved or ApprovalStatusRejected.
-// For streaming approvals, use [Agent.OnApproval] with the approval token from the CUSTOM event Value.
+// For streaming approvals, use [AgentStream.Approve] with the approval token from the CUSTOM event Value.
 type ApprovalRequest = types.ApprovalRequest
 
 // ToolApprovalRequestValue is the decoded Value for tool approvals (matches CUSTOM approval payload).
@@ -64,8 +65,12 @@ func ParseDelegationApproval(req *ApprovalRequest) (SubAgentDelegationApprovalRe
 	return types.ParseDelegationApproval(req)
 }
 
-// OnApproval completes a tool approval when using [Agent.Stream]. Pass the token from the approval
-// event and the chosen status (see streaming examples).
+// OnApproval completes a pending tool or delegation approval when using [Agent.Stream].
+// Pass the approval token from the CUSTOM event Value and [ApprovalStatusApproved] or
+// [ApprovalStatusRejected].
+//
+// Deprecated: Use [AgentStream.Approve] on the handle from [Agent.Stream] or
+// [Agent.GetAgentStream] instead. This method will be removed in v0.4.0.
 func (a *Agent) OnApproval(ctx context.Context, approvalToken string, status ApprovalStatus) error {
-	return a.runtime.Approve(ctx, approvalToken, status)
+	return a.runtime.OnApproval(ctx, approvalToken, status)
 }

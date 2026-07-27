@@ -563,7 +563,7 @@ func (rt *LocalRuntime) executeSingleTool(
 			defer approvalTimer.Stop()
 
 			// Generate a token and register a resolve channel so either path can unblock:
-			//   - Streaming: caller receives CUSTOM event with token, calls rt.Approve(token, status)
+			//   - Streaming: caller receives CUSTOM event with token, calls StreamHandle.Approve
 			//   - Non-streaming with handler: handler calls approvalReq.Respond(status) directly
 			token := uuid.New().String()
 			resultCh := make(chan types.ApprovalStatus, 1)
@@ -623,7 +623,7 @@ func (rt *LocalRuntime) executeSingleTool(
 					approvalCancel()
 				}
 			}
-			// Streaming path: handler is nil; caller calls rt.Approve(token, status) → resultCh.
+			// Streaming path: handler is nil; caller calls StreamHandle.Approve(token, status) → resultCh.
 
 			select {
 			case status := <-resultCh:

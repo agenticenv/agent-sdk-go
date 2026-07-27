@@ -36,8 +36,9 @@ type LocalRuntime struct {
 	approvalHandler types.ApprovalHandler
 
 	// pendingApprovals holds token → resolve channel for tools awaiting human approval.
-	// Used by Approve() to unblock executeSingleTool when the caller responds via OnApproval
-	// (streaming path). Thread-safe: parallel tool calls each register their own token.
+	// Used by approve() to unblock executeSingleTool when the caller responds via
+	// StreamHandle.Approve (streaming path). Thread-safe: parallel tool calls each register
+	// their own token.
 	pendingApprovals sync.Map // key: string token, value: chan types.ApprovalStatus
 }
 
@@ -134,7 +135,7 @@ func (rt *LocalRuntime) Run(ctx context.Context, req *sdkruntime.RunRequest) (sd
 
 	rt.shareEventBusWithSubAgents(req.SubAgents)
 
-	handle := newRunHandle(runID, runCancel)
+	handle := newRunHandle(runID, rt, runCancel)
 	go rt.driveRun(runCtx, req, handle)
 	return handle, nil
 }
@@ -210,6 +211,12 @@ func (rt *LocalRuntime) GetRunHandle(_ context.Context, _ string) (sdkruntime.Ru
 	return nil, types.ErrRunNotFound
 }
 
+// OnApproval is a deprecated Runtime-interface wrapper around [LocalRuntime.approve].
+// Prefer [sdkruntime.StreamHandle.Approve]. Removed in v0.4.0.
+func (rt *LocalRuntime) OnApproval(ctx context.Context, approvalToken string, status types.ApprovalStatus) error {
+	return rt.approve(ctx, approvalToken, status)
+}
+
 // Stream starts the agent loop in a background goroutine and returns a [sdkruntime.StreamHandle]
 // immediately. Subscribe via [sdkruntime.StreamHandle.Events] (offset 0 only on LocalRuntime).
 // RUN_STARTED is emitted before the loop begins; RUN_FINISHED or RUN_ERROR closes the channel.
@@ -259,7 +266,7 @@ func (rt *LocalRuntime) Stream(ctx context.Context, req *sdkruntime.RunRequest) 
 		return nil, err
 	}
 
-	handle := newStreamHandle(runID, runCancel, eventCh)
+	handle := newStreamHandle(runID, rt, runCancel, eventCh)
 	rt.publishLifecycleEvent(channel, events.NewAgentRunStartedEvent(threadID, runID))
 	go rt.driveStream(runCtx, req, handle, channel, threadID, closeSub)
 	return handle, nil
@@ -348,12 +355,13 @@ func (rt *LocalRuntime) GetStreamHandle(_ context.Context, _ string) (sdkruntime
 	return nil, types.ErrStreamNotFound
 }
 
-// Approve resolves a pending tool approval registered during a streaming run.
+// approve resolves a pending tool approval registered during a streaming run.
 // When a tool requires approval, executeSingleTool registers a token and blocks; the
-// caller receives a CUSTOM event on the stream with that token and calls Approve to unblock.
+// caller receives a CUSTOM event on the stream with that token and calls
+// [sdkruntime.StreamHandle.Approve] to unblock.
 // Returns [types.ErrApprovalAlreadyResolved] when the token is unknown or was already
 // resolved (same sentinel as Temporal when CompleteActivity reports not found).
-func (rt *LocalRuntime) Approve(_ context.Context, approvalToken string, status types.ApprovalStatus) error {
+func (rt *LocalRuntime) approve(_ context.Context, approvalToken string, status types.ApprovalStatus) error {
 	val, ok := rt.pendingApprovals.LoadAndDelete(approvalToken)
 	if !ok {
 		return types.ErrApprovalAlreadyResolved

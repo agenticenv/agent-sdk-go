@@ -96,6 +96,11 @@ type AgentStream interface {
 	// Safe to call multiple times; always returns the same channel.
 	Done() <-chan struct{}
 
+	// Approve completes a tool or delegation approval using the token from the CUSTOM approval
+	// event and the chosen status ([ApprovalStatusApproved] or [ApprovalStatusRejected]).
+	// Returns [ErrApprovalAlreadyResolved] when the token was already completed.
+	Approve(ctx context.Context, approvalToken string, status ApprovalStatus) error
+
 	// Events subscribes to the agent event stream and returns a receive-only channel.
 	// The channel is closed after the terminal lifecycle event (RUN_FINISHED / RUN_ERROR),
 	// or when ctx is cancelled (Temporal: stops this subscriber only; the agent run continues).
@@ -180,6 +185,14 @@ func (s *agentStream) Done() <-chan struct{} {
 		return ch
 	}
 	return s.sh.Done()
+}
+
+// Approve delegates to [runtime.StreamHandle.Approve].
+func (s *agentStream) Approve(ctx context.Context, approvalToken string, status ApprovalStatus) error {
+	if s.sh == nil {
+		return ErrRunNotFound
+	}
+	return s.sh.Approve(ctx, approvalToken, status)
 }
 
 // Events resolves opts into an offset, then delegates to [runtime.StreamHandle.Events].

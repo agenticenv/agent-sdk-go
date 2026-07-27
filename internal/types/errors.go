@@ -10,10 +10,11 @@ var ErrTemporalDialTimeout = errors.New("temporal: dial timeout — could not co
 // complete within the configured timeout after connecting to the Temporal server.
 var ErrTemporalNamespaceCheckTimeout = errors.New("temporal: namespace check timeout — namespace may not exist or server is overloaded")
 
-// ErrApprovalAlreadyResolved is returned by [Runtime.Approve] when the approval token refers to an
-// activity task that has already been completed (approved or rejected). This happens when a
-// reconnecting subscriber replays a CUSTOM approval event that was resolved while the subscriber
-// was disconnected. Callers should treat this as informational: the run is already advancing.
+// ErrApprovalAlreadyResolved is returned by [StreamHandle.Approve] (and the deprecated
+// Runtime.OnApproval) when the approval token refers to an activity task that has already been
+// completed (approved or rejected). This happens when a reconnecting subscriber replays a CUSTOM
+// approval event that was resolved while the subscriber was disconnected. Callers should treat
+// this as informational: the run is already advancing.
 var ErrApprovalAlreadyResolved = errors.New("runtime: approval already resolved")
 
 // ErrRunNotFound is returned when a runID is not recognised by the runtime
