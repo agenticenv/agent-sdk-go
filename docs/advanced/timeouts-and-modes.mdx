@@ -54,8 +54,6 @@ Used when the context has **no deadline**. Agent-only — ignored by `NewAgentWo
 
 ### What each context does
 
-Use a separate context for starting the run vs waiting or subscribing. Cancelling the wrong one is a common mistake.
-
 | Call | Cancelling its `ctx`… |
 |---|---|
 | `Run(ctx, …)` / `Stream(ctx, …)` | Stops the **agent run** |
@@ -64,18 +62,27 @@ Use a separate context for starting the run vs waiting or subscribing. Cancellin
 | `GetAgentRun(ctx, id)` / `GetAgentStream(ctx, id)` | Only bounds the **reconnect lookup** — run keeps going |
 | `handle.Cancel(ctx)` | Stops the **agent run** (explicit stop) |
 
-**App pattern:** put the run lifetime on `Run` / `Stream`. Put short deadlines on `Get` / `Events` when you only want to stop waiting or unsubscribing. After a crash, reconnect with `GetAgentRun` / `GetAgentStream`, then wait again with `Get` / `Events`. Call `Cancel()` on the handle when you want to stop the run.
+**Common case — pass the same ctx to both `Run` and `Get`:**
 
 ```go
-// This ctx owns the run — cancel or deadline here stops the agent.
-runCtx, cancelRun := context.WithTimeout(context.Background(), 5*time.Minute)
-defer cancelRun()
-run, err := a.Run(runCtx, prompt, nil)
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+defer cancel()
+run, err := a.Run(ctx, prompt, nil)
+result, err := run.Get(ctx) // unblocks when the run finishes or the timeout fires
+```
 
-// This ctx only bounds how long you wait — canceling it does not stop the run.
+When the ctx fires, `driveRun` cancels the workflow and `Get` returns `context.DeadlineExceeded`. If the run finishes first, `Get` returns the result. Either way the behaviour is correct and predictable.
+
+**Advanced — separate wait ctx (reconnect / partial wait):** use a different, shorter ctx on `Get` only when you want to stop waiting and reconnect later while leaving the run alive.
+
+```go
+run, err := a.Run(runCtx, prompt, nil) // runCtx owns the run lifetime
+
+// Stop waiting after 30 s but leave the run alive.
 waitCtx, cancelWait := context.WithTimeout(context.Background(), 30*time.Second)
 defer cancelWait()
-result, err := run.Get(waitCtx)
+result, err := run.Get(waitCtx) // returns context.DeadlineExceeded if still running
+// ... reconnect later with GetAgentRun(runID)
 ```
 
 ### Timeouts after reconnect (Temporal)
@@ -83,7 +90,7 @@ result, err := run.Get(waitCtx)
 `GetAgentRun` / `GetAgentStream` do not take over the original `Run` / `Stream` context.
 
 - Cancelling the reconnect `ctx` does **not** stop the run.
-- If the agent has `WithTimeout`, that limit applies again from the moment you reconnect — it is a **fresh** timeout, not “time left” from the original start.
+- If the agent has `WithTimeout`, that limit applies again from the moment you reconnect — it is a **fresh** timeout, not “time left” from the original start. A run that executed for 4 minutes before a crash gets a full fresh timeout window after reconnect. If you need a hard ceiling across the full run lifetime, call `Cancel()` on the handle after reconnect instead of relying on `WithTimeout`.
 - To stop the run after reconnect, call `Cancel()` on the handle.
 
 ## Agent modes
@@ -179,7 +186,8 @@ If `finish_reason: max_iterations` appears in telemetry but the task wasn't comp
 | Failure | `Run` (`Get`) | `Stream` |
 |---|---|---|
 | **Context deadline exceeded** | On `Run`/`Stream` ctx: cancels the run. On `Get` ctx only: unblocks waiter (run continues) | On `Stream` ctx: cancels run, emits `AgentEventTypeRunError`. On `Events` ctx only: subscriber stops (Temporal; run continues) |
-| **Agent timeout fires** | `Get` returns timeout error | Emits `AgentEventTypeRunError` |
+| **Agent timeout fires** | `Get` returns `context.DeadlineExceeded` | Emits `AgentEventTypeRunError` with message `"context deadline exceeded"` |
+| **Explicit `Cancel()` / Run or Stream ctx cancelled** | `Get` returns `context.Canceled` | Emits `AgentEventTypeRunError` with message `"context canceled"` |
 | **Approval timeout** | `Get` returns error after approval window expires | Emits `AgentEventTypeRunError` |
 | **Max iterations reached** | `Get` returns result with `FinishReason: max_iterations` | Emits `RUN_FINISHED` with reason set |
 | **LLM provider error** | `Get` returns the provider error | Emits `AgentEventTypeRunError` |

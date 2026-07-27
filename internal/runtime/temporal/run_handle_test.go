@@ -195,6 +195,42 @@ func TestRunHandle_Get_WaitsForWorkflow(t *testing.T) {
 	}
 }
 
+// TestRunHandle_Get_RunContextTimeout verifies that when the run stops because its context
+// deadline fired (WithTimeout or Run ctx), Get(Background) returns context.DeadlineExceeded
+// rather than the raw Temporal "terminated" error string.
+func TestRunHandle_Get_RunContextTimeout(t *testing.T) {
+	release := make(chan struct{})
+	termErr := errors.New("workflow terminated: agent run timeout")
+
+	tc := temporalmocks.NewClient(t)
+	wfRun := blockingWorkflowRun(release, nil, termErr)
+	h := newTestRunHandle("run-1", "wf-1", tc, wfRun, nil)
+	h.setStopCause(context.DeadlineExceeded)
+
+	close(release)
+
+	_, err := h.Get(context.Background())
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+// TestRunHandle_Get_RunContextCanceled verifies that when the run stops because it was
+// explicitly cancelled (Cancel() or Run ctx cancelled), Get(Background) returns
+// context.Canceled rather than the raw Temporal "terminated" error string.
+func TestRunHandle_Get_RunContextCanceled(t *testing.T) {
+	release := make(chan struct{})
+	termErr := errors.New("workflow terminated: run cancelled")
+
+	tc := temporalmocks.NewClient(t)
+	wfRun := blockingWorkflowRun(release, nil, termErr)
+	h := newTestRunHandle("run-1", "wf-1", tc, wfRun, nil)
+	h.setStopCause(context.Canceled)
+
+	close(release)
+
+	_, err := h.Get(context.Background())
+	require.ErrorIs(t, err, context.Canceled)
+}
+
 func TestRunHandle_Cancel_Running(t *testing.T) {
 	release := make(chan struct{})
 	var cancelled atomic.Bool

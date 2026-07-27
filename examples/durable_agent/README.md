@@ -40,7 +40,7 @@ TEMPORAL_TASKQUEUE=agent-sdk-go-durable-agent
 
 Both `agent` and `worker` read the same values via `[config.LoadFromEnv()](../config.go)`. Override any `TEMPORAL_*` variable for your environment.
 
-4. **Temporal server** — Docker must be available. Start with:
+1. **Temporal server** — Docker must be available. Start with:
 
 ```bash
 task infra:temporal:up && task infra:temporal:wait
@@ -159,7 +159,7 @@ Wait for the REPL prompt, then type:
 Hello from remote agent!
 ```
 
-> **Note:** This scenario intentionally exercises the no-worker path. With no pollers on the task queue, the SDK checks Temporal before starting the stream (~**15 seconds**). If a worker **was** running recently, Temporal may still list stale pollers briefly — the stream can start, the workflow queues, and you wait for the run timeout instead (**3 minutes** in this example via `WithTimeout` in `[opts/opts.go](opts/opts.go)`). After either error, start the worker and resend — that is the expected flow.
+> **Note:** This scenario intentionally exercises the no-worker path. With no pollers on the task queue, the SDK checks Temporal before starting the stream (~**15 seconds**). If a worker **was** running recently, Temporal may still list stale pollers briefly — the stream can start, the workflow queues, and you wait for the run timeout instead (**3 minutes** in this example via `WithTimeout` in `[opts/opts.go](opts/opts.go)`). On timeout the SDK terminates the workflow and the agent stream surfaces `[error] context deadline exceeded` (no worker required to finish cancel). After either error, start the worker and **resend** the prompt — that is the expected flow.
 
 **Expected behavior — depends on timing:**
 
@@ -186,7 +186,7 @@ you>
 
 Check the Temporal Web UI — a workflow may appear even when no worker is executing tasks.
 
-**Learn:** The first error is expected — interactive mode fails fast when no worker is polling, instead of hanging forever.
+**Learn:** Path A fails fast when no worker is polling. Path B waits for `WithTimeout` then errors clearly — the agent must not hang, and starting a worker after timeout does not “revive” a timed-out run (resend a new prompt instead).
 
 **Terminal 1 — now start the worker:**
 
@@ -385,7 +385,7 @@ What to look for in terminal 2 (stream pauses, no immediate error):
 The stream goes silent — Temporal is waiting for a worker to poll and resume the in-flight activity. No worker is available so no events are sent to the agent stream. After the run timeout (**3 minutes** in this example) the error surfaces:
 
 ```text
-[error] request timed out (approval expired or deadline exceeded)
+[error] context deadline exceeded
 --- stream end ---
 
 you>
@@ -675,7 +675,7 @@ The state file is cleared on `RUN_FINISHED`. The REPL then continues normally.
 
 The state file is cleared. The work **was done** — Temporal completed the run and the LLM generated the full response. The loss is only the streaming view of it:
 
-- **With `WithConversation` configured** — the response is already in conversation history. Start a new turn and continue naturally; the agent remembers the previous answer.
+- **With** `WithConversation` **configured** — the response is already in conversation history. Start a new turn and continue naturally; the agent remembers the previous answer.
 - **Without conversation (this example)** — the response is not visible. Start a new run to get a fresh response.
 
 > **Note:** The `durable_agent` example does not wire up multi-turn conversation history. For production apps where users expect full history across restarts, use **[Agent Chat](https://github.com/agenticenv/agent-chat)** which persists conversation turns to Postgres.
@@ -757,7 +757,7 @@ go run ./durable_agent/agent
 you> Hello from remote agent!
 ```
 
-> **Note:** Same timing as scenario 2 — the agent checks pollers on **`agent-sdk-go-durable-agent`**, not the worker’s queue. With no pollers there (~**15 seconds**), path **A** is typical. Stale pollers on the agent queue from an earlier run can produce path **B** (**3 minutes** run timeout).
+> **Note:** Same timing as scenario 2 — the agent checks pollers on `agent-sdk-go-durable-agent`, not the worker’s queue. With no pollers there (~**15 seconds**), path **A** is typical. Stale pollers on the agent queue from an earlier run can produce path **B** (**3 minutes** run timeout).
 
 **Expected behavior — depends on timing:**
 
@@ -776,7 +776,7 @@ No `--- stream start ---` — the stream never opened.
 ```text
 --- stream start ---
 
-[error] request timed out (approval expired or deadline exceeded)
+[error] context deadline exceeded
 --- stream end ---
 
 you>
@@ -787,5 +787,4 @@ Check the Temporal Web UI — a workflow may appear on `agent-sdk-go-durable-age
 Misconfiguration surfaces clearly rather than silently corrupting state. Stop the worker and restart both processes with matching `TEMPORAL_TASKQUEUE` (or remove the override) to recover.
 
 > **Tip:** For `AgentModeAutonomous`, the worker check is skipped entirely — a task queue mismatch will not error immediately but will cause the workflow to queue in Temporal until the agent timeout hits. Always verify task queue names match across agent and worker config before deploying.
-
 

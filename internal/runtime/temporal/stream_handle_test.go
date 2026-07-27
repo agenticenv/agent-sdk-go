@@ -319,6 +319,88 @@ func TestStreamHandle_Events_WorkflowError(t *testing.T) {
 	require.Contains(t, gotTypes, events.AgentEventTypeRunError)
 }
 
+// TestStreamHandle_Events_RunTimeoutUnblocksWithoutEventsDeadline verifies that when the run
+// stops via WithTimeout (stopCause=DeadlineExceeded), Events(Background) still gets RUN_ERROR
+// with "context deadline exceeded" — apps must not put a deadline on every Events call.
+func TestStreamHandle_Events_RunTimeoutUnblocksWithoutEventsDeadline(t *testing.T) {
+	release := make(chan struct{})
+	termErr := errors.New("workflow terminated: run timeout")
+
+	tc := temporalmocks.NewClient(t)
+	stubEventsRunningThenSubscribeEnd(tc, "wf-1")
+
+	rt := newTestStreamRuntime(tc)
+	wfRun := blockingWorkflowRun(release, nil, termErr)
+	h := newTestStreamHandle("run-1", "wf-1", "thread-1", tc, rt, wfRun, nil, nil)
+	h.setStopCause(context.DeadlineExceeded)
+
+	ch, err := h.Events(context.Background(), 0)
+	require.NoError(t, err)
+
+	close(release)
+	evs := collectStreamEvents(t, ch, 3*time.Second)
+	require.Contains(t, streamEventTypes(evs), events.AgentEventTypeRunError)
+
+	var msg string
+	for _, ev := range evs {
+		if re, ok := ev.(*events.AgentRunErrorEvent); ok {
+			msg = re.Message
+		}
+	}
+	require.Equal(t, "context deadline exceeded", msg)
+	waitHandleDone(t, h.Done())
+}
+
+// TestStreamHandle_Events_RunCancelUnblocksWithoutEventsDeadline verifies that when the run
+// stops via explicit Cancel() (stopCause=Canceled), Events(Background) still gets RUN_ERROR
+// with "context canceled" — symmetric to the timeout case.
+func TestStreamHandle_Events_RunCancelUnblocksWithoutEventsDeadline(t *testing.T) {
+	release := make(chan struct{})
+	termErr := errors.New("workflow terminated: run cancelled")
+
+	tc := temporalmocks.NewClient(t)
+	stubEventsRunningThenSubscribeEnd(tc, "wf-1")
+
+	rt := newTestStreamRuntime(tc)
+	wfRun := blockingWorkflowRun(release, nil, termErr)
+	h := newTestStreamHandle("run-1", "wf-1", "thread-1", tc, rt, wfRun, nil, nil)
+	h.setStopCause(context.Canceled)
+
+	ch, err := h.Events(context.Background(), 0)
+	require.NoError(t, err)
+
+	close(release)
+	evs := collectStreamEvents(t, ch, 3*time.Second)
+	require.Contains(t, streamEventTypes(evs), events.AgentEventTypeRunError)
+
+	var msg string
+	for _, ev := range evs {
+		if re, ok := ev.(*events.AgentRunErrorEvent); ok {
+			msg = re.Message
+		}
+	}
+	require.Equal(t, "context canceled", msg)
+	waitHandleDone(t, h.Done())
+}
+
+func TestTerminalStreamErrorMessage(t *testing.T) {
+	// Deadline: stopCause wins regardless of getErr content.
+	require.Equal(t, "context deadline exceeded",
+		terminalStreamErrorMessage(context.DeadlineExceeded, errors.New("terminated")))
+	// Deadline: getErr sentinel also triggers clean message.
+	require.Equal(t, "context deadline exceeded",
+		terminalStreamErrorMessage(nil, context.DeadlineExceeded))
+	// Cancel: stopCause wins, raw Temporal string is not surfaced.
+	require.Equal(t, "context canceled",
+		terminalStreamErrorMessage(context.Canceled, errors.New("workflow terminated")))
+	// Cancel: getErr sentinel also triggers clean message.
+	require.Equal(t, "context canceled",
+		terminalStreamErrorMessage(nil, context.Canceled))
+	// No sentinel: raw error from Temporal is passed through.
+	require.Equal(t, "workflow failed",
+		terminalStreamErrorMessage(nil, errors.New("workflow failed")))
+}
+
 // TestStreamHandle_Events_SubscribeErrorStillDeliversTerminal simulates a non-terminal
 // Subscribe failure (UpdateWorkflow error while the workflow is still RUNNING). deliverEvents
 // must fall through to Get and emit RUN_FINISHED before closing the channel — not exit early

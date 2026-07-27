@@ -211,9 +211,10 @@ func (rt *TemporalRuntime) Stop() {
 	}
 }
 
-// stopWorkflow cancels a workflow; if cancel fails, terminates it.
-// reason is recorded on TerminateWorkflow only.
-func (rt *TemporalRuntime) stopWorkflow(ctx context.Context, workflowID, reason string) {
+// cancelWorkflow cancels a workflow; if the Cancel RPC fails, terminates it.
+// Note: a successful Cancel with no worker still leaves Cancel Requested — callers that
+// must not strand the workflow should use [TemporalRuntime.stopWorkflow].
+func (rt *TemporalRuntime) cancelWorkflow(ctx context.Context, workflowID, reason string) {
 	if rt.temporalClient == nil || workflowID == "" {
 		return
 	}
@@ -226,6 +227,52 @@ func (rt *TemporalRuntime) stopWorkflow(ctx context.Context, workflowID, reason 
 			slog.String("workflowID", workflowID),
 			slog.Any("error", err))
 		_ = rt.temporalClient.TerminateWorkflow(ctx, workflowID, "", reason)
+	}
+}
+
+// terminateWorkflow force-stops a workflow so awaitCompletion/Get/Events can finish
+// even when no worker is available to process a Cancel.
+func (rt *TemporalRuntime) terminateWorkflow(ctx context.Context, workflowID, reason string) {
+	if rt.temporalClient == nil || workflowID == "" {
+		return
+	}
+	rt.logger.Debug(ctx, "runtime terminating workflow",
+		slog.String("scope", "runtime"),
+		slog.String("workflowID", workflowID),
+		slog.String("reason", reason))
+	_ = rt.temporalClient.TerminateWorkflow(ctx, workflowID, "", reason)
+}
+
+// stopWorkflow stops a workflow after the run context ends, then waits for done.
+//
+//   - DeadlineExceeded (WithTimeout / Run|Stream ctx deadline): Terminate immediately so
+//     subscribers unblock with a timeout error even when no worker is polling.
+//   - Otherwise (explicit Cancel / parent cancel): Cancel first, then Terminate if the
+//     workflow is still open after 3s (no-worker Cancel Requested hang).
+//
+// done is the handle Done channel from newRunHandle (always non-nil in production).
+func (rt *TemporalRuntime) stopWorkflow(
+	stopCtx context.Context,
+	workflowID string,
+	runErr error,
+	done <-chan struct{},
+) {
+	if errors.Is(runErr, context.DeadlineExceeded) {
+		rt.terminateWorkflow(stopCtx, workflowID, "run timeout")
+		<-done
+		return
+	}
+
+	rt.cancelWorkflow(stopCtx, workflowID, "run cancelled")
+	select {
+	case <-done:
+		return
+	case <-time.After(3 * time.Second):
+		rt.terminateWorkflow(stopCtx, workflowID, "run cancelled")
+		select {
+		case <-done:
+		case <-stopCtx.Done():
+		}
 	}
 }
 
@@ -270,9 +317,7 @@ func (rt *TemporalRuntime) Close() {
 	if rt.temporalClient != nil {
 		termCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		defer cancel()
-		for _, workflowID := range rt.getActiveWorkflowIDs() {
-			rt.stopWorkflow(termCtx, workflowID, "agent closed")
-		}
+		rt.stopActiveWorkflows(termCtx)
 	}
 
 	if rt.agentWorker != nil {
@@ -287,22 +332,51 @@ func (rt *TemporalRuntime) Close() {
 	rt.logger.Info(ctx, "runtime closed", slog.String("scope", "runtime"), slog.String("name", rt.AgentSpec.Name))
 }
 
-func (rt *TemporalRuntime) getActiveWorkflowIDs() []string {
-	n := 0
+// stopActiveWorkflows terminates all live run/stream workflows in parallel, then
+// waits for each to reach a terminal state (bounded by ctx).
+//
+// Close uses Terminate directly — not the cancel-then-3s-then-terminate path used
+// by explicit Cancel/timeout — because the agent is shutting down and no caller
+// will consume the result. The 3s cancel grace exists to let a live handle's
+// workflow run cleanup handlers; on Close there is no one left to receive them.
+// All workflows are sent Terminate simultaneously so shutdown time is constant
+// regardless of how many active runs/streams exist.
+func (rt *TemporalRuntime) stopActiveWorkflows(ctx context.Context) {
+	const reason = "agent closed"
+	var wg sync.WaitGroup
+
+	launch := func(workflowID string, done <-chan struct{}) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			rt.terminateWorkflow(ctx, workflowID, reason)
+			select {
+			case <-done:
+			case <-ctx.Done():
+			}
+		}()
+	}
+
 	if rt.activeRuns != nil {
-		n += rt.activeRuns.Len()
+		for _, workflowID := range rt.activeRuns.Keys() {
+			h, ok := rt.activeRuns.Get(workflowID)
+			if !ok || h == nil {
+				continue
+			}
+			launch(workflowID, h.Done())
+		}
 	}
 	if rt.activeStreams != nil {
-		n += rt.activeStreams.Len()
+		for _, workflowID := range rt.activeStreams.Keys() {
+			h, ok := rt.activeStreams.Get(workflowID)
+			if !ok || h == nil {
+				continue
+			}
+			launch(workflowID, h.Done())
+		}
 	}
-	ids := make([]string, 0, n)
-	if rt.activeRuns != nil {
-		ids = append(ids, rt.activeRuns.Keys()...)
-	}
-	if rt.activeStreams != nil {
-		ids = append(ids, rt.activeStreams.Keys()...)
-	}
-	return ids
+
+	wg.Wait()
 }
 
 // approve completes a tool approval request using the token from the approval event
@@ -498,8 +572,8 @@ type approvalResponse struct {
 }
 
 // driveRun watches the run until [runHandle.Done], delivering approvals when configured.
-// On runCtx cancellation (timeout/cancel), cancels the workflow (terminate if cancel fails)
-// so the handle's await can finish.
+// On runCtx cancellation (timeout/cancel), stops the workflow so Get/Events can finish
+// (see [TemporalRuntime.stopWorkflow]).
 func (rt *TemporalRuntime) driveRun(
 	runCtx context.Context,
 	runCancel context.CancelFunc,
@@ -543,14 +617,15 @@ func (rt *TemporalRuntime) driveRun(
 			}
 			return
 		case <-runCtx.Done():
+			runErr := runCtx.Err()
 			rt.logger.Debug(runCtx, "runtime run cancelled",
 				slog.String("scope", "runtime"),
 				slog.String("workflowID", workflowID),
-				slog.Any("error", runCtx.Err()))
+				slog.Any("error", runErr))
+			handle.setStopCause(runErr)
 			stopCtx, stopCancel := context.WithTimeout(context.Background(), 15*time.Second)
-			rt.stopWorkflow(stopCtx, workflowID, "run cancelled")
+			rt.stopWorkflow(stopCtx, workflowID, runErr, handle.Done())
 			stopCancel()
-			<-handle.Done()
 			return
 		case ev, ok := <-approvalEventCh:
 			if !ok {
@@ -881,7 +956,8 @@ func (rt *TemporalRuntime) newDriveContext(parent context.Context) (context.Cont
 }
 
 // driveStream watches the stream until [streamHandle.Done].
-// On runCtx cancellation (timeout/cancel), stops the workflow so await can finish.
+// On runCtx cancellation (timeout/cancel), stops the workflow so await/Events can finish
+// (see [TemporalRuntime.stopWorkflow]).
 // No approval subscription — Stream uses Events + Approve instead of driveRun's path.
 func (rt *TemporalRuntime) driveStream(
 	runCtx context.Context,
@@ -894,14 +970,15 @@ func (rt *TemporalRuntime) driveStream(
 	case <-handle.Done():
 		return
 	case <-runCtx.Done():
+		runErr := runCtx.Err()
 		rt.logger.Debug(runCtx, "runtime stream cancelled",
 			slog.String("scope", "runtime"),
 			slog.String("workflowID", workflowID),
-			slog.Any("error", runCtx.Err()))
+			slog.Any("error", runErr))
+		handle.setStopCause(runErr)
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), 15*time.Second)
-		rt.stopWorkflow(stopCtx, workflowID, "run cancelled")
+		rt.stopWorkflow(stopCtx, workflowID, runErr, handle.Done())
 		stopCancel()
-		<-handle.Done()
 	}
 }
 
