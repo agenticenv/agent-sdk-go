@@ -629,14 +629,11 @@ func TestStopWorkflow_CancelCompletesWithoutTerminate(t *testing.T) {
 	tc.AssertExpectations(t)
 }
 
-// TestTemporalRuntime_Close_ActiveRuns_TerminatesDirectly: Close sends TerminateWorkflow
-// (not CancelWorkflow) for active runs so shutdown is immediate with no 3s grace period.
-func TestTemporalRuntime_Close_ActiveRuns_TerminatesDirectly(t *testing.T) {
+// TestTemporalRuntime_Close_ActiveRuns_DoesNotTerminate: Close leaves active run
+// workflows running so another worker can resume them (durability).
+func TestTemporalRuntime_Close_ActiveRuns_DoesNotTerminate(t *testing.T) {
 	tc := temporalmocks.NewClient(t)
 	done := make(chan struct{})
-	tc.On("TerminateWorkflow", mock.Anything, "run-w1", "", "agent closed").
-		Run(func(mock.Arguments) { close(done) }).
-		Return(nil).Once()
 
 	rt, err := NewTemporalRuntime(
 		WithTemporalClient(tc, "tq"),
@@ -649,17 +646,15 @@ func TestTemporalRuntime_Close_ActiveRuns_TerminatesDirectly(t *testing.T) {
 	rt.activeRuns.Set("run-w1", &runHandle{doneCh: done})
 
 	rt.Close()
-	tc.AssertExpectations(t)
+	tc.AssertNotCalled(t, "TerminateWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	tc.AssertNotCalled(t, "CancelWorkflow", mock.Anything, mock.Anything, mock.Anything)
 }
 
-// TestTemporalRuntime_Close_ActiveStreams_TerminatesDirectly: Close sends TerminateWorkflow
-// (not CancelWorkflow) for active streams, same direct-terminate path as runs.
-func TestTemporalRuntime_Close_ActiveStreams_TerminatesDirectly(t *testing.T) {
+// TestTemporalRuntime_Close_ActiveStreams_DoesNotTerminate: Close leaves active stream
+// workflows running, same durability path as runs.
+func TestTemporalRuntime_Close_ActiveStreams_DoesNotTerminate(t *testing.T) {
 	tc := temporalmocks.NewClient(t)
 	done := make(chan struct{})
-	tc.On("TerminateWorkflow", mock.Anything, "stream-w1", "", "agent closed").
-		Run(func(mock.Arguments) { close(done) }).
-		Return(nil).Once()
 
 	rt, err := NewTemporalRuntime(
 		WithTemporalClient(tc, "tq"),
@@ -672,7 +667,8 @@ func TestTemporalRuntime_Close_ActiveStreams_TerminatesDirectly(t *testing.T) {
 	rt.activeStreams.Set("stream-w1", &streamHandle{runHandle: &runHandle{doneCh: done}})
 
 	rt.Close()
-	tc.AssertExpectations(t)
+	tc.AssertNotCalled(t, "TerminateWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	tc.AssertNotCalled(t, "CancelWorkflow", mock.Anything, mock.Anything, mock.Anything)
 }
 
 func describeWorkflowCompleted() *workflowservice.DescribeWorkflowExecutionResponse {
