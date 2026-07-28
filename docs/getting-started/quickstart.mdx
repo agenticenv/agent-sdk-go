@@ -92,10 +92,12 @@ Expected output includes the agent name, model, and assistant reply in `result.C
 | `openai.NewClient` | Creates an [`interfaces.LLMClient`](/getting-started/llm-providers) for OpenAI |
 | `agent.NewAgent` | Builds the agent with your prompt and LLM client; uses in-process runtime by default |
 | `a.Run` | Starts a run and returns an [`AgentRun`](/getting-started/run) handle; call `Get` for [`*AgentRunResult`](/features/token-usage) |
-| `a.Close` | Stops any embedded Temporal worker and flushes OTLP exporters |
+| `a.Close` | Stops any embedded Temporal worker and flushes OTLP exporters; active Temporal workflows are **not** terminated |
 
 <Warning>
 `defer a.Close()` is not optional when using the Temporal runtime — it shuts down the embedded local worker. On the in-process runtime it is a no-op but still good practice.
+
+**Durability note:** `Close` does not terminate in-flight Temporal workflows. Workflows continue running on the Temporal server and resume on any available worker after a restart — this is the core durability guarantee.
 </Warning>
 
 

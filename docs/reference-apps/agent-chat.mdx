@@ -1,34 +1,24 @@
 ---
 title: "Agent Chat"
-description: "Build a durable chat app with streaming, Postgres conversation, SSE, and split worker deployment"
+description: "Durable chat reference app built with Agent SDK for Go — Temporal workflows, SSE streaming, and crash recovery"
 ---
 
-[Agent Chat](https://github.com/agenticenv/agent-chat) is a demo application that uses **Agent SDK for Go** end-to-end — React UI, Go API, Temporal-backed agent runs, and real-time streaming over SSE.
+[Agent Chat](https://github.com/agenticenv/agent-chat) is a full-stack reference application built end-to-end with **Agent SDK for Go** — React UI, Go API, Temporal-backed agent runs, and real-time streaming over SSE.
 
 > Demo app for learning and reference. Not intended for production use as-is.
 
-## Why it exists
+## What it demonstrates
 
-Most agent frameworks run in-process — if your server restarts, the agent run is lost. Agent Chat demonstrates the Temporal-first model:
+Most agent frameworks run in-process — if your HTTP server restarts or the browser drops, the agent turn is gone. Agent Chat shows how the SDK's Temporal-first model powers a **durable chat product**:
 
-| Capability | How Agent Chat shows it |
-|---|---|
-| Durable conversations | Chat history and agent runs survive server restarts |
-| Split client / worker | API starts workflows; worker process executes them |
-| Streaming | AG-UI–shaped JSON over SSE to the browser |
-| Conversation persistence | PostgreSQL for app data; SDK conversation bridge for agent context |
-
-Use it as a blueprint when building your own HTTP-backed agent application.
-
-## Stack
-
-| Layer | Technology |
-|---|---|
-| Agent runtime | [Agent SDK for Go](https://github.com/agenticenv/agent-sdk-go) + Temporal |
-| API | Go — chi router, pgx, REST + SSE |
-| UI | React Router 7 + Vite + Tailwind CSS v4 |
-| Data | PostgreSQL (conversations and messages) |
-| Infra | Docker Compose — Postgres, Temporal, API, worker, UI |
+| Capability | What users experience | What the SDK enables |
+|---|---|---|
+| Durable agent turns | Closing the tab or restarting the API does not cancel the run | Temporal workflows keep running; client reconnects with `GetAgentStream` |
+| Crash-safe streaming | Reopen a chat mid-reply and tokens continue | Persist stream id + event offset; resume with `Events(WithOffset(…))` |
+| Split API / worker | Scale workers independently of the web tier | `NewAgent` + `DisableLocalWorker` (client) and `NewAgentWorker` on a shared task queue |
+| Matching client & worker | Same agent config on both processes so activities are accepted | Shared options (name, LLM, conversation, Temporal) — SDK fingerprint check |
+| Shared conversation memory | History survives restarts across replicas | Custom `interfaces.Conversation` (Postgres) via `WithConversation` |
+| Live UI streaming | Chat bubbles update token-by-token | AG-UI events from `Stream()` / `GetAgentStream` over SSE |
 
 ## Architecture
 
@@ -39,7 +29,7 @@ The API and Temporal worker are **separate processes** from the same server imag
 | `server` | HTTP API + agent client | `NewAgent` with `DisableLocalWorker` |
 | `worker` | Temporal worker | `NewAgentWorker` with matching config |
 
-Both share agent options via `agentsetup.CommonOptions` — same name, LLM client, conversation config, and Temporal settings — so the SDK fingerprint check passes.
+Both share agent options (name, LLM, conversation, Temporal queue) so the SDK fingerprint check passes.
 
 ```
 Browser → React UI → Go API (agent client)
@@ -51,181 +41,51 @@ Browser → React UI → Go API (agent client)
                      LLM provider
 ```
 
-Conversations and messages live in PostgreSQL. The SDK conversation bridge (`server/agent/`) feeds message history into `WithConversation` on each run.
+Conversations and messages live in PostgreSQL. The SDK conversation bridge feeds history into `WithConversation` on each turn.
 
-## Key code patterns
+## Resilience and crash recovery
 
-**1. Split client / worker with shared config**
+**Without a durable runtime:**
+- Browser refresh mid-stream → reply lost
+- API process crash → in-memory agent run gone
+- Long LLM / tool turns → HTTP timeouts force awkward workarounds
 
-Both API and worker call `CommonOptions()` to get identical SDK options. The API adds `DisableLocalWorker`; the worker uses the options as-is. This ensures the SDK fingerprint check passes at activity entry.
+**With Agent SDK for Go + Temporal:**
+1. `agent.Stream(...)` starts a Temporal-backed run; events bridge to the browser as SSE (`ev.ToJSON()`)
+2. Stream id (`agentStream.ID()`) and each event’s durable offset are checkpointed
+3. Cancelling the SSE subscriber does **not** cancel the workflow — Temporal keeps the turn alive
+4. On reconnect — `GetAgentStream(savedID)` + `Events(ctx, WithOffset(savedOffset))` resumes the stream (Temporal runtime; not LocalRuntime). The UI reopens a chat still marked in-progress and continues the same AG-UI → bubble mapping
+5. On `RUN_FINISHED` / `RUN_ERROR` — checkpoint clears; conversation history remains via `WithConversation` / Postgres
 
-```go
-// server/agent/setup.go — shared by API and worker
-func CommonOptions(cfg Config, llmClient interfaces.LLMClient, conv conversation.Config) []sdkagent.Option {
-    return []sdkagent.Option{
-        sdkagent.WithTemporalConfig(&sdkagent.TemporalConfig{
-            Host: cfg.Temporal.Host, Port: cfg.Temporal.Port,
-            Namespace: cfg.Temporal.Namespace, TaskQueue: cfg.Temporal.TaskQueue,
-        }),
-        sdkagent.WithName(cfg.Agent.Name),
-        sdkagent.WithSystemPrompt(cfg.Agent.SystemPrompt),
-        sdkagent.WithLLMClient(llmClient),
-        sdkagent.WithConversation(conv),
-        sdkagent.WithToolApprovalPolicy(sdkagent.AutoToolApprovalPolicy()),
-    }
-}
-
-// API process — adds client-only options
-opts := append(CommonOptions(cfg, llmClient, conv),
-    sdkagent.DisableLocalWorker(),
-)
-a, _ := sdkagent.NewAgent(opts...)
-
-// Worker process — uses shared options directly
-w, _ := sdkagent.NewAgentWorker(CommonOptions(cfg, llmClient, conv)...)
-```
-
-See [Distributed Execution](/advanced/distributed-execution).
-
-**2. SSE streaming bridge**
-
-The API streams SDK events directly to the browser as AG-UI JSON. Each event is serialized with `ev.ToJSON()` and written to the SSE response. The Temporal workflow continues even if the browser disconnects.
-
-```go
-// server/api/stream.go
-agentStream, err := agent.Stream(ctx, userMessage, opts)
-if err != nil {
-    http.Error(w, err.Error(), http.StatusInternalServerError)
-    return
-}
-runID := agentStream.ID()
-_ = runID // persist alongside conversationID for GetAgentStream on browser disconnect
-eventCh, err := agentStream.Events(ctx)
-if err != nil {
-    http.Error(w, err.Error(), http.StatusInternalServerError)
-    return
-}
-
-flusher := w.(http.Flusher)
-for ev := range eventCh {
-    if ev == nil {
-        continue
-    }
-    b, _ := ev.ToJSON()
-    fmt.Fprintf(w, "data: %s\n\n", b)
-    flusher.Flush()
-
-    if ev.Type() == sdkagent.AgentEventTypeRunFinished {
-        // Persist the final message to Postgres after run completes
-        persistMessage(ctx, db, conversationID, ev)
-    }
-}
-```
-
-See [AG-UI Protocol](/features/ag-ui-protocol) and [Streaming](/getting-started/streaming).
-
-**3. Custom Postgres conversation backend**
-
-Agent Chat implements `interfaces.Conversation` over PostgreSQL instead of the in-memory or Redis backends. This lets conversation history survive restarts and be shared across worker replicas.
-
-```go
-// server/agent/conversation.go
-type PGConversation struct{ db *pgxpool.Pool }
-
-func (c *PGConversation) AddMessage(ctx context.Context, id string, msg interfaces.Message) error {
-    _, err := c.db.Exec(ctx,
-        `INSERT INTO messages (conversation_id, role, content) VALUES ($1, $2, $3)`,
-        id, msg.Role, msg.Content)
-    return err
-}
-
-func (c *PGConversation) ListMessages(ctx context.Context, id string, opts ...interfaces.ListMessagesOption) ([]interfaces.Message, error) {
-    // query and return ordered messages for this conversation ID
-}
-
-func (c *PGConversation) Clear(ctx context.Context, id string) error { /* DELETE */ }
-func (c *PGConversation) IsDistributed() bool { return true } // shared across processes
-```
-
-Pass it to `WithConversation` — the SDK injects history into every LLM call automatically. See [Conversation](/features/conversation).
+Client and worker both use the **same** agent options so the worker can execute workflows the API started — see [Distributed Execution](/advanced/distributed-execution).
 
 ## SDK features demonstrated
 
 | Feature | Agent Chat usage |
 |---|---|
-| [Temporal runtime](/runtimes/temporal) | Every chat message triggers a durable workflow |
+| [Temporal runtime](/runtimes/temporal) | Every chat turn is a durable workflow |
+| [Streaming](/getting-started/streaming) | `Stream()` bridged to browser SSE via `ev.ToJSON()` |
+| [Reconnect / GetAgentStream](/examples/reconnect) | Resume mid-turn after disconnect or API restart |
+| [Distributed Execution](/advanced/distributed-execution) | Shared agent options; `NewAgent` client + `NewAgentWorker` |
 | [Conversation](/features/conversation) | Custom PostgreSQL-backed `interfaces.Conversation` |
-| [Streaming](/getting-started/streaming) | `Stream()` with SSE bridge forwarding `ev.ToJSON()` |
-| [AG-UI Protocol](/features/ag-ui-protocol) | `TEXT_MESSAGE_CONTENT`, `RUN_FINISHED`, `RUN_ERROR` events |
+| [AG-UI Protocol](/features/ag-ui-protocol) | `TEXT_MESSAGE_CONTENT`, `RUN_FINISHED`, `RUN_ERROR` |
 | [LLM Providers](/getting-started/llm-providers) | OpenAI, Anthropic, or Gemini via env config |
 
-## Prerequisites
+For setup, run instructions, and app internals see the [Agent Chat repository](https://github.com/agenticenv/agent-chat).
 
-- **Docker and Docker Compose** — all services run in containers; no local Go or Node install required
-- **LLM API key** — for OpenAI, Anthropic, or Gemini (set in `server/.env`)
-- Ports `3000` (UI), `9090` (API), `7233` + `8233` (Temporal), `5432` (Postgres) available locally
-
-## Run locally
-
-```bash
-# 1. Clone
-git clone https://github.com/agenticenv/agent-chat.git
-cd agent-chat
-
-# 2. Configure
-cp server/.env.example server/.env
-# Open server/.env and set:
-#   LLM_API_KEY=sk-your-key
-#   LLM_PROVIDER=openai          # openai | anthropic | gemini
-#   LLM_MODEL=gpt-4o
-
-# 3. Start all services
-docker compose up -d --build
-```
-
-| Service | URL |
-|---|---|
-| Chat UI | http://localhost:3000 |
-| Go API | http://localhost:9090 |
-| Temporal UI | http://localhost:8233 |
-
-Stop with `docker compose down`. Optional: `LLM_BASE_URL`, `AGENT_SYSTEM_PROMPT`, `AGENT_NAME`, `AGENT_CONVERSATION_WINDOW_SIZE`. For streaming toggle, copy `ui/.env.example` to `ui/.env` and set `ENABLE_STREAM=true` (SSE) or `false` (REST).
-
-## API and streaming
-
-| Endpoint | Method | Purpose |
-|---|---|---|
-| `/api/conversations` | GET, POST | List and create conversations |
-| `/api/conversations/:id/messages` | GET, POST | Message history; blocking agent reply |
-| `/api/conversations/:id/messages/stream` | POST | SSE stream of AG-UI JSON events |
-
-The stream endpoint forwards SDK events via `ev.ToJSON()`. After `RUN_FINISHED`, the server emits a `MESSAGE_PERSISTED` extension frame with the database message id.
-
-Closing the browser stream does **not** cancel the Temporal workflow — use `GET /api/conversations/:id/messages` to reconcile state.
-
-## UI streaming
-
-The UI maps AG-UI events to chat bubbles:
-
-| Event | UI behavior |
-|---|---|
-| `TEXT_MESSAGE_CONTENT` | Incremental assistant text via `delta` |
-| `RUN_ERROR` | Display error message |
-| `MESSAGE_PERSISTED` | Replace streaming bubble with persisted message id |
-
-Toggle streaming vs REST via `ENABLE_STREAM` in Docker (`ui` service env) or `VITE_ENABLE_STREAM` for local UI dev.
-
-## Related docs in this portal
+## Related
 
 <CardGroup cols={2}>
-
+  <Card title="Reconnect" icon="rotate" href="/examples/reconnect" horizontal>
+    GetAgentStream + WithOffset after a crash
+  </Card>
   <Card title="Durable Agent" icon="shield" href="/examples/durable-agent" horizontal>
     SDK durable execution example
   </Card>
-
   <Card title="Agent Worker" icon="server" href="/examples/agent-worker" horizontal>
     Client and worker split example
   </Card>
+  <Card title="Streaming" icon="wave-pulse" href="/getting-started/streaming" horizontal>
+    Stream, Events, and AG-UI wiring
+  </Card>
 </CardGroup>
-
-Source code: [github.com/agenticenv/agent-chat](https://github.com/agenticenv/agent-chat) (separate repository).

@@ -120,6 +120,7 @@ Because every agent run is a Temporal workflow:
 - **Process crashes do not lose progress** — completed tool calls are not replayed, given approvals are not re-requested
 - **Deploys are safe** — restart workers; the workflow resumes from recorded history
 - **Runs outlive the client process** — the workflow continues in Temporal even if your application exits
+- **`Close` does not terminate workflows** — stopping a worker or calling `Agent.Close()` only shuts down the local worker poll loop and owned client connections; in-flight workflows keep running and any restarted worker picks them up automatically
 
 See [Durable Agent example](/examples/durable-agent) for crash and retry scenarios.
 
