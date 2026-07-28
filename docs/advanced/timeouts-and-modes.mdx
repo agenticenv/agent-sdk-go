@@ -62,6 +62,15 @@ Used when the context has **no deadline**. Agent-only — ignored by `NewAgentWo
 | `GetAgentRun(ctx, id)` / `GetAgentStream(ctx, id)` | Only bounds the **reconnect lookup** — run keeps going |
 | `handle.Cancel(ctx)` | Stops the **agent run** (explicit stop) |
 
+### How context affects reconnect
+
+- Keep `Run` / `Stream` on a long-lived ctx (`context.Background()`, process-lifetime, or `context.WithoutCancel(r.Context())`) so the Temporal workflow can keep running after HTTP disconnect or API restart.
+- Bound run length with [`WithTimeout`](#option-2--withtimeout-agent-default), not the request ctx.
+- Use a separate `Get` / `Events` ctx to detach the subscriber; call `handle.Cancel` only when you intend to stop the run.
+- Cancelling `Run` / `Stream` ctx stops the workflow — reconnect cannot resume that run.
+
+See [Durable Execution](/advanced/durable-execution#keep-the-run-alive-across-disconnects).
+
 **Common case — pass the same ctx to both `Run` and `Get`:**
 
 ```go

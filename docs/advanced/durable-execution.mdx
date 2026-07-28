@@ -19,6 +19,26 @@ These guarantees are independent:
 | **Client-side stream recovery** | Your subscriber process can reconnect after a crash and resume the event stream from exactly where it left off | Your code — `GetAgentStream` + `WithOffset` |
 | **Client-side run recovery** | Your process can reconnect to a still-running non-stream `Run` and wait for the result | Your code — `GetAgentRun` then `Get` / `Done` |
 
+## Keep the run alive across disconnects
+
+Temporal already records durable history. Your call-site context decides whether the **live run** is still there when you reconnect:
+
+- Pass a long-lived ctx to `Run` / `Stream` (`context.Background()`, process-lifetime, or `context.WithoutCancel(req.Context())`) so disconnect or process shutdown does not cancel the workflow.
+- Cancel only `Get` / `Events` when the HTTP client leaves or the API is shutting down — that drops the subscriber, not the run.
+- Bound run length with `WithTimeout` (or a long-lived deadline on the Stream/Run ctx).
+- Avoid passing a request/shutdown ctx into `Run` / `Stream` if it will be cancelled when the handler exits — that stops the workflow before reconnect.
+
+Full matrix: [Timeouts & Modes — What each context does](/advanced/timeouts-and-modes#what-each-context-does).
+
+```go
+streamCtx := context.WithoutCancel(r.Context()) // run outlives the HTTP request
+eventsCtx, cancelEvents := context.WithCancel(r.Context())
+defer cancelEvents() // disconnect stops subscriber only
+
+s, err := a.Stream(streamCtx, prompt, nil)
+ch, err := s.Events(eventsCtx)
+```
+
 ## Server-side durability
 
 The runtime records every step of the agent run — LLM calls, tool executions, approvals, memory operations — as durable activities in the workflow history. When a worker crashes or restarts:
