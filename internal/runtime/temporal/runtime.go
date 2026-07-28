@@ -314,12 +314,6 @@ func (rt *TemporalRuntime) Close() {
 
 	ctx := context.Background()
 
-	if rt.temporalClient != nil {
-		termCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		defer cancel()
-		rt.stopActiveWorkflows(termCtx)
-	}
-
 	if rt.agentWorker != nil {
 		rt.logger.Debug(ctx, "runtime stopping task worker", slog.String("scope", "runtime"), slog.String("taskQueue", rt.taskQueue))
 		rt.agentWorker.Stop()
@@ -330,53 +324,6 @@ func (rt *TemporalRuntime) Close() {
 		rt.temporalClient.Close()
 	}
 	rt.logger.Info(ctx, "runtime closed", slog.String("scope", "runtime"), slog.String("name", rt.AgentSpec.Name))
-}
-
-// stopActiveWorkflows terminates all live run/stream workflows in parallel, then
-// waits for each to reach a terminal state (bounded by ctx).
-//
-// Close uses Terminate directly — not the cancel-then-3s-then-terminate path used
-// by explicit Cancel/timeout — because the agent is shutting down and no caller
-// will consume the result. The 3s cancel grace exists to let a live handle's
-// workflow run cleanup handlers; on Close there is no one left to receive them.
-// All workflows are sent Terminate simultaneously so shutdown time is constant
-// regardless of how many active runs/streams exist.
-func (rt *TemporalRuntime) stopActiveWorkflows(ctx context.Context) {
-	const reason = "agent closed"
-	var wg sync.WaitGroup
-
-	launch := func(workflowID string, done <-chan struct{}) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			rt.terminateWorkflow(ctx, workflowID, reason)
-			select {
-			case <-done:
-			case <-ctx.Done():
-			}
-		}()
-	}
-
-	if rt.activeRuns != nil {
-		for _, workflowID := range rt.activeRuns.Keys() {
-			h, ok := rt.activeRuns.Get(workflowID)
-			if !ok || h == nil {
-				continue
-			}
-			launch(workflowID, h.Done())
-		}
-	}
-	if rt.activeStreams != nil {
-		for _, workflowID := range rt.activeStreams.Keys() {
-			h, ok := rt.activeStreams.Get(workflowID)
-			if !ok || h == nil {
-				continue
-			}
-			launch(workflowID, h.Done())
-		}
-	}
-
-	wg.Wait()
 }
 
 // approve completes a tool approval request using the token from the approval event

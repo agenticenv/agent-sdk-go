@@ -105,9 +105,11 @@ func NewAgent(opts ...Option) (*Agent, error) {
 	return a, nil
 }
 
-// Close stops an embedded local worker if present, then closes the runtime (which may terminate runs,
-// release remote resources, and close backend connections owned by the runtime, depending on the implementation).
-// Only one run can be active per agent.
+// Close stops an embedded local worker if present, then closes the runtime (releasing remote resources
+// and closing backend connections owned by the runtime, depending on the implementation).
+// Active Temporal workflows are NOT terminated — they continue running on the Temporal server and
+// any available worker can pick them up after a restart. Only the local worker poll loop and owned
+// client connections are torn down.
 func (a *Agent) Close() {
 	a.logger.Info(context.Background(), "closing agent", slog.String("scope", "agent"), slog.String("name", a.Name))
 
