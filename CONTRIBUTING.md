@@ -86,7 +86,7 @@ If you change **agent behavior** (e.g. `pkg/agent`, `pkg/memory`, telemetry, too
 task eval-harness
 ```
 
-Behavioral regression tests use mock LLM/tools and assert on run output — SDK changes can break them even when eval-harness files are untouched. Requires Node.js and Python 3.10+ — see [eval-harness/README.md](eval-harness/README.md). CI runs this automatically on PRs (`eval-harness` job).
+Behavioral regression tests use mock LLM/tools and assert on run output — SDK changes can break them even when eval-harness files are untouched. Requires Node.js `>=22.22.0` (24 LTS recommended) and Python 3.10+ — see [eval-harness/README.md](eval-harness/README.md). CI runs this automatically on PRs (`eval-harness` job).
 
 **CI runs automatically** on pull requests to `main` (open a PR or push updates to an existing PR to re-run checks). Pushes or merges to `main` do not trigger CI; use **workflow_dispatch** in GitHub Actions for an on-demand run. Run `task check` locally before opening a PR; CI must pass on the PR before merge.
 

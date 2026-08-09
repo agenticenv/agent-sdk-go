@@ -98,7 +98,7 @@ View results in the web UI:
 npx promptfoo view
 ```
 
-Requires Node.js. PromptFoo is installed on demand via `npx`; no local install is required.
+Requires Node.js `>=22.22.0` (24 LTS recommended). PromptFoo is installed on demand via `npx`; no local install is required.
 
 ### How it works
 
