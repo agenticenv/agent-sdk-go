@@ -76,6 +76,14 @@ See [Timeouts & Modes](/advanced/timeouts-and-modes) for the full failure behavi
 - **Sub-agent token multiplication** — Each sub-agent delegation triggers its own LLM calls. Monitor sub-agent trees carefully — a 3-level deep tree with 3 tools per level can multiply token spend significantly.
 - **Estimate before production** — Run the [Benchmarks](/testing/benchmarks) harness with real provider clients and `mock_tokens` tuned to your expected prompt size to estimate cost at target load.
 
+## Prompt Caching
+
+- **Enable per provider** — Prompt caching is opt-in on Anthropic via [`llm.WithPromptCaching(true)`](/getting-started/llm-providers#prompt-caching). OpenAI caches automatically server-side with no client option. Gemini and DeepSeek ignore `WithPromptCaching` — this SDK does not configure prompt caching for them.
+- **Message order matters** — SDK builds context in stable-to-dynamic order automatically: system prompt and tools as separate request fields, then memory → RAG → conversation history (including the user message). Do not inject volatile content into stable prefixes.
+- **Data residency** — Anthropic stores prefix KV state server-side. Leave caching disabled (default) or use `llm.WithPromptCaching(false)` for sensitive data workloads.
+- **Write cost** — Anthropic charges 1.25x base input rate on cache writes for the default 5-minute TTL (2x for the 1-hour TTL). At low request volume the write cost may exceed read savings. Enable only when request volume justifies it.
+- **Sanitization** — SDK strips timestamps and volatile IDs (session, conversation, run, request IDs, and UUIDs) from conversation history before sending to the provider to maximize cache hit rate. Original stored messages are unchanged.
+
 ## Secrets and data handling
 
 - **Credentials** — Keep LLM API keys and Temporal credentials in environment variables or a secrets manager — not in source control.

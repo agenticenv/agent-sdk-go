@@ -22,6 +22,38 @@ We appreciate responsible disclosure and will acknowledge security researchers w
 - Security issues in this SDK (agent, tools, conversation, LLM clients)
 - Sensitive data exposure (API keys, approval payloads)
 
+## Security Considerations for Agent Deployments
+
+When deploying agents built with this SDK, review the following application-level risks; the SDK provides the hooks below, but callers own validation and access control.
+
+### Prompt Injection
+
+Agent tools execute based on LLM decisions. Validate and sanitize all external data before injecting into agent context. Use `WithHooks(name, AgentHooks)` with a `BeforeLLM` hook to inspect and filter inputs.
+
+### Prompt Caching Data Residency
+
+When prompt caching is enabled (Anthropic), prefix KV state is stored server-side at the provider. Leave caching disabled (default) or disable explicitly with `llm.WithPromptCaching(false)`.
+
+### MCP Server Trust
+
+MCP stdio transport spawns local processes. Only register MCP servers from trusted sources. Validate MCP server binaries before registering via `WithMCPConfig()`.
+
+### API Key Handling
+
+Never pass API keys through agent prompts or tool inputs. Use environment variables or secret managers. Keys may be held in process memory via `llm.WithAPIKey`; the SDK does not persist them to disk or put them in prompts.
+
+### Tool Authorization
+
+Implement `interfaces.ToolAuthorizer` (`Authorize`) to enforce access control before tool execution. For human-sensitive operations, implement `interfaces.ToolApproval` (`ApprovalRequired`) and/or use `WithToolApprovalPolicy` with `WithApprovalHandler`.
+
+### Third-party Dependencies
+
+Key dependencies — monitor their security advisories:
+- go.temporal.io/sdk
+- github.com/restatedev/sdk-go
+- github.com/modelcontextprotocol/go-sdk
+- github.com/a2aproject/a2a-go/v2
+
 ## Out of Scope
 
 - Temporal server or Temporal Cloud
