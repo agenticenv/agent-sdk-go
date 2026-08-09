@@ -105,6 +105,8 @@ github.com/redis/go-redis/v9 v9.18.0 h1:pMkxYPkEbMPwRdenAzUNyFNrDgHx9U+DrBabWNfS
 github.com/redis/go-redis/v9 v9.18.0/go.mod h1:k3ufPphLU5YXwNTUcCRXGxUoF1fqxnhFQmscfkCoDA0=
 github.com/restatedev/sdk-go v1.0.2 h1:XQYa8mrel+OPc9ObswwGfDHM/3IYw6FOXbfF5q9FgaA=
 github.com/restatedev/sdk-go v1.0.2/go.mod h1:wBPSXBOgBvwTQhLqujDSeW1BA480JXh6ZcIervk7tnA=
+github.com/restatedev/sdk-go/x/mocks v0.26.0 h1:lVvE+sA+5p1B2qtkjxyCOYzC/NVjX+Aqdp1dagGtPM4=
+github.com/restatedev/sdk-go/x/mocks v0.26.0/go.mod h1:G/HwGJtmjybjsUo9Noj52/4cGSex1Z2bntmUexyht2M=
 github.com/robfig/cron v1.2.0 h1:ZjScXvvxeQ63Dbyxy76Fj3AT3Ut0aKsyd2/tl3DTMuQ=
 github.com/robfig/cron v1.2.0/go.mod h1:JGuDeoQd7Z6yL4zQhZ3OPEVHB7fL6Ka6skscFHfmt2k=
 github.com/rogpeppe/go-internal v1.14.1 h1:UQB4HGPB6osV0SQTLymcB4TgvyWu6ZyliaW0tI/otEQ=
