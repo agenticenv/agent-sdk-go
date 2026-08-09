@@ -3,7 +3,7 @@ title: "CLI (agctl)"
 description: "Run agents from the terminal with agctl — interactive chat or one-shot prompts"
 ---
 
-**`agctl`** runs Agent SDK for Go from your terminal — one-shot prompts or multi-turn chat, with built-in tools, optional MCP servers, and local or Temporal execution. Configuration is YAML plus environment variables.
+**`agctl`** runs Agent SDK for Go from your terminal — one-shot prompts or multi-turn chat, with built-in tools, optional MCP servers, and local, Temporal, or Restate execution. Configuration is YAML plus environment variables.
 
 <Note>
 `agctl` is not the Go library. If you're building an app in Go, install the SDK with `go get github.com/agenticenv/agent-sdk-go`. Install `agctl` separately using one of the methods below.
@@ -77,7 +77,7 @@ These override config for a single invocation (highest precedence):
 
 | Flag | Env | Description |
 |---|---|---|
-| `--runtime` | `AGCTL_RUNTIME` | `local` (default) or `temporal` |
+| `--runtime` | `AGCTL_RUNTIME` | `local` (default), `temporal`, or `restate` |
 | `--provider` | `AGCTL_LLM_PROVIDER` | e.g. `openai`, `anthropic`, `gemini`, `ollama` |
 | `--model` | `AGCTL_LLM_MODEL` | Model name |
 | `--api-key` | `AGCTL_LLM_APIKEY` | LLM API key (prefer env for secrets) |
@@ -86,6 +86,11 @@ These override config for a single invocation (highest precedence):
 | `--temporal-port` | `AGCTL_TEMPORAL_PORT` | Temporal gRPC port (default `7233`) |
 | `--temporal-namespace` | `AGCTL_TEMPORAL_NAMESPACE` | Namespace (default `default`) |
 | `--temporal-task-queue` | `AGCTL_TEMPORAL_TASKQUEUE` | Task queue (default `agent-sdk-go`) |
+| `--restate-ingress-url` | `AGCTL_RESTATE_INGRESS_URL` | Restate ingress when `runtime: restate` |
+| `--restate-admin-url` | `AGCTL_RESTATE_ADMIN_URL` | Restate admin URL |
+| `--restate-auth-key` | `AGCTL_RESTATE_AUTH_KEY` | Optional ingress auth key |
+| `--restate-endpoint-listen-address` | `AGCTL_RESTATE_ENDPOINT_LISTEN_ADDRESS` | SDK endpoint listen address (default `:9080`) |
+| `--restate-deployment-url` | `AGCTL_RESTATE_DEPLOYMENT_URL` | Callback URL for containerized Restate |
 
 ## Examples
 
@@ -136,6 +141,16 @@ agctl chat --runtime temporal
 agctl chat --runtime temporal --temporal-host my-temporal.example --temporal-port 7233
 ```
 
+### Restate runtime
+
+```bash
+agctl chat --runtime restate
+# optional overrides (defaults: ingress http://localhost:8080, admin http://localhost:9070, listen :9080)
+agctl chat --runtime restate --restate-deployment-url http://host.docker.internal:9080
+```
+
+See [restate-setup.md](https://github.com/agenticenv/agent-sdk-go/blob/main/restate-setup.md) for a local Restate server.
+
 ## Configuration
 
 `agctl` ships with sensible defaults. You can run with env vars only, save a file with `config edit`, or pass `--config` for a one-off override.
@@ -156,7 +171,7 @@ Settings merge in order — **later layers win**. You only need to set the keys 
 - Linux: `~/.config/agctl/config.yaml` (or `$XDG_CONFIG_HOME/agctl/config.yaml`)
 - Windows: `%LOCALAPPDATA%\agctl\config.yaml`
 
-Run `agctl config show` to see what is in effect. API keys and tokens print as `***`. The `temporal` block appears only when `runtime` is `temporal`.
+Run `agctl config show` to see what is in effect. API keys and tokens print as `***`. The `temporal` / `restate` blocks appear only when that runtime is selected.
 
 ### Config schema
 
@@ -164,7 +179,7 @@ Top-level keys:
 
 | Key | Description |
 |---|---|
-| `runtime` | `local` or `temporal` |
+| `runtime` | `local`, `temporal`, or `restate` |
 | `name` | Agent name (default `agctl`) |
 | `system_prompt` | System prompt for the agent |
 | `llm` | Provider, model, API key, base URL |
@@ -174,6 +189,7 @@ Top-level keys:
 | `tools` | Built-in tools — each `enabled: true\|false` |
 | `mcp` | Optional MCP server list |
 | `temporal` | Connection settings when `runtime: temporal` |
+| `restate` | Connection settings when `runtime: restate` |
 
 **`llm`**
 
@@ -199,6 +215,8 @@ Top-level keys:
 **`tools`** — built-in tool names: `echo`, `current_time`, `random`, `calculator`, `weather`, `wikipedia`, `search`. All default to enabled; set `enabled: false` to omit from the registry.
 
 **`temporal`** — only used when `runtime: temporal`. Defaults if omitted: `localhost:7233`, namespace `default`, task queue `agent-sdk-go`.
+
+**`restate`** — only used when `runtime: restate`. Defaults if omitted: ingress `http://localhost:8080`, admin `http://localhost:9070`, endpoint listen `:9080`.
 
 **`logger`** — SDK/agent logs only; prompts and replies print to the console separately. Default output resolves to a log file under XDG state (`$XDG_STATE_HOME/agctl/agctl.log` for installed binaries).
 
@@ -240,6 +258,12 @@ tools:
 #   namespace: default
 #   taskQueue: agent-sdk-go
 
+# Uncomment when using restate:
+# restate:
+#   ingressURL: http://localhost:8080
+#   adminURL: http://localhost:9070
+#   endpointListenAddress: ":9080"
+
 # Optional MCP — see section below
 # mcp:
 #   servers: [...]
@@ -252,7 +276,7 @@ All use the `AGCTL_` prefix. They override merged file values. Prefer env for se
 | Variable | Description |
 |---|---|
 | `AGCTL_CONFIG` | Path to optional override YAML |
-| `AGCTL_RUNTIME` | `local` or `temporal` |
+| `AGCTL_RUNTIME` | `local`, `temporal`, or `restate` |
 | `AGCTL_NAME` | Agent name |
 | `AGCTL_SYSTEM_PROMPT` | System prompt |
 | `AGCTL_CONVERSATION_STORE` | `inmem` or `redis` |
@@ -263,6 +287,11 @@ All use the `AGCTL_` prefix. They override merged file values. Prefer env for se
 | `AGCTL_TEMPORAL_PORT` | Temporal gRPC port |
 | `AGCTL_TEMPORAL_NAMESPACE` | Temporal namespace |
 | `AGCTL_TEMPORAL_TASKQUEUE` | Task queue name |
+| `AGCTL_RESTATE_INGRESS_URL` | Restate ingress URL |
+| `AGCTL_RESTATE_ADMIN_URL` | Restate admin URL |
+| `AGCTL_RESTATE_AUTH_KEY` | Restate ingress auth key |
+| `AGCTL_RESTATE_ENDPOINT_LISTEN_ADDRESS` | SDK endpoint listen address |
+| `AGCTL_RESTATE_DEPLOYMENT_URL` | Callback URL for containerized Restate |
 | `AGCTL_LLM_PROVIDER` | LLM provider |
 | `AGCTL_LLM_APIKEY` | LLM API key |
 | `AGCTL_LLM_MODEL` | Model name |
@@ -349,6 +378,10 @@ Run `agctl config show` to confirm the merged result.
 ### Temporal connection errors
 
 Ensure a Temporal server is running and reachable. With `--runtime temporal` and no `temporal:` block, defaults are `localhost:7233`, namespace `default`, task queue `agent-sdk-go`. Override via config, env, or `--temporal-*` flags.
+
+### Restate connection errors
+
+Ensure a Restate server is running and reachable. With `--runtime restate` and no `restate:` block, defaults are ingress `http://localhost:8080`, admin `http://localhost:9070`, listen `:9080`. See [restate-setup.md](https://github.com/agenticenv/agent-sdk-go/blob/main/restate-setup.md). When Restate runs in Docker, set `--restate-deployment-url http://host.docker.internal:9080`.
 
 ### MCP server fails to start
 

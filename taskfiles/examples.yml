@@ -32,6 +32,18 @@ tasks:
     internal: true
     cmds:
       - task -t "{{.ROOT_DIR}}/examples/Taskfile.yml" infra:temporal:down
+  _infra:restate:up:
+    internal: true
+    cmds:
+      - task -t "{{.ROOT_DIR}}/examples/Taskfile.yml" infra:restate:up
+  _infra:restate:wait:
+    internal: true
+    cmds:
+      - task -t "{{.ROOT_DIR}}/examples/Taskfile.yml" infra:restate:wait
+  _infra:restate:down:
+    internal: true
+    cmds:
+      - task -t "{{.ROOT_DIR}}/examples/Taskfile.yml" infra:restate:down
 
   report:header:
     internal: true
@@ -242,13 +254,18 @@ tasks:
         - NAME: agent_with_temporal_client
         - NAME: agent_with_workflows
           ORCHESTRATION_ENGINE: temporal
-        # Single-process reconnect (embedded worker — no separate worker process)
-        - NAME: agent_with_reconnect/agent
-        # TODO: enable — split worker + agent REPL
-        # - NAME: durable_agent/worker
-        # - NAME: durable_agent/agent
-        # - NAME: agent_with_worker/worker
-        # - NAME: agent_with_worker/agent
+        # Single-process reconnect (also listed under EXAMPLES_RESTATE)
+        - NAME: agent_with_reconnect
+        # Durable agent REPL — batch sets EXAMPLES_AUTO_APPROVE → embedded worker.
+        # Manual lab keeps DisableLocalWorker + ./worker.
+        - NAME: durable_agent/temporal/agent
+          PROMPT: "What time is it?"
+      EXAMPLES_RESTATE:
+        # Durable reconnect (same binary as Temporal — single-process).
+        - NAME: agent_with_reconnect
+        # Durable agent lab — EXAMPLES_AUTO_APPROVE skips REPL after PROMPT.
+        - NAME: durable_agent/restate
+          PROMPT: "What time is it?"
     cmds:
       - printf '0 0\n' > {{.COUNT_FILE}}
       - for:
@@ -294,7 +311,21 @@ tasks:
         task: exec:example
         vars:
           NAME: '{{.ITEM.NAME}}'
+          PROMPT: '{{.ITEM.PROMPT}}'
           ORCHESTRATION_ENGINE: '{{.ITEM.ORCHESTRATION_ENGINE}}'
+          RUNTIME: '{{.RUNTIME}}'
+          REPORT_FILE: '{{.REPORT_FILE}}'
+          LOG_FILE: '{{.LOG_FILE}}'
+          COUNT_FILE: '{{.COUNT_FILE}}'
+          SKIP_RUN: '{{.SKIP_RUN}}'
+      - for:
+          var: EXAMPLES_RESTATE
+        if: '{{eq .RUNTIME "restate"}}'
+        ignore_error: true
+        task: exec:example
+        vars:
+          NAME: '{{.ITEM.NAME}}'
+          PROMPT: '{{.ITEM.PROMPT}}'
           RUNTIME: '{{.RUNTIME}}'
           REPORT_FILE: '{{.REPORT_FILE}}'
           LOG_FILE: '{{.LOG_FILE}}'
@@ -434,8 +465,73 @@ tasks:
           SKIP_INFRA: "true"
           FAIL_ON_ERROR: "false"
 
+  examples:restate:
+    desc: Run all examples with restate runtime
+    deps:
+      - task: require:llm
+        if: '{{ne .SKIP_RUN "true"}}'
+    vars:
+      TIMESTAMP: '{{now | date "2006-01-02_15-04-05"}}'
+      REPORT_FILE: '{{.REPORT_FILE | default (printf "%s/reports/examples_restate_%s.txt" .ROOT_DIR .TIMESTAMP)}}'
+      LOG_FILE: '{{.LOG_FILE | default (printf "%s/reports/examples_restate_%s.log" .ROOT_DIR .TIMESTAMP)}}'
+      LOG_REPORT: '{{.LOG_REPORT | default (printf "reports/examples_restate_%s.log" .TIMESTAMP)}}'
+      COUNT_FILE: '{{.COUNT_FILE | default (printf "%s/reports/examples_restate_%s.count" .ROOT_DIR .TIMESTAMP)}}'
+      REPORT_MODE: '{{.REPORT_MODE | default "standalone"}}'
+      SKIP_RUN: '{{.SKIP_RUN | default "false"}}'
+      SKIP_INFRA: '{{.SKIP_INFRA | default "false"}}'
+      WRITE_SUMMARY: '{{.WRITE_SUMMARY | default "true"}}'
+      FAIL_ON_ERROR: '{{.FAIL_ON_ERROR | default "true"}}'
+    cmds:
+      - mkdir -p reports
+      - touch {{.REPORT_FILE}}
+      - touch {{.LOG_FILE}}
+      - touch {{.COUNT_FILE}}
+      - task: report:section
+        if: '{{eq .REPORT_MODE "section"}}'
+        vars:
+          REPORT_FILE: '{{.REPORT_FILE}}'
+          RUNTIME: restate
+          PLAN_MODE: '{{.SKIP_RUN}}'
+      - task: report:header
+        if: '{{eq .REPORT_MODE "standalone"}}'
+        vars:
+          REPORT_FILE: '{{.REPORT_FILE}}'
+          RUNTIME: restate
+          LOG_REPORT: '{{.LOG_REPORT}}'
+          PLAN_MODE: '{{.SKIP_RUN}}'
+      - defer: { task: _infra:restate:down }
+        if: '{{ne .SKIP_INFRA "true"}}'
+      - defer: { task: _infra:deps:down }
+        if: '{{ne .SKIP_INFRA "true"}}'
+      - task: _infra:restate:up
+        if: '{{ne .SKIP_INFRA "true"}}'
+      - task: _infra:restate:wait
+        if: '{{ne .SKIP_INFRA "true"}}'
+      - task: _infra:deps:up
+        if: '{{ne .SKIP_INFRA "true"}}'
+      - task: exec:examples
+        vars:
+          RUNTIME: restate
+          REPORT_FILE: '{{.REPORT_FILE}}'
+          LOG_FILE: '{{.LOG_FILE}}'
+          COUNT_FILE: '{{.COUNT_FILE}}'
+          SKIP_RUN: '{{.SKIP_RUN}}'
+          WRITE_SUMMARY: '{{.WRITE_SUMMARY}}'
+          FAIL_ON_ERROR: '{{.FAIL_ON_ERROR}}'
+      - '{{if eq .REPORT_MODE "standalone"}}echo "📄 Report — {{.REPORT_FILE}}"{{end}}'
+      - '{{if eq .REPORT_MODE "standalone"}}echo "📄 Logs   — {{.LOG_FILE}}"{{end}}'
+
+  examples:restate:plan:
+    desc: Plan restate examples — write report only (no go run, no infra). Use instead of task --dry to preview the report file.
+    cmds:
+      - task: examples:restate
+        vars:
+          SKIP_RUN: "true"
+          SKIP_INFRA: "true"
+          FAIL_ON_ERROR: "false"
+
   examples:all:
-    desc: Run all examples on both runtimes
+    desc: Run all examples on all runtimes (local + temporal + restate)
     deps:
       - task: require:llm
         if: '{{ne .PLAN_MODE "true"}}'
@@ -446,6 +542,7 @@ tasks:
       LOG_REPORT: '{{printf "reports/examples_all_%s.log" .TIMESTAMP}}'
       COUNT_FILE_LOCAL: '{{printf "%s/reports/examples_all_%s.local.count" .ROOT_DIR .TIMESTAMP}}'
       COUNT_FILE_TEMPORAL: '{{printf "%s/reports/examples_all_%s.temporal.count" .ROOT_DIR .TIMESTAMP}}'
+      COUNT_FILE_RESTATE: '{{printf "%s/reports/examples_all_%s.restate.count" .ROOT_DIR .TIMESTAMP}}'
       PLAN_MODE: '{{.PLAN_MODE | default "false"}}'
     cmds:
       - mkdir -p reports
@@ -454,7 +551,7 @@ tasks:
       - task: report:header
         vars:
           REPORT_FILE: '{{.REPORT_FILE}}'
-          RUNTIME: all (local + temporal)
+          RUNTIME: all (local + temporal + restate)
           LOG_REPORT: '{{.LOG_REPORT}}'
           PLAN_MODE: '{{.PLAN_MODE}}'
       - task: examples:local
@@ -477,11 +574,22 @@ tasks:
           SKIP_INFRA: '{{.PLAN_MODE}}'
           WRITE_SUMMARY: "false"
           FAIL_ON_ERROR: "false"
+      - task: examples:restate
+        vars:
+          REPORT_FILE: '{{.REPORT_FILE}}'
+          LOG_FILE: '{{.LOG_FILE}}'
+          COUNT_FILE: '{{.COUNT_FILE_RESTATE}}'
+          REPORT_MODE: section
+          SKIP_RUN: '{{.PLAN_MODE}}'
+          SKIP_INFRA: '{{.PLAN_MODE}}'
+          WRITE_SUMMARY: "false"
+          FAIL_ON_ERROR: "false"
       - |
         read -r LPASS LFAIL < "{{.COUNT_FILE_LOCAL}}" 2>/dev/null || LPASS=0 LFAIL=0
         read -r TPASS TFAIL < "{{.COUNT_FILE_TEMPORAL}}" 2>/dev/null || TPASS=0 TFAIL=0
-        PASS=$((LPASS + TPASS))
-        FAIL=$((LFAIL + TFAIL))
+        read -r RPASS RFAIL < "{{.COUNT_FILE_RESTATE}}" 2>/dev/null || RPASS=0 RFAIL=0
+        PASS=$((LPASS + TPASS + RPASS))
+        FAIL=$((LFAIL + TFAIL + RFAIL))
         TOTAL=$((PASS + FAIL))
         if [ "{{.PLAN_MODE}}" = "true" ]; then
           STATUS_LINE="  Status:   ○ PLAN ONLY (not executed)"
@@ -494,7 +602,7 @@ tasks:
           echo ""
           echo "========================================"
           echo "SUMMARY"
-          echo "  Runtimes: local + temporal"
+          echo "  Runtimes: local + temporal + restate"
           echo "  Total:    ${TOTAL}"
         } >> "{{.REPORT_FILE}}"
         if [ "{{.PLAN_MODE}}" = "true" ]; then
@@ -504,6 +612,7 @@ tasks:
             echo "  Fail:     0"
             echo "    local:    planned=${LPASS}"
             echo "    temporal: planned=${TPASS}"
+            echo "    restate:  planned=${RPASS}"
           } >> "{{.REPORT_FILE}}"
         else
           {
@@ -511,17 +620,18 @@ tasks:
             echo "  Fail:     ${FAIL}"
             echo "    local:    pass=${LPASS} fail=${LFAIL}"
             echo "    temporal: pass=${TPASS} fail=${TFAIL}"
+            echo "    restate:  pass=${RPASS} fail=${RFAIL}"
           } >> "{{.REPORT_FILE}}"
         fi
         {
           echo "${STATUS_LINE}"
           echo "========================================"
         } >> "{{.REPORT_FILE}}"
-        rm -f "{{.COUNT_FILE_LOCAL}}" "{{.COUNT_FILE_TEMPORAL}}"
+        rm -f "{{.COUNT_FILE_LOCAL}}" "{{.COUNT_FILE_TEMPORAL}}" "{{.COUNT_FILE_RESTATE}}"
         if [ "{{.PLAN_MODE}}" = "true" ]; then
-          echo "📊 plan=${PASS} (not executed) (local=${LPASS}, temporal=${TPASS})"
+          echo "📊 plan=${PASS} (not executed) (local=${LPASS}, temporal=${TPASS}, restate=${RPASS})"
         else
-          echo "📊 total=${TOTAL} pass=${PASS} fail=${FAIL} (local pass=${LPASS} fail=${LFAIL}, temporal pass=${TPASS} fail=${TFAIL})"
+          echo "📊 total=${TOTAL} pass=${PASS} fail=${FAIL} (local pass=${LPASS} fail=${LFAIL}, temporal pass=${TPASS} fail=${TFAIL}, restate pass=${RPASS} fail=${RFAIL})"
         fi
         if [ "${FAIL}" -gt 0 ]; then
           echo "❌ Examples failed: ${FAIL}"

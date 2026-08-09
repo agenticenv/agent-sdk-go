@@ -15,27 +15,15 @@ import (
 
 	"github.com/agenticenv/agent-sdk-go/internal/hooks"
 	"github.com/agenticenv/agent-sdk-go/internal/runtime"
-	"github.com/agenticenv/agent-sdk-go/internal/runtime/temporal"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
+	agentruntime "github.com/agenticenv/agent-sdk-go/pkg/agent/runtime"
 	"github.com/agenticenv/agent-sdk-go/pkg/conversation"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
 	"github.com/agenticenv/agent-sdk-go/pkg/memory"
 	"github.com/agenticenv/agent-sdk-go/pkg/observability"
 	"github.com/google/uuid"
-	"go.temporal.io/sdk/client"
 )
-
-// TemporalConfig holds connection settings for the Temporal-based execution runtime (host, namespace, task queue).
-//
-// TaskQueue is required and must be unique per agent. Use different task queues when running
-// multiple agents in the same process (e.g. "my-agent-math", "my-agent-creative").
-// For multiple instances of the same agent (e.g. scaled pods), use WithInstanceId() so each
-// instance gets a unique queue derived as {TaskQueue}-{InstanceId}.
-//
-// When using DisableLocalWorker, the agent and NewAgentWorker must use the same TaskQueue (and
-// same InstanceId if set) so client and worker runtimes pair correctly.
-type TemporalConfig = temporal.TemporalConfig
 
 // LLMSampling holds per-agent LLM sampling overrides. nil or zero values mean provider defaults.
 // One LLM client can serve multiple agents with different sampling settings.
@@ -187,7 +175,8 @@ type ObservabilityConfig struct {
 // Option applicability:
 //   - Agent only: DisableLocalWorker, WithApprovalHandler, WithTimeout, WithApprovalTimeout
 //   - AgentWorker only: (none; worker inherits options passed to NewAgentWorker)
-//   - Both: WithName, WithDescription, WithSystemPrompt, WithTemporalConfig, WithTemporalClient,
+//   - Both: WithName, WithDescription, WithSystemPrompt, runtime factory via
+//     pkg/agent/runtime/temporal or pkg/agent/runtime/restate,
 //     WithInstanceId, WithLLMClient, WithToolApprovalPolicy, WithTools, WithToolRegistry,
 //     WithMCPRegistry, WithA2ARegistry, WithSubAgentRegistry,
 //     WithMaxIterations, WithLogger, WithLogLevel, WithConversation, WithMemory,
@@ -204,10 +193,9 @@ type agentConfig struct {
 	Name               string
 	Description        string
 	SystemPrompt       string
-	temporalConfig     *TemporalConfig
-	temporalClient     client.Client
+	runtimeFactory     agentruntime.RuntimeFactory
+	factoryConflict    error // set when conflicting runtime factories are applied
 	instanceId         string
-	taskQueue          string
 	LLMClient          interfaces.LLMClient
 	tools              []interfaces.Tool // staging for [WithTools]; consumed when the agent is created
 	toolRegistry       ToolRegistry
@@ -292,9 +280,11 @@ const defaultMaxIterations int = 5
 // Option configures an agent. See agentConfig for which options apply to Agent vs AgentWorker.
 type Option func(*agentConfig)
 
-// WithName sets the human-readable agent name (any characters; leading/trailing space trimmed on build).
-// It appears in responses and streaming events as-is. Temporal workflow ID segments derived from the name
-// are sanitized separately (spaces and unsafe characters become hyphens); task queue names are not derived from Name.
+// WithName sets the unique identity for this agent. Applies to Agent and AgentWorker.
+//
+// Letters, digits, hyphens, or underscores only; max 64 characters. Two agents
+// with the same name are treated as the same logical agent and will collide at
+// runtime — always pick a distinct name per agent.
 func WithName(name string) Option {
 	return func(c *agentConfig) { c.Name = name }
 }
@@ -309,27 +299,10 @@ func WithSystemPrompt(prompt string) Option {
 	return func(c *agentConfig) { c.SystemPrompt = prompt }
 }
 
-// WithTemporalConfig sets connection options for the Temporal execution runtime. Applies to Agent and AgentWorker.
-// Use either WithTemporalConfig or WithTemporalClient, not both.
-func WithTemporalConfig(cfg *TemporalConfig) Option {
-	return func(c *agentConfig) {
-		c.temporalConfig = cfg
-		c.taskQueue = cfg.TaskQueue
-	}
-}
-
-// WithTemporalClient sets a pre-configured client for the Temporal execution runtime. Use when you need TLS,
-// API keys, cloud endpoints, or other options not covered by [TemporalConfig].
-// Task queue must still be set (via this option's taskQueue argument). Use either WithTemporalConfig or WithTemporalClient, not both.
-// The agent does not close the client when Close() is called; the caller owns the lifecycle.
-func WithTemporalClient(tc client.Client, taskQueue string) Option {
-	return func(c *agentConfig) {
-		c.temporalClient = tc
-		c.taskQueue = taskQueue
-	}
-}
-
-// WithInstanceId sets the instance identifier. Applies to Agent and AgentWorker.
+// WithInstanceId is deprecated. Use a distinct [WithName] instead. When set, the value is
+// ignored after a deprecation warning at [buildAgentConfig].
+//
+// Deprecated: use [WithName].
 func WithInstanceId(id string) Option {
 	return func(c *agentConfig) { c.instanceId = id }
 }
@@ -490,7 +463,7 @@ func DisableLocalWorker() Option {
 }
 
 // WithDisableFingerprintCheck disables caller-vs-worker fingerprint verification at activity entry.
-// This option is applicable to the Temporal runtime only ([WithTemporalConfig] / [WithTemporalClient]).
+// This option is applicable to the Temporal runtime only (pkg/agent/runtime/temporal).
 // Break-glass only: keep false by default to avoid config drift across pods/workers.
 // Not allowed for [NewAgentWorker] (remote worker process).
 func WithDisableFingerprintCheck(disable bool) Option {
@@ -732,7 +705,7 @@ func otlpLogsClientConfigured(logs interfaces.Logs) bool {
 }
 
 // buildAgentConfig applies options, validates, and sets defaults (logger, timeouts, iterations).
-// When neither WithTemporalConfig nor WithTemporalClient is set, the local in-process runtime is used.
+// When neither Temporal nor Restate backend is set, the local in-process runtime is used.
 // remoteWorker is false for Agent; NewAgentWorker sets it to true for worker-side activities.
 func buildAgentConfig(opts []Option) (*agentConfig, error) {
 	c := &agentConfig{remoteWorker: false, ID: uuid.New().String()}
@@ -740,10 +713,12 @@ func buildAgentConfig(opts []Option) (*agentConfig, error) {
 		opt(c)
 	}
 
-	c.Name = strings.TrimSpace(c.Name)
-	if c.Name == "" {
-		return nil, errors.New("name is required")
+	c.Name = sanitizeName(c.Name)
+	if err := validateAgentName(c.Name); err != nil {
+		return nil, err
 	}
+
+	c.instanceId = strings.TrimSpace(c.instanceId)
 
 	if c.logLevel == "" {
 		c.logLevel = "error"
@@ -755,6 +730,10 @@ func buildAgentConfig(opts []Option) (*agentConfig, error) {
 	userProvidedLogger := c.logger != nil
 	if !userProvidedLogger {
 		c.logger = logger.DefaultLogger(c.logLevel)
+	}
+
+	if c.instanceId != "" {
+		c.logger.Warn(context.Background(), "WithInstanceId is deprecated and ignored — use a unique WithName for Temporal task queues and Restate service names")
 	}
 
 	if c.Description == "" {
@@ -770,16 +749,19 @@ func buildAgentConfig(opts []Option) (*agentConfig, error) {
 	if err := c.validateHookGroups(); err != nil {
 		return nil, err
 	}
-	// Temporal-specific validation: only enforced when the caller explicitly opts in to the
-	// Temporal backend. When neither is set the local runtime is used as the default backend.
-	if c.temporalConfig != nil && c.temporalClient != nil {
-		return nil, errors.New("provide either WithTemporalConfig or WithTemporalClient, not both")
+	// Runtime factory validation: only when the caller opts in via
+	// pkg/agent/runtime/temporal or pkg/agent/runtime/restate. Otherwise local is default.
+	if c.factoryConflict != nil {
+		return nil, c.factoryConflict
 	}
-	if c.temporalConfig != nil && c.temporalConfig.TaskQueue == "" {
-		return nil, errors.New("TaskQueue is required in TemporalConfig: provide a unique name per agent")
+	if c.runtimeFactory != nil {
+		if err := c.runtimeFactory.Validate(); err != nil {
+			return nil, err
+		}
 	}
-	if c.temporalClient != nil && c.taskQueue == "" {
-		return nil, errors.New("taskQueue is required when using WithTemporalClient")
+	// WithDisableFingerprintCheck is Temporal-only.
+	if !c.hasTemporalRuntime() && c.disableFingerprintCheck {
+		c.logger.Warn(context.Background(), "WithDisableFingerprintCheck has no effect on this runtime — it only applies to the Temporal runtime (pkg/agent/runtime/temporal)")
 	}
 	if c.LLMClient == nil {
 		return nil, errors.New("LLM client is required")
@@ -924,8 +906,8 @@ func buildAgentConfig(opts []Option) (*agentConfig, error) {
 	}
 
 	runtimeName := "local"
-	if c.hasTemporalRuntime() {
-		runtimeName = "temporal"
+	if c.runtimeFactory != nil {
+		runtimeName = c.runtimeFactory.Name()
 	}
 
 	ctx := context.Background()
@@ -936,8 +918,6 @@ func buildAgentConfig(opts []Option) (*agentConfig, error) {
 	)
 
 	// Full config summary for troubleshooting (no sensitive values: systemPrompt, API keys).
-	// Fields are split by relevance: common fields always logged; Temporal-specific fields only
-	// when the Temporal backend is selected.
 	commonAttrs := []any{
 		slog.String("scope", "agent"),
 		slog.String("name", c.Name),
@@ -962,10 +942,11 @@ func buildAgentConfig(opts []Option) (*agentConfig, error) {
 		slog.Bool("otlpSdkLogsExporter", otlpLogsClientConfigured(c.logs)),
 		slog.Bool("otelLoggerWired", otelLoggerWired),
 	}
+	if c.instanceId != "" {
+		commonAttrs = append(commonAttrs, slog.String("instanceId", c.instanceId))
+	}
 	if c.hasTemporalRuntime() {
 		c.logger.Info(ctx, "agent config detail", append(commonAttrs,
-			slog.String("taskQueue", c.taskQueue),
-			slog.String("instanceId", c.instanceId),
 			slog.Bool("disableLocalWorker", c.disableLocalWorker),
 			slog.Bool("remoteWorker", c.remoteWorker),
 			slog.Bool("disableFingerprintCheck", c.disableFingerprintCheck),
@@ -1121,6 +1102,9 @@ func validateSubAgentRegistry(c *agentConfig, reg SubAgentRegistry) error {
 			return fmt.Errorf("duplicate sub-agent %q in WithSubAgents", sa.Name)
 		}
 		seen[sa] = struct{}{}
+		if sa.Name == c.Name {
+			return fmt.Errorf("sub-agent name %q must differ from root agent name", sa.Name)
+		}
 		toolName, err := subAgentToolName(sa.Name)
 		if err != nil {
 			return fmt.Errorf("WithSubAgents: %w", err)
@@ -1137,16 +1121,6 @@ func validateSubAgentRegistry(c *agentConfig, reg SubAgentRegistry) error {
 		}
 	}
 	return nil
-}
-
-// buildAgentRuntime constructs the execution backend from agentConfig.
-// Defaults to the local in-process runtime when no Temporal backend is configured.
-// Extend with additional branches when new [runtime.Runtime] implementations are added.
-func (cfg *agentConfig) buildAgentRuntime(remoteWorker bool) (runtime.Runtime, error) {
-	if cfg.hasTemporalRuntime() {
-		return cfg.buildTemporalRuntime(remoteWorker)
-	}
-	return cfg.buildLocalRuntime()
 }
 
 // resolveTools builds the merged tool list for one run from registries and resolution.
@@ -1276,6 +1250,56 @@ func (c *agentConfig) validateHookGroups() error {
 			return fmt.Errorf("WithHooks: duplicate hook group name %q", g.Name)
 		}
 		seen[g.Name] = struct{}{}
+	}
+	return nil
+}
+
+const maxAgentNameLen = 64
+
+// sanitizeName normalizes an agent name for this release: lowercase, spaces to hyphens,
+// strip characters outside [a-z0-9_-], truncate to 64. Prefer valid names at call sites;
+// this helper will be removed in the next major release.
+func sanitizeName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(len(name))
+	for _, r := range strings.ToLower(name) {
+		switch {
+		case r == ' ' || r == '\t' || r == '\n' || r == '\r':
+			b.WriteByte('-')
+		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_':
+			b.WriteRune(r)
+		}
+		if b.Len() >= maxAgentNameLen {
+			break
+		}
+	}
+	out := b.String()
+	if len(out) > maxAgentNameLen {
+		out = out[:maxAgentNameLen]
+	}
+	return out
+}
+
+// validateAgentName requires a non-empty name of letters, digits, hyphens, or underscores, max 64.
+func validateAgentName(name string) error {
+	if name == "" {
+		return errors.New("name is required")
+	}
+	if len(name) > maxAgentNameLen {
+		return fmt.Errorf("name %q is invalid: max length is %d", name, maxAgentNameLen)
+	}
+	for _, r := range name {
+		ok := (r >= 'a' && r <= 'z') ||
+			(r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') ||
+			r == '-' || r == '_'
+		if !ok {
+			return fmt.Errorf("name %q is invalid: use letters, digits, hyphens, or underscores only", name)
+		}
 	}
 	return nil
 }

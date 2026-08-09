@@ -21,7 +21,7 @@ Configure traces, metrics, and logs in one block with [`WithObservabilityConfig`
 
 ```go
 a, err := agent.NewAgent(
-    agent.WithTemporalConfig(cfg),
+    temporal.WithTemporalConfig(cfg),
     agent.WithLLMClient(llmClient),
     agent.WithObservabilityConfig(&agent.ObservabilityConfig{
         Endpoint: "collector:4317",        // gRPC (default)

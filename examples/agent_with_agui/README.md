@@ -6,7 +6,7 @@ CopilotKit expects its **runtime** handler, not a raw Go URL, in `runtimeUrl`—
 
 ## Prereqs
 
-- Running [Temporal](https://temporal.io) and `examples/.env` (or your env) with `LLM_*` and `TEMPORAL_*` set, same as other examples.
+- `examples/.env` with `LLM_*` set, same as other examples. Optional durable runtime: `AGENT_RUNTIME=temporal` (+ `TEMPORAL_*`) or `AGENT_RUNTIME=restate` (+ `RESTATE_*`). See [`temporal-setup.md`](../../temporal-setup.md) / [`restate-setup.md`](../../restate-setup.md).
 
 ## 1) Start the Go agent server
 
@@ -49,5 +49,5 @@ You should see `data: {...}` lines (AG-UI-style JSON from `event.ToJSON()`).
 ## Notes
 
 - **`ui/node_modules`** and **`ui/.next`** are listed in the repo root `.gitignore` — run `npm install` in `ui/` after clone; do not commit those directories.
-- Keep the **Go server** running before using the chat UI. Temporal is only needed when `AGENT_RUNTIME=temporal`.
+- Keep the **Go server** running before using the chat UI. Temporal / Restate are only needed when `AGENT_RUNTIME` is set to that backend.
 - CopilotKit / `@ag-ui/client` versions may need to stay compatible; if the UI errors, check [CopilotKit AG-UI docs](https://docs.copilotkit.ai) and align package versions.

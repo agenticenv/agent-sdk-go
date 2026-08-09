@@ -297,7 +297,7 @@ func TestRetrieverConfigFingerprint_nameOrderDoesNotMatter(t *testing.T) {
 func TestAgentConfigFingerprint_RetrieverNamesChangesDigest(t *testing.T) {
 	baseOpts := []Option{
 		WithName("test"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithRetrieverMode(RetrieverModePrefetch),
 	}

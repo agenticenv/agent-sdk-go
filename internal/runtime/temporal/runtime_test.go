@@ -218,7 +218,7 @@ func TestTemporalRuntime_Run_Success(t *testing.T) {
 	wfRun := temporalmocks.NewWorkflowRun(t)
 
 	want := &types.AgentRunResult{AgentName: "agent-a", Content: "hello", Model: "m"}
-	tc.On("DescribeTaskQueue", mock.Anything, "tq", enumspb.TASK_QUEUE_TYPE_WORKFLOW).
+	tc.On("DescribeTaskQueue", mock.Anything, "tq_agent-a", enumspb.TASK_QUEUE_TYPE_WORKFLOW).
 		Return(describeTaskQueueWithPollers(), nil)
 	tc.On("ExecuteWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(wfRun, nil)
@@ -260,7 +260,7 @@ func TestTemporalRuntime_Run_Success(t *testing.T) {
 
 func TestTemporalRuntime_Run_NoWorkers(t *testing.T) {
 	tc := temporalmocks.NewClient(t)
-	tc.On("DescribeTaskQueue", mock.Anything, "tq", enumspb.TASK_QUEUE_TYPE_WORKFLOW).
+	tc.On("DescribeTaskQueue", mock.Anything, "tq_agent-a", enumspb.TASK_QUEUE_TYPE_WORKFLOW).
 		Return(&workflowservice.DescribeTaskQueueResponse{Pollers: nil}, nil)
 
 	rt, err := NewTemporalRuntime(
@@ -287,7 +287,7 @@ func TestTemporalRuntime_Run_NoWorkers(t *testing.T) {
 
 func TestTemporalRuntime_Run_ExecuteWorkflowError(t *testing.T) {
 	tc := temporalmocks.NewClient(t)
-	tc.On("DescribeTaskQueue", mock.Anything, "tq", enumspb.TASK_QUEUE_TYPE_WORKFLOW).
+	tc.On("DescribeTaskQueue", mock.Anything, "tq_agent-a", enumspb.TASK_QUEUE_TYPE_WORKFLOW).
 		Return(describeTaskQueueWithPollers(), nil)
 	tc.On("ExecuteWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(nil, errors.New("start failed"))
@@ -311,7 +311,7 @@ func TestTemporalRuntime_Run_ExecuteWorkflowError(t *testing.T) {
 func TestTemporalRuntime_Run_WorkflowGetError(t *testing.T) {
 	tc := temporalmocks.NewClient(t)
 	wfRun := temporalmocks.NewWorkflowRun(t)
-	tc.On("DescribeTaskQueue", mock.Anything, "tq", enumspb.TASK_QUEUE_TYPE_WORKFLOW).
+	tc.On("DescribeTaskQueue", mock.Anything, "tq_agent-a", enumspb.TASK_QUEUE_TYPE_WORKFLOW).
 		Return(describeTaskQueueWithPollers(), nil)
 	tc.On("ExecuteWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(wfRun, nil)
@@ -345,7 +345,7 @@ func TestTemporalRuntime_Stream_Success(t *testing.T) {
 	// Do not use NewWorkflowRun(t): avoids AssertExpectations flake on async Get.
 	wfRun := &temporalmocks.WorkflowRun{}
 
-	tc.On("DescribeTaskQueue", mock.Anything, "tq", enumspb.TASK_QUEUE_TYPE_WORKFLOW).
+	tc.On("DescribeTaskQueue", mock.Anything, "tq_root", enumspb.TASK_QUEUE_TYPE_WORKFLOW).
 		Return(describeTaskQueueWithPollers(), nil)
 	tc.On("ExecuteWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(wfRun, nil)
@@ -409,7 +409,7 @@ func TestTemporalRuntime_Stream_WorkflowGetError(t *testing.T) {
 	tc := temporalmocks.NewClient(t)
 	// Do not use NewWorkflowRun(t): avoids AssertExpectations flake on async Get.
 	wfRun := &temporalmocks.WorkflowRun{}
-	tc.On("DescribeTaskQueue", mock.Anything, "tq", enumspb.TASK_QUEUE_TYPE_WORKFLOW).
+	tc.On("DescribeTaskQueue", mock.Anything, "tq_root", enumspb.TASK_QUEUE_TYPE_WORKFLOW).
 		Return(describeTaskQueueWithPollers(), nil)
 	tc.On("ExecuteWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(wfRun, nil)
@@ -889,7 +889,7 @@ func TestTemporalRuntime_Stream_NilRequest(t *testing.T) {
 
 func TestTemporalRuntime_Stream_NoWorkers(t *testing.T) {
 	tc := temporalmocks.NewClient(t)
-	tc.On("DescribeTaskQueue", mock.Anything, "tq", enumspb.TASK_QUEUE_TYPE_WORKFLOW).
+	tc.On("DescribeTaskQueue", mock.Anything, "tq_agent-a", enumspb.TASK_QUEUE_TYPE_WORKFLOW).
 		Return(&workflowservice.DescribeTaskQueueResponse{Pollers: nil}, nil)
 
 	rt, err := NewTemporalRuntime(
@@ -916,7 +916,7 @@ func TestTemporalRuntime_Stream_NoWorkers(t *testing.T) {
 
 func TestTemporalRuntime_Stream_ExecuteWorkflowError(t *testing.T) {
 	tc := temporalmocks.NewClient(t)
-	tc.On("DescribeTaskQueue", mock.Anything, "tq", enumspb.TASK_QUEUE_TYPE_WORKFLOW).
+	tc.On("DescribeTaskQueue", mock.Anything, "tq_agent-a", enumspb.TASK_QUEUE_TYPE_WORKFLOW).
 		Return(describeTaskQueueWithPollers(), nil)
 	tc.On("ExecuteWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(nil, errors.New("stream start failed"))

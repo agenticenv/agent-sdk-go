@@ -14,28 +14,25 @@ Source: [`examples/agent_with_reconnect/`](https://github.com/agenticenv/agent-s
 - Tracking the `Offset()` on each event and saving it as the resume point
 - Calling `GetAgentStream(ctx, runID)` then `Events(ctx, WithOffset(lastOffset))` from a fresh context
 - Discarding already-processed events (offset ≤ saved offset) after reconnect
-- Handling `ErrRunAlreadyCompleted` when the workflow finished while disconnected
+- Handling `ErrRunAlreadyCompleted` when the run finished while disconnected
 
 ## Requirements
 
-Reconnect requires the Temporal runtime. The example runs in a **single terminal** — the embedded Temporal worker runs inside the same process, so no separate worker binary is needed.
+Requires a durable runtime — [Temporal](/runtimes/temporal) or [Restate](/runtimes/restate). Local runtime has no stream offsets. The same public API (`GetAgentStream` + `WithOffset`, `GetAgentRun`) works on both.
+
+Single process: Temporal embeds a worker; Restate embeds the SDK endpoint.
 
 ```bash
-# single terminal — embedded worker + agent in one process
-AGENT_RUNTIME=temporal go run ./agent_with_reconnect/agent "Explain what a Temporal workflow is"
+# Temporal
+task infra:temporal:up && task infra:temporal:wait
+AGENT_RUNTIME=temporal go run ./agent_with_reconnect "What time is it?"
+
+# Restate
+task infra:restate:up && task infra:restate:wait
+AGENT_RUNTIME=restate go run ./agent_with_reconnect "What time is it?"
 ```
 
-Cancelling the **Events** context only closes the subscriber-side event channel. Cancelling the **Stream** context cancels the agent run (Temporal workflow). Use separate contexts — do not share one cancelable ctx for `Stream` and `Events` when simulating a subscriber crash. The embedded worker keeps running, the workflow continues, and `GetAgentStream` resumes from the saved offset.
-
-To demonstrate the agent+worker split instead, start the worker separately:
-
-```bash
-# terminal 1 — separate worker
-AGENT_RUNTIME=temporal go run ./agent_with_reconnect/worker
-
-# terminal 2 — agent (embedded worker by default; see example README for DisableLocalWorker)
-AGENT_RUNTIME=temporal go run ./agent_with_reconnect/agent "Explain what a Temporal workflow is"
-```
+Cancelling the **Events** context only closes the subscriber-side event channel. Cancelling the **Stream** context cancels the agent run. Use separate contexts — do not share one cancelable ctx for `Stream` and `Events` when simulating a subscriber crash. The durable run continues server-side, and `GetAgentStream` resumes from the saved offset.
 
 ## Key code
 
@@ -61,7 +58,7 @@ for ev := range eventCh {
 
     // Simulate crash: cancel Events only (not Stream).
     if ev.Type() == agent.AgentEventTypeTextMessageContent {
-        cancelEvents() // drains and closes eventCh; workflow keeps running
+        cancelEvents() // drains and closes eventCh; durable run keeps running
         break
     }
 }
@@ -83,19 +80,19 @@ for ev := range resumeCh {
 ## Expected output
 
 ```
-user: Explain what a Temporal workflow is
-[run_id] agent-stream-remote-worker-<uuid>
+user: What time is it?
+[run_id] agent-stream-reconnect-agent-<uuid>
 --- stream start (phase A: first text chunk, then simulating crash) ---
-[RUN_STARTED] runID=agent-stream-remote-worker-<uuid>
+[RUN_STARTED] runID=agent-stream-reconnect-agent-<uuid>
 [TEXT_START] msgID=<id>
-A Temporal workflow is a durable
+The current time is
 
-=== simulated crash: saved runID=agent-stream-remote-worker-<uuid> lastOffset=3 ===
+=== simulated crash: saved runID=agent-stream-reconnect-agent-<uuid> lastOffset=3 ===
 
 === process restart: reconnecting from offset 3 ===
 
 --- stream resumed (phase B: events from last saved offset) ---
-function that can survive process crashes, ...
+ ...
 [TEXT_END]
 [RUN_FINISHED]
 --- stream end ---
@@ -103,11 +100,7 @@ function that can survive process crashes, ...
 
 Events emitted while the subscriber was "gone" (after the simulated crash) are delivered in Phase B.
 
-## Single process vs separate worker
-
-The example runs single-process by default — the embedded worker and the stream subscriber share the same binary. The simulated crash cancels only the Events context (not Stream), not a real `kill -9`, so the embedded worker keeps running and the workflow stays live in Temporal. `GetAgentStream` resumes from the saved offset seamlessly.
-
-For a real process-kill story (worker survives, subscriber dies), see [Durable Agent](/examples/durable-agent) which uses `pkill -SIGKILL` and a real state file.
+The simulated crash cancels only the Events context (not Stream), not a real `kill -9`. For a real process-kill story, see [Durable Agent (Temporal)](/examples/durable-agent) or [Durable Agent (Restate)](/examples/durable-agent-restate).
 
 ## Learn more
 
@@ -115,13 +108,13 @@ For a real process-kill story (worker survives, subscriber dies), see [Durable A
   <Card title="Durable Execution" icon="shield-check" href="/advanced/durable-execution" horizontal>
     Full protocol, API reference, and offset semantics
   </Card>
-  <Card title="Durable Agent" icon="shield" href="/examples/durable-agent" horizontal>
-    Real process kill + state file reconnect in a full REPL
+  <Card title="Durable Agent (Restate)" icon="shield" href="/examples/durable-agent-restate" horizontal>
+    Real process kill + state file reconnect (single process)
   </Card>
   <Card title="Streaming" icon="bolt" href="/getting-started/streaming" horizontal>
     RunID, offsets, and the streaming API
   </Card>
-  <Card title="Temporal Runtime" icon="server" href="/runtimes/temporal" horizontal>
-    Durable execution architecture and event delivery
+  <Card title="Restate Runtime" icon="server" href="/runtimes/restate" horizontal>
+    Embedded endpoint and durable event delivery
   </Card>
 </CardGroup>

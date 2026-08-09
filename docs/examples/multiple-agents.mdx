@@ -1,17 +1,17 @@
 ---
 title: "Multiple Agents"
-description: "Run two root agents concurrently in one process using WithInstanceId and distinct Temporal task queues"
+description: "Run two root agents concurrently in one process"
 ---
 
-Runs two independent root agents concurrently in the same process, each with a unique `WithInstanceId` and task queue suffix. Required when multiple agents share a Temporal namespace without colliding on workflow identity.
+Runs two independent root agents concurrently in the same process.
 
 Source: [`examples/multiple_agents/`](https://github.com/agenticenv/agent-sdk-go/tree/main/examples/multiple_agents)
 
 ## What it demonstrates
 
-- `WithInstanceId` for distinct Temporal workflow IDs
-- Per-agent task queue suffixes from the shared base queue
-- Concurrent `Run` calls on separate agent instances
+- Two `NewAgent` instances in one process
+- Concurrent `Run` calls on separate agents
+- Restate: a separate `ListenAddress` per agent when co-located
 
 ## Run
 
@@ -22,40 +22,45 @@ task infra:temporal:up && task infra:temporal:wait
 AGENT_RUNTIME=temporal go run ./multiple_agents
 ```
 
+With Restate:
+
+```bash
+task infra:restate:up && task infra:restate:wait
+AGENT_RUNTIME=restate go run ./multiple_agents
+```
+
 ## Key code
 
 ```go
 agent1, err := agent.NewAgent(
-    agent.WithName("agent-1"),
-    agent.WithInstanceId("agent-1"),
+    agent.WithName("math-agent"),
     agent.WithLLMClient(llmClient),
-    agent.WithTemporalConfig(temporalCfg), // task queue gets instance suffix
+    // plus Temporal or Restate runtime options for this agent
 )
 
 agent2, err := agent.NewAgent(
-    agent.WithName("agent-2"),
-    agent.WithInstanceId("agent-2"),
+    agent.WithName("writing-agent"),
     agent.WithLLMClient(llmClient),
-    agent.WithTemporalConfig(temporalCfg),
+    // plus Temporal or Restate runtime options for this agent
 )
 ```
 
-See [Multiple agents](/advanced/multiple-agents) for task queue naming and scaling patterns.
+See [Multiple agents](/advanced/multiple-agents).
 
 ## Expected output
 
 ```
-[agent-1] Hello from agent 1! I'm ready to help.
-[agent-2] Hello from agent 2! I'm also ready to assist.
+--- Agent 1 (math) ---
+Agent 1 (math): Hello from the math assistant! I'm ready to help.
+--- Agent 2 (creative) ---
+Agent 2 (creative): Hello from the creative writing assistant!
 ```
-
-Both agents run concurrently. Each workflow ID is unique because `WithInstanceId` suffixes the Temporal workflow key — no collision on shared namespace.
 
 ## Learn more
 
 <CardGroup cols={2}>
   <Card title="Multiple Agents" icon="layer-group" href="/advanced/multiple-agents" horizontal>
-    Instance IDs and task queues
+    Several agents in one process
   </Card>
   <Card title="Sub-agents" icon="sitemap" href="/examples/subagents" horizontal>
     Delegation vs separate root agents

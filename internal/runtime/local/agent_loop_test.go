@@ -41,7 +41,7 @@ func runLoop(ctx context.Context, rt *LocalRuntime, tools []interfaces.Tool, in 
 	if len(in.Tools) == 0 {
 		in.Tools = tools
 	}
-	return rt.RunAgentLoop(ctx, in)
+	return rt.executeAgentLoop(ctx, in)
 }
 
 func loopToolsInput(tools []interfaces.Tool) AgentLoopInput {
@@ -81,10 +81,10 @@ func captureEmit() (func(events.AgentEvent), *[]events.AgentEvent) {
 }
 
 // ---------------------------------------------------------------------------
-// RunAgentLoop — basic paths
+// executeAgentLoop — basic paths
 // ---------------------------------------------------------------------------
 
-func TestRunAgentLoop_SimpleTextResponse(t *testing.T) {
+func TestExecuteAgentLoop_SimpleTextResponse(t *testing.T) {
 	client := &seqLLMClient{
 		responses: []*interfaces.LLMResponse{{Content: "hello world"}},
 	}
@@ -95,7 +95,7 @@ func TestRunAgentLoop_SimpleTextResponse(t *testing.T) {
 	require.Equal(t, "hello world", result.Content)
 }
 
-func TestRunAgentLoop_MemoryRecallAndStore(t *testing.T) {
+func TestExecuteAgentLoop_MemoryRecallAndStore(t *testing.T) {
 	store := testutil.NewInmemMemory()
 	memCfg := memory.DefaultConfig(store)
 	client := &seqLLMClient{
@@ -120,7 +120,7 @@ func TestRunAgentLoop_MemoryRecallAndStore(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	result, err := rt.RunAgentLoop(context.Background(), AgentLoopInput{
+	result, err := rt.executeAgentLoop(context.Background(), AgentLoopInput{
 		UserPrompt:  "What style do I prefer?",
 		MemoryScope: scope,
 	})
@@ -130,7 +130,7 @@ func TestRunAgentLoop_MemoryRecallAndStore(t *testing.T) {
 	require.Equal(t, int64(0), result.Telemetry.Storage.TotalMemoryStores)
 }
 
-func TestRunAgentLoop_MemoryAlwaysRunEndStore(t *testing.T) {
+func TestExecuteAgentLoop_MemoryAlwaysRunEndStore(t *testing.T) {
 	store := testutil.NewInmemMemory()
 	memCfg := memory.DefaultConfig(store)
 	memCfg.Store.Mode = memory.StoreModeAlways
@@ -151,7 +151,7 @@ func TestRunAgentLoop_MemoryAlwaysRunEndStore(t *testing.T) {
 	)
 	require.NoError(t, err)
 	scope := interfaces.MemoryScope{UserID: "u1"}
-	result, err := rt.RunAgentLoop(context.Background(), AgentLoopInput{
+	result, err := rt.executeAgentLoop(context.Background(), AgentLoopInput{
 		UserPrompt:  "hello",
 		MemoryScope: scope,
 	})
@@ -164,7 +164,7 @@ func TestRunAgentLoop_MemoryAlwaysRunEndStore(t *testing.T) {
 	require.Equal(t, "greeting", entries[0].Text)
 }
 
-func TestRunAgentLoop_OnDemandSaveMemoryTool(t *testing.T) {
+func TestExecuteAgentLoop_OnDemandSaveMemoryTool(t *testing.T) {
 	store := testutil.NewInmemMemory()
 	memCfg := memory.DefaultConfig(store)
 	client := &seqLLMClient{
@@ -192,7 +192,7 @@ func TestRunAgentLoop_OnDemandSaveMemoryTool(t *testing.T) {
 		stubTool: stubTool{name: types.SaveMemoryToolName},
 		kind:     types.ToolKindMemory,
 	}
-	result, err := rt.RunAgentLoop(context.Background(), AgentLoopInput{
+	result, err := rt.executeAgentLoop(context.Background(), AgentLoopInput{
 		UserPrompt:  "remember my color",
 		MemoryScope: scope,
 		Tools:       []interfaces.Tool{tool},
@@ -206,7 +206,7 @@ func TestRunAgentLoop_OnDemandSaveMemoryTool(t *testing.T) {
 	require.Equal(t, "favorite color is blue", entries[0].Text)
 }
 
-func TestRunAgentLoop_LLMError(t *testing.T) {
+func TestExecuteAgentLoop_LLMError(t *testing.T) {
 	client := &seqLLMClient{errs: []error{errors.New("llm fail")}}
 	rt, err := NewLocalRuntime(
 		WithLogger(logger.NoopLogger()),
@@ -226,7 +226,7 @@ func TestRunAgentLoop_LLMError(t *testing.T) {
 	require.Contains(t, err.Error(), "llm fail")
 }
 
-func TestRunAgentLoop_DefaultMaxIterations(t *testing.T) {
+func TestExecuteAgentLoop_DefaultMaxIterations(t *testing.T) {
 	// When MaxIterations = 0 the loop defaults to 10.
 	// The client returns a text response on the first call so it exits immediately.
 	client := &seqLLMClient{
@@ -246,7 +246,7 @@ func TestRunAgentLoop_DefaultMaxIterations(t *testing.T) {
 	require.Equal(t, "early exit", result.Content)
 }
 
-func TestRunAgentLoop_ToolCallThenFinalAnswer(t *testing.T) {
+func TestExecuteAgentLoop_ToolCallThenFinalAnswer(t *testing.T) {
 	client := &seqLLMClient{
 		responses: []*interfaces.LLMResponse{
 			{ToolCalls: []*interfaces.ToolCall{{ToolCallID: "c1", ToolName: "add"}}},
@@ -261,7 +261,7 @@ func TestRunAgentLoop_ToolCallThenFinalAnswer(t *testing.T) {
 	require.Equal(t, "sum is 7", result.Content)
 }
 
-func TestRunAgentLoop_ToolTelemetry_Success(t *testing.T) {
+func TestExecuteAgentLoop_ToolTelemetry_Success(t *testing.T) {
 	client := &seqLLMClient{
 		responses: []*interfaces.LLMResponse{
 			{ToolCalls: []*interfaces.ToolCall{{ToolCallID: "c1", ToolName: "ok"}}},
@@ -279,7 +279,7 @@ func TestRunAgentLoop_ToolTelemetry_Success(t *testing.T) {
 	require.Equal(t, int64(1), result.Telemetry.Tools.Breakdown["ok"])
 }
 
-func TestRunAgentLoop_ToolTelemetry_ExecError(t *testing.T) {
+func TestExecuteAgentLoop_ToolTelemetry_ExecError(t *testing.T) {
 	client := &seqLLMClient{
 		responses: []*interfaces.LLMResponse{
 			{ToolCalls: []*interfaces.ToolCall{{ToolCallID: "c1", ToolName: "bad"}}},
@@ -297,7 +297,7 @@ func TestRunAgentLoop_ToolTelemetry_ExecError(t *testing.T) {
 	require.Equal(t, int64(1), result.Telemetry.Tools.FailedBreakdown["bad"])
 }
 
-func TestRunAgentLoop_ToolTelemetry_SkipsNonCountableKind(t *testing.T) {
+func TestExecuteAgentLoop_ToolTelemetry_SkipsNonCountableKind(t *testing.T) {
 	client := &seqLLMClient{
 		responses: []*interfaces.LLMResponse{
 			{ToolCalls: []*interfaces.ToolCall{{ToolCallID: "c1", ToolName: "delegate"}}},
@@ -313,7 +313,7 @@ func TestRunAgentLoop_ToolTelemetry_SkipsNonCountableKind(t *testing.T) {
 	require.Equal(t, int64(0), result.Telemetry.Tools.TotalCalls)
 }
 
-func TestRunAgentLoop_MaxIterationsForcesFinalCall(t *testing.T) {
+func TestExecuteAgentLoop_MaxIterationsForcesFinalCall(t *testing.T) {
 	// With maxIter=1 and the only LLM response returning a tool call, the loop
 	// must fire a second "forced final" LLM call (skipTools=true) and return its content.
 	client := &seqLLMClient{
@@ -331,10 +331,10 @@ func TestRunAgentLoop_MaxIterationsForcesFinalCall(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// RunAgentLoop — tool execution modes
+// executeAgentLoop — tool execution modes
 // ---------------------------------------------------------------------------
 
-func TestRunAgentLoop_SequentialMode(t *testing.T) {
+func TestExecuteAgentLoop_SequentialMode(t *testing.T) {
 	client := &seqLLMClient{
 		responses: []*interfaces.LLMResponse{
 			{ToolCalls: []*interfaces.ToolCall{
@@ -354,7 +354,7 @@ func TestRunAgentLoop_SequentialMode(t *testing.T) {
 	require.Equal(t, "sequential done", result.Content)
 }
 
-func TestRunAgentLoop_InvalidToolMode(t *testing.T) {
+func TestExecuteAgentLoop_InvalidToolMode(t *testing.T) {
 	client := &seqLLMClient{
 		responses: []*interfaces.LLMResponse{
 			{ToolCalls: []*interfaces.ToolCall{{ToolCallID: "c1", ToolName: "t1"}}},
@@ -370,10 +370,10 @@ func TestRunAgentLoop_InvalidToolMode(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// RunAgentLoop — conversation
+// executeAgentLoop — conversation
 // ---------------------------------------------------------------------------
 
-func TestRunAgentLoop_WithConversationID(t *testing.T) {
+func TestExecuteAgentLoop_WithConversationID(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	conv := ifmocks.NewMockConversation(ctrl)
 
@@ -403,7 +403,7 @@ func TestRunAgentLoop_WithConversationID(t *testing.T) {
 	require.Equal(t, "with history", result.Content)
 }
 
-func TestRunAgentLoop_ConversationFetchErrorContinues(t *testing.T) {
+func TestExecuteAgentLoop_ConversationFetchErrorContinues(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	conv := ifmocks.NewMockConversation(ctrl)
 	conv.EXPECT().ListMessages(gomock.Any(), "bad-conv", gomock.Any()).Return(nil, errors.New("store down"))
@@ -433,10 +433,10 @@ func TestRunAgentLoop_ConversationFetchErrorContinues(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// RunAgentLoop — retrievers
+// executeAgentLoop — retrievers
 // ---------------------------------------------------------------------------
 
-func TestRunAgentLoop_RetrieverPrefetch(t *testing.T) {
+func TestExecuteAgentLoop_RetrieverPrefetch(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ret := ifmocks.NewMockRetriever(ctrl)
 	ret.EXPECT().Name().Return("kb").AnyTimes()
@@ -469,7 +469,7 @@ func TestRunAgentLoop_RetrieverPrefetch(t *testing.T) {
 	require.Equal(t, int64(0), result.Telemetry.Storage.AgenticSearches)
 }
 
-func TestRunAgentLoop_RetrieverAllFailContinues(t *testing.T) {
+func TestExecuteAgentLoop_RetrieverAllFailContinues(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ret := ifmocks.NewMockRetriever(ctrl)
 	ret.EXPECT().Name().Return("kb").AnyTimes()
@@ -499,10 +499,10 @@ func TestRunAgentLoop_RetrieverAllFailContinues(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// RunAgentLoop — event emission
+// executeAgentLoop — event emission
 // ---------------------------------------------------------------------------
 
-func TestRunAgentLoop_ToolEventsEmittedToChannel(t *testing.T) {
+func TestExecuteAgentLoop_ToolEventsEmittedToChannel(t *testing.T) {
 	client := &seqLLMClient{
 		responses: []*interfaces.LLMResponse{
 			{ToolCalls: []*interfaces.ToolCall{{ToolCallID: "c1", ToolName: "calc"}}},

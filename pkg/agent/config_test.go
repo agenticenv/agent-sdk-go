@@ -71,10 +71,68 @@ func TestBuildAgentConfig_NeitherTemporalConfigNorClient_UsesLocalRuntime(t *tes
 	}
 }
 
+func TestSanitizeName(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		in, want string
+	}{
+		{"Math Assistant", "math-assistant"},
+		{"  Foo_Bar  ", "foo_bar"},
+		{"A@B#C", "abc"},
+		{"", ""},
+		{strings.Repeat("a", 80), strings.Repeat("a", 64)},
+	}
+	for _, tc := range cases {
+		if got := sanitizeName(tc.in); got != tc.want {
+			t.Fatalf("sanitizeName(%q)=%q want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestBuildAgentConfig_NameSanitizeAndValidate(t *testing.T) {
+	t.Parallel()
+	cfg, err := buildAgentConfig([]Option{
+		WithName("Math Assistant"),
+		WithLLMClient(testLLM(t)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Name != "math-assistant" {
+		t.Fatalf("got %q", cfg.Name)
+	}
+}
+
+func TestBuildAgentConfig_InstanceIdDeprecatedIgnored(t *testing.T) {
+	t.Parallel()
+	cfg, err := buildAgentConfig([]Option{
+		WithName("test"),
+		WithInstanceId("agent-1_pod"),
+		withTestTemporal("q"),
+		WithLLMClient(testLLM(t)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.instanceId != "agent-1_pod" {
+		t.Fatalf("got %q", cfg.instanceId)
+	}
+}
+
+func TestValidateSubAgentRegistry_RootNameCollision(t *testing.T) {
+	t.Parallel()
+	sub := &Agent{agentConfig: agentConfig{Name: "same"}}
+	c := &agentConfig{Name: "same", subAgents: []*Agent{sub}, maxSubAgentDepth: 3}
+	err := c.buildSubAgentRegistry()
+	if err == nil || !strings.Contains(err.Error(), "must differ from root agent name") {
+		t.Fatalf("got %v", err)
+	}
+}
+
 func TestBuildAgentConfig_DefaultNoopTracerMetrics(t *testing.T) {
 	cfg, err := buildAgentConfig([]Option{
 		WithName("noop-obs"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 	})
 	if err != nil {
@@ -94,7 +152,7 @@ func TestBuildAgentConfig_DefaultNoopTracerMetrics(t *testing.T) {
 func TestBuildAgentConfig_EmptyTaskQueue(t *testing.T) {
 	_, err := buildAgentConfig([]Option{
 		WithName("test"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: ""}),
+		withTestTemporal(""),
 		WithLLMClient(testLLM(t)),
 	})
 	if err == nil || !strings.Contains(err.Error(), "TaskQueue") {
@@ -155,7 +213,7 @@ func TestBuildAgentConfig_WithMCP(t *testing.T) {
 
 	_, err = buildAgentConfig([]Option{
 		WithName("test"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithMCPConfig(MCPServers{"srv": MCPConfig{
 			Transport:  types.MCPLoopback{Transport: t2},
@@ -191,7 +249,7 @@ func TestBuildAgentConfig_MCPClients_toolFilter(t *testing.T) {
 	}
 	_, err = buildAgentConfig([]Option{
 		WithName("test"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithMCPClients(cl),
 	})
@@ -208,7 +266,7 @@ func TestBuildAgentConfig_MCP_duplicateClientName(t *testing.T) {
 	}
 	_, err := buildAgentConfig([]Option{
 		WithName("test"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithMCPConfig(MCPServers{"dup": MCPConfig{
 			Transport: types.MCPStdio{Command: "go", Args: []string{"env"}},
@@ -464,7 +522,7 @@ func TestAgentConfig_HasApprovalTools(t *testing.T) {
 func TestBuildAgentConfig_approvalTimeoutValidatedWithoutApprovalTools(t *testing.T) {
 	_, err := buildAgentConfig([]Option{
 		WithName("test"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithTimeout(5 * time.Minute),
 		WithApprovalTimeout(6 * time.Minute),
@@ -475,7 +533,7 @@ func TestBuildAgentConfig_approvalTimeoutValidatedWithoutApprovalTools(t *testin
 
 	cfg, err := buildAgentConfig([]Option{
 		WithName("test"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithTimeout(5 * time.Minute),
 		WithApprovalTimeout(2 * time.Minute),
@@ -724,7 +782,7 @@ func TestResolveMemoryTools(t *testing.T) {
 func TestBuildAgentConfig_WithMemory_registersSaveMemory(t *testing.T) {
 	cfg, err := buildAgentConfig([]Option{
 		WithName("test"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithMemory(memory.DefaultConfig(testMemory(t))),
 	})
@@ -752,7 +810,7 @@ func TestBuildAgentConfig_WithMemoryAlways_leavesExtractNil(t *testing.T) {
 	cfg.Store.Mode = memory.StoreModeAlways
 	got, err := buildAgentConfig([]Option{
 		WithName("test"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithMemory(cfg),
 	})
@@ -769,7 +827,7 @@ func TestBuildAgentConfig_WithMemoryOnDemand_noExtract(t *testing.T) {
 	cfg := memory.DefaultConfig(testMemory(t))
 	got, err := buildAgentConfig([]Option{
 		WithName("test"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithMemory(cfg),
 	})
@@ -791,7 +849,7 @@ func TestBuildAgentConfig_WithMemoryAlways_preservesCustomExtract(t *testing.T) 
 	cfg.Store.Extract = custom
 	got, err := buildAgentConfig([]Option{
 		WithName("test"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithMemory(cfg),
 	})
@@ -812,7 +870,7 @@ func TestBuildAgentConfig_WithRetrievers(t *testing.T) {
 	r1, r2 := testRetriever(t, "kb-a"), testRetriever(t, "kb-b")
 	cfg, err := buildAgentConfig([]Option{
 		WithName("test"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithRetrievers(r1, r2),
 	})
@@ -834,7 +892,7 @@ func TestBuildAgentConfig_WithRetrievers(t *testing.T) {
 func TestBuildAgentConfig_RetrieverMode_prefetchNoTools(t *testing.T) {
 	cfg, err := buildAgentConfig([]Option{
 		WithName("test"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithRetrievers(testRetriever(t, "stub")),
 		WithRetrieverMode(RetrieverModePrefetch),
@@ -856,7 +914,7 @@ func TestBuildAgentConfig_RetrieverMode_prefetchNoTools(t *testing.T) {
 func TestBuildAgentConfig_RetrieverMode_agenticBuildsTools(t *testing.T) {
 	cfg, err := buildAgentConfig([]Option{
 		WithName("test"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithRetrievers(testRetriever(t, "stub")),
 		WithRetrieverMode(RetrieverModeAgentic),
@@ -886,7 +944,7 @@ func toolNames(tools []interfaces.Tool) []string {
 func TestBuildAgentConfig_AgenticNoRetrievers_NoTools(t *testing.T) {
 	cfg, err := buildAgentConfig([]Option{
 		WithName("test"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithRetrieverMode(RetrieverModeAgentic),
 	})
@@ -905,7 +963,7 @@ func TestBuildAgentConfig_AgenticNoRetrievers_NoTools(t *testing.T) {
 func TestBuildAgentConfig_RetrieverMode_hybridBuildsTools(t *testing.T) {
 	cfg, err := buildAgentConfig([]Option{
 		WithName("test"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithRetrievers(testRetriever(t, "stub")),
 		WithRetrieverMode(RetrieverModeHybrid),
@@ -925,7 +983,7 @@ func TestBuildAgentConfig_RetrieverMode_hybridBuildsTools(t *testing.T) {
 func TestBuildAgentConfig_RetrieverDuplicateName(t *testing.T) {
 	_, err := buildAgentConfig([]Option{
 		WithName("test"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithRetrievers(testRetriever(t, "dup"), testRetriever(t, "dup")),
 	})
@@ -937,7 +995,7 @@ func TestBuildAgentConfig_RetrieverDuplicateName(t *testing.T) {
 func TestBuildAgentConfig_toolsList_includesRetrieverTools(t *testing.T) {
 	cfg, err := buildAgentConfig([]Option{
 		WithName("test"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithTools(testTool(t, "echo")),
 		WithRetrievers(testRetriever(t, "stub")),
@@ -987,7 +1045,7 @@ func TestBuildAgentConfig_validateToolNames_nilRetrieverTool(t *testing.T) {
 func TestBuildAgentConfig_WithRetrievers_nilEntry(t *testing.T) {
 	_, err := buildAgentConfig([]Option{
 		WithName("test"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithRetrievers(testRetriever(t, "stub"), nil),
 	})
@@ -999,7 +1057,7 @@ func TestBuildAgentConfig_WithRetrievers_nilEntry(t *testing.T) {
 func TestBuildAgentConfig_WithRetrievers_emptyClears(t *testing.T) {
 	cfg, err := buildAgentConfig([]Option{
 		WithName("test"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithRetrievers(testRetriever(t, "stub")),
 		WithRetrievers(),
@@ -1022,7 +1080,7 @@ func TestBuildAgentConfig_WithRetrievers_emptyClears(t *testing.T) {
 func TestBuildAgentConfig_RetrieverMode_default(t *testing.T) {
 	cfg, err := buildAgentConfig([]Option{
 		WithName("test"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 	})
 	if err != nil {
@@ -1042,7 +1100,7 @@ func TestBuildAgentConfig_RetrieverMode_explicit(t *testing.T) {
 		t.Run(string(mode), func(t *testing.T) {
 			cfg, err := buildAgentConfig([]Option{
 				WithName("test"),
-				WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+				withTestTemporal("q"),
 				WithLLMClient(testLLM(t)),
 				WithRetrieverMode(mode),
 			})
@@ -1059,7 +1117,7 @@ func TestBuildAgentConfig_RetrieverMode_explicit(t *testing.T) {
 func TestAgentConfigFingerprint_RetrieverModeChangesDigest(t *testing.T) {
 	baseOpts := []Option{
 		WithName("test"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 	}
 	build := func(mode RetrieverMode) string {
@@ -1088,7 +1146,7 @@ func TestAgentConfigFingerprint_RetrieverModeChangesDigest(t *testing.T) {
 func TestBuildAgentConfig_toolsList_includesRetrieverTools_hybrid(t *testing.T) {
 	cfg, err := buildAgentConfig([]Option{
 		WithName("test"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithTools(testTool(t, "echo")),
 		WithRetrievers(testRetriever(t, "stub")),
@@ -1112,7 +1170,7 @@ func TestBuildAgentConfig_toolsList_includesRetrieverTools_hybrid(t *testing.T) 
 func TestResolveTools_order_nativeMemoryThenRAG(t *testing.T) {
 	cfg, err := buildAgentConfig([]Option{
 		WithName("test"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithTools(testTool(t, "echo")),
 		WithMemory(memory.DefaultConfig(testMemory(t))),
@@ -1143,7 +1201,7 @@ func TestResolveTools_order_nativeMemoryThenRAG(t *testing.T) {
 func TestAgentConfigFingerprint_AgenticRetrieverNamesChangesDigest(t *testing.T) {
 	baseOpts := []Option{
 		WithName("test"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithRetrieverMode(RetrieverModeAgentic),
 	}
@@ -1163,7 +1221,7 @@ func TestAgentConfigFingerprint_AgenticRetrieverNamesChangesDigest(t *testing.T)
 func TestBuildAgentConfig_RetrieverMode_invalid(t *testing.T) {
 	_, err := buildAgentConfig([]Option{
 		WithName("test"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithRetrieverMode(RetrieverMode("bogus")),
 	})
@@ -1206,7 +1264,7 @@ func TestBuildAgentConfig_WithA2AConfig(t *testing.T) {
 	})
 	cfg, err := buildAgentConfig([]Option{
 		WithName("test"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithA2AConfig(A2AServers{"agent": A2AConfig{URL: url}}),
 	})
@@ -1235,7 +1293,7 @@ func TestBuildAgentConfig_WithA2AConfig_SkillFilter(t *testing.T) {
 	})
 	cfg, err := buildAgentConfig([]Option{
 		WithName("test"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithA2AConfig(A2AServers{"agent": A2AConfig{
 			URL:         url,
@@ -1258,7 +1316,7 @@ func TestBuildAgentConfig_WithA2AClients(t *testing.T) {
 	cl := testA2AClient(t, "agent1", []interfaces.A2ASkillSpec{{ID: "echo", Description: "echo back"}})
 	cfg, err := buildAgentConfig([]Option{
 		WithName("test"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithA2AClients(cl),
 	})
@@ -1277,7 +1335,7 @@ func TestBuildAgentConfig_WithA2AClients(t *testing.T) {
 func TestBuildAgentConfig_WithA2ADefaultServer(t *testing.T) {
 	cfg, err := buildAgentConfig([]Option{
 		WithName("test"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithA2ADefaultServer(),
 	})
@@ -1299,7 +1357,7 @@ func TestBuildAgentConfig_WithA2AServer(t *testing.T) {
 	t.Run("custom_host_port_and_bearer_tokens", func(t *testing.T) {
 		cfg, err := buildAgentConfig([]Option{
 			WithName("test"),
-			WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+			withTestTemporal("q"),
 			WithLLMClient(testLLM(t)),
 			WithA2AServer(&A2AServerConfig{
 				Hostname:     "0.0.0.0",
@@ -1322,7 +1380,7 @@ func TestBuildAgentConfig_WithA2AServer(t *testing.T) {
 	t.Run("nil_config_same_as_defaults", func(t *testing.T) {
 		cfg, err := buildAgentConfig([]Option{
 			WithName("test"),
-			WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+			withTestTemporal("q"),
 			WithLLMClient(testLLM(t)),
 			WithA2AServer(nil),
 		})
@@ -1340,7 +1398,7 @@ func TestBuildAgentConfig_WithA2AServer(t *testing.T) {
 	t.Run("empty_hostname_gets_default", func(t *testing.T) {
 		cfg, err := buildAgentConfig([]Option{
 			WithName("test"),
-			WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+			withTestTemporal("q"),
 			WithLLMClient(testLLM(t)),
 			WithA2AServer(&A2AServerConfig{Hostname: "", Port: 4000}),
 		})
@@ -1355,7 +1413,7 @@ func TestBuildAgentConfig_WithA2AServer(t *testing.T) {
 	t.Run("zero_port_gets_default", func(t *testing.T) {
 		cfg, err := buildAgentConfig([]Option{
 			WithName("test"),
-			WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+			withTestTemporal("q"),
 			WithLLMClient(testLLM(t)),
 			WithA2AServer(&A2AServerConfig{Hostname: "127.0.0.1", Port: 0}),
 		})
@@ -1370,7 +1428,7 @@ func TestBuildAgentConfig_WithA2AServer(t *testing.T) {
 	t.Run("later_WithA2AServer_overrides_WithA2ADefaultServer", func(t *testing.T) {
 		cfg, err := buildAgentConfig([]Option{
 			WithName("test"),
-			WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+			withTestTemporal("q"),
 			WithLLMClient(testLLM(t)),
 			WithA2ADefaultServer(),
 			WithA2AServer(&A2AServerConfig{Hostname: "custom.example", Port: 1111}),
@@ -1390,7 +1448,7 @@ func TestBuildAgentConfig_WithA2AServer(t *testing.T) {
 func TestAgentConfigFingerprint_InboundA2AServerIgnored(t *testing.T) {
 	base := []Option{
 		WithName("fp-test"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 	}
 	cfgNoInbound, err := buildAgentConfig(base)
@@ -1416,7 +1474,7 @@ func TestAgentConfigFingerprint_InboundA2AServerIgnored(t *testing.T) {
 func TestBuildAgentConfig_WithA2AConfig_URLRequired(t *testing.T) {
 	_, err := buildAgentConfig([]Option{
 		WithName("test"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithA2AConfig(A2AServers{"agent": A2AConfig{URL: ""}}),
 	})
@@ -1431,7 +1489,7 @@ func TestBuildAgentConfig_A2A_duplicateClientName(t *testing.T) {
 	cl := testA2AClient(t, "dup", []interfaces.A2ASkillSpec{{ID: "s", Description: "s"}})
 	_, err := buildAgentConfig([]Option{
 		WithName("test"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithA2AConfig(A2AServers{"dup": A2AConfig{URL: "http://127.0.0.1:1"}}),
 		WithA2AClients(cl),
@@ -1550,7 +1608,7 @@ func TestBuildAgentConfig_WithObservabilityConfig_HTTP(t *testing.T) {
 
 	cfg, err := buildAgentConfig([]Option{
 		WithName("obs-agent"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithObservabilityConfig(&ObservabilityConfig{
 			Endpoint: host,
@@ -1590,7 +1648,7 @@ func TestBuildAgentConfig_WithObservabilityConfig_DisableTraces_keepsInjectedTra
 	stub := testTracer(t)
 	cfg, err := buildAgentConfig([]Option{
 		WithName("disable-traces-keep-tracer"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithTracer(stub),
 		WithObservabilityConfig(&ObservabilityConfig{
@@ -1618,7 +1676,7 @@ func TestBuildAgentConfig_WithObservabilityConfig_DisableMetrics_keepsInjectedMe
 	stub := testMetrics(t)
 	cfg, err := buildAgentConfig([]Option{
 		WithName("disable-metrics-keep-metrics"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithMetrics(stub),
 		WithObservabilityConfig(&ObservabilityConfig{
@@ -1660,7 +1718,7 @@ func TestBuildAgentConfig_WithObservabilityConfig_replacesInjectedTracer(t *test
 
 	cfg, err := buildAgentConfig([]Option{
 		WithName("obs-replace-tracer"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithTracer(tr),
 		WithObservabilityConfig(&ObservabilityConfig{
@@ -1708,7 +1766,7 @@ func TestBuildAgentConfig_WithObservabilityConfig_replacesInjectedMetrics(t *tes
 
 	cfg, err := buildAgentConfig([]Option{
 		WithName("obs-replace-metrics"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithMetrics(mt),
 		WithObservabilityConfig(&ObservabilityConfig{
@@ -1781,7 +1839,7 @@ func TestBuildAgentConfig_WithObservabilityConfig_replacesInjectedTracerMetricsL
 
 	cfg, err := buildAgentConfig([]Option{
 		WithName("triple-replace"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithTracer(tr),
 		WithMetrics(mt),
@@ -1809,7 +1867,7 @@ func TestBuildAgentConfig_WithObservabilityConfig_replacesInjectedTracerMetricsL
 func TestBuildAgentConfig_injectedStubLogs_withoutObs_doesNotWireOtelLogger(t *testing.T) {
 	cfg, err := buildAgentConfig([]Option{
 		WithName("stub-logs-no-otel"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithLogs(testLogs(t)),
 	})
@@ -1825,7 +1883,7 @@ func TestBuildAgentConfig_WithLogs_withoutObservability(t *testing.T) {
 	stub := testLogs(t)
 	cfg, err := buildAgentConfig([]Option{
 		WithName("logs-inject"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithLogs(stub),
 	})
@@ -1847,7 +1905,7 @@ func TestBuildAgentConfig_WithObservabilityConfig_overwritesWithLogs(t *testing.
 	stub := testLogs(t)
 	cfg, err := buildAgentConfig([]Option{
 		WithName("obs-overwrites-logs"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithLogs(stub),
 		WithObservabilityConfig(&ObservabilityConfig{
@@ -1891,7 +1949,7 @@ func TestBuildAgentConfig_NewLogs_injected_alone_autoWiresDefaultLogger(t *testi
 
 	cfg, err := buildAgentConfig([]Option{
 		WithName("inject-logs-wire"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithLogs(lg),
 	})
@@ -1929,7 +1987,7 @@ func TestBuildAgentConfig_WithObservabilityConfig_replacesInjectedOTLPLogs(t *te
 
 	cfg, err := buildAgentConfig([]Option{
 		WithName("obs-replace-inject"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithLogs(lg),
 		WithObservabilityConfig(&ObservabilityConfig{
@@ -1959,7 +2017,7 @@ func TestBuildAgentConfig_WithObservabilityConfig_DisableLogs_keepsWithLogs(t *t
 	stub := testLogs(t)
 	cfg, err := buildAgentConfig([]Option{
 		WithName("disable-logs-keep-inject"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithLogs(stub),
 		WithObservabilityConfig(&ObservabilityConfig{
@@ -2001,7 +2059,7 @@ func TestBuildAgentConfig_WithObservabilityConfig_DisableLogs_injectedOTLPLogs_w
 
 	cfg, err := buildAgentConfig([]Option{
 		WithName("disable-logs-wire-otel"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithLogs(lg),
 		WithObservabilityConfig(&ObservabilityConfig{
@@ -2036,7 +2094,7 @@ func TestBuildAgentConfig_WithObservabilityConfig_customLogger_warnsAboutLogs(t 
 
 	_, err := buildAgentConfig([]Option{
 		WithName("custom-log-warn"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithLogger(custom),
 		WithObservabilityConfig(&ObservabilityConfig{
@@ -2068,7 +2126,7 @@ func TestBuildAgentConfig_WithExplicitRegistryOptions(t *testing.T) {
 		t.Fatal(err)
 	}
 	subReg := NewSubAgentRegistry()
-	child := &Agent{agentConfig: agentConfig{Name: "Child", taskQueue: "q-child"}}
+	child := &Agent{agentConfig: agentConfig{Name: "Child"}}
 	if err := child.buildRegistries(); err != nil {
 		t.Fatal(err)
 	}
@@ -2078,7 +2136,7 @@ func TestBuildAgentConfig_WithExplicitRegistryOptions(t *testing.T) {
 
 	cfg, err := buildAgentConfig([]Option{
 		WithName("parent"),
-		WithTemporalConfig(&TemporalConfig{TaskQueue: "q"}),
+		withTestTemporal("q"),
 		WithLLMClient(testLLM(t)),
 		WithToolRegistry(toolReg),
 		WithMCPRegistry(mcpReg),

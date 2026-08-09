@@ -1,25 +1,25 @@
 ---
 title: "Runtimes Overview"
 sidebarTitle: "Overview"
-description: "Choose between in-process and Temporal runtimes based on your durability and infrastructure requirements"
+description: "Choose between in-process, Temporal, and Restate runtimes based on your durability and infrastructure requirements"
 ---
 
-Agent SDK for Go supports two execution backends. **In-process is the default** — pass no Temporal options. **Temporal is opt-in** — add `WithTemporalConfig` or `WithTemporalClient` when you need durable, production-grade execution.
+Agent SDK for Go supports three execution backends. **In-process is the default** — pass no Temporal or Restate options. **Temporal** and **Restate** are opt-in durable backends — import `pkg/agent/runtime/temporal` or `pkg/agent/runtime/restate` and add the matching config option when you need durable, production-grade execution.
 
 Your agent code (`NewAgent`, tools, prompts, streaming) stays the same. Only the configuration changes.
 
 ## Comparison
 
-| | In-process | Temporal |
-|---|---|---|
-| **Enable** | Default — omit Temporal options | `WithTemporalConfig` or `WithTemporalClient` |
-| **Infrastructure** | None beyond your LLM provider | Running Temporal server or Temporal Cloud |
-| **Where the loop runs** | Inside your Go process | Durable workflow + activities |
-| **Crash recovery** | No — run is lost if the process exits | Yes — workflow history replays from last step |
-| **Horizontal scale** | Single process only | Add workers on task queues |
-| **Split client / worker** | Not applicable | `DisableLocalWorker` + `NewAgentWorker` |
-| **Feature parity** | Full | Full |
-| **Conversation backend** | In-memory (single process) | Redis for split-process deployments |
+| | In-process | Temporal | Restate |
+|---|---|---|---|
+| **Enable** | Default — omit Temporal/Restate options | `temporal.WithTemporalConfig` or `temporal.WithTemporalClient` | `restate.WithRestateConfig` |
+| **Infrastructure** | None beyond your LLM provider | Running Temporal server or Temporal Cloud | Running Restate server or Restate Cloud |
+| **Where the loop runs** | Inside your Go process | Durable workflow + activities | Durable Restate invocation + embedded SDK endpoint |
+| **Crash recovery** | No — run is lost if the process exits | Yes — workflow history replays from last step | Yes — journal resumes from last completed step |
+| **Horizontal scale** | Single process only | Add workers on task queues | Register multiple endpoint deployments |
+| **Split client / worker** | Not applicable | `DisableLocalWorker` + `NewAgentWorker` | Not applicable — endpoint is embedded in `NewAgent` |
+| **Feature parity** | Full (except durability / reconnect) | Full | Full |
+| **Conversation backend** | In-memory (single process) | Redis for split-process deployments | In-memory or Redis as needed for your topology |
 
 ## When to use in-process
 
@@ -31,11 +31,20 @@ See [In-Process](/runtimes/in-process) for details and limitations.
 ## When to use Temporal
 
 - Agent runs must survive process crashes, deploys, and restarts
-- You need horizontal scaling by adding workers
-- You want to split the agent client and worker across separate processes
-- Long-running agent sessions require durable orchestration
+- You need horizontal scaling by adding workers on a task queue
+- You want to split the agent client and worker across separate processes (`NewAgentWorker`)
+- Long-running agent sessions require durable orchestration on Temporal
 
 See [Temporal](/runtimes/temporal) for cluster setup and SDK connection.
+
+## When to use Restate
+
+- Agent runs must survive process crashes, deploys, and restarts
+- You prefer Restate’s ingress + embedded endpoint model
+- You want durable streaming and approvals with the same public `Run` / `Stream` / reconnect APIs
+- Long-running agent sessions require durable orchestration on Restate
+
+See [Restate](/runtimes/restate) for server setup and SDK connection.
 
 ## How runtime selection works
 
@@ -50,9 +59,19 @@ a, err := agent.NewAgent(
 
 // Temporal
 a, err := agent.NewAgent(
-    agent.WithTemporalConfig(&agent.TemporalConfig{
+    temporal.WithTemporalConfig(&temporal.TemporalConfig{
         Host: "localhost", Port: 7233,
         Namespace: "default", TaskQueue: "my-app",
+    }),
+    agent.WithLLMClient(llmClient),
+    agent.WithSystemPrompt("You are a helpful assistant."),
+)
+
+// Restate
+a, err := agent.NewAgent(
+    restate.WithRestateConfig(&restate.RestateConfig{
+        Ingress:  restate.IngressConfig{URL: "http://localhost:8080"},
+        Endpoint: restate.EndpointConfig{ListenAddress: ":9080", AdminURL: "http://localhost:9070"},
     }),
     agent.WithLLMClient(llmClient),
     agent.WithSystemPrompt("You are a helpful assistant."),
@@ -60,18 +79,18 @@ a, err := agent.NewAgent(
 ```
 
 <Warning>
-Provide **either** `WithTemporalConfig` or `WithTemporalClient`, not both. They configure different levels of the Temporal client lifecycle — mixing them is a compile-time option error.
+Provide **either** Temporal options **or** `restate.WithRestateConfig`, not both. For Temporal alone, provide **either** `WithTemporalConfig` or `WithTemporalClient`, not both.
 </Warning>
 
 ## Switching runtimes
 
 <Tip>
-Start in-process during development and add Temporal for production with a single config change. The agent code — tools, prompts, streaming, approvals — does not change.
+Start in-process during development and add Temporal or Restate for production with a single config change. The agent code — tools, prompts, streaming, approvals — does not change.
 </Tip>
 
-1. Develop with no Temporal options
-2. Add `WithTemporalConfig` (or `WithTemporalClient`) for production
-3. If you use conversation with a split-process deployment (agent + separate worker), switch from in-memory to Redis. See [Conversation](/features/conversation)
+1. Develop with no Temporal or Restate options
+2. Add `temporal.WithTemporalConfig` (or `WithTemporalClient`) **or** `restate.WithRestateConfig` for production
+3. If you use conversation with a Temporal split-process deployment (agent + separate worker), switch from in-memory to Redis. See [Conversation](/features/conversation)
 
 ## Related pages
 
@@ -83,5 +102,9 @@ Start in-process during development and add Temporal for production with a singl
 
   <Card title="Temporal" icon="server" href="/runtimes/temporal" horizontal>
     Durable workflows, workers, and production deployment
+  </Card>
+
+  <Card title="Restate" icon="cube" href="/runtimes/restate" horizontal>
+    Durable invocations with an embedded SDK endpoint
   </Card>
 </CardGroup>

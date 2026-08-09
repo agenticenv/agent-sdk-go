@@ -168,7 +168,7 @@ func (rt *LocalRuntime) driveRun(runCtx context.Context, req *sdkruntime.RunRequ
 		eventTypes = []events.AgentEventType{events.AgentEventTypeCustom}
 	}
 
-	loopResult, err := rt.RunAgentLoop(runCtx, AgentLoopInput{
+	loopResult, err := rt.executeAgentLoop(runCtx, AgentLoopInput{
 		UserPrompt:       req.UserPrompt,
 		RunID:            handle.id,
 		ConversationID:   req.ConversationID,
@@ -309,7 +309,7 @@ func (rt *LocalRuntime) driveStream(
 		streamEventTypes = req.EventTypes
 	}
 
-	result, loopErr := rt.RunAgentLoop(runCtx, AgentLoopInput{
+	result, loopErr := rt.executeAgentLoop(runCtx, AgentLoopInput{
 		UserPrompt:       req.UserPrompt,
 		RunID:            handle.id,
 		ConversationID:   req.ConversationID,

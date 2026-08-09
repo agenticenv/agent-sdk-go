@@ -1,8 +1,8 @@
 ---
 name: agent-sdk-go
-description: Build production AI agents in Go with Agent SDK for Go. Use when configuring agents, tools, MCP, A2A, Temporal runtimes, streaming, memory, RAG, approvals, observability, or running examples from this documentation site.
+description: Build production AI agents in Go with Agent SDK for Go. Use when configuring agents, tools, MCP, A2A, Temporal or Restate runtimes, streaming, memory, RAG, approvals, observability, or running examples from this documentation site.
 version: "1.0"
-compatibility: Go 1.26+. LLM API key required (OpenAI, Anthropic, or Gemini). Temporal optional for durable execution.
+compatibility: Go 1.26+. LLM API key required (OpenAI, Anthropic, or Gemini). Temporal or Restate optional for durable execution.
 ---
 
 # Agent SDK for Go
@@ -22,7 +22,7 @@ Full documentation index: [llms.txt](https://docs.agenticenv.ai/llms.txt)
 - Require human approval for tools and sub-agent delegation
 - Attach middleware hooks at LLM, tool, retrieval, and memory lifecycle points
 - Export OpenTelemetry traces, metrics, and logs
-- Execute in-process or on Temporal for durable workflows
+- Execute in-process, or on Temporal / Restate for durable runs
 
 ## Workflows
 
@@ -53,23 +53,31 @@ Example: [Simple Agent](https://docs.agenticenv.ai/examples/simple-agent.md)
 ### Switch to Temporal (durable execution)
 
 1. Read [Temporal runtime](https://docs.agenticenv.ai/runtimes/temporal.md)
-2. Add `WithTemporalConfig` or `WithTemporalClient` — never both
+2. Import `pkg/agent/runtime/temporal` and add `temporal.WithTemporalConfig` or `temporal.WithTemporalClient` — never both
 3. For production, split client and worker — [Distributed execution](https://docs.agenticenv.ai/advanced/distributed-execution.md)
 4. Align agent and worker configuration (fingerprint) — same name, LLM, tools, hooks group names, approval policy
-5. Examples: [Temporal Client](https://docs.agenticenv.ai/examples/temporal-client.md) · [Agent Worker](https://docs.agenticenv.ai/examples/agent-worker.md) · [Durable Agent](https://docs.agenticenv.ai/examples/durable-agent.md)
+5. Examples: [Temporal Client](https://docs.agenticenv.ai/examples/temporal-client.md) · [Agent Worker](https://docs.agenticenv.ai/examples/agent-worker.md) · [Durable Agent (Temporal)](https://docs.agenticenv.ai/examples/durable-agent.md) · [Durable Agent (Restate)](https://docs.agenticenv.ai/examples/durable-agent-restate.md)
 
-### Reconnect after crash (Temporal only)
+### Switch to Restate (durable execution)
 
-Crash reconnect is **Temporal-only**. `LocalRuntime` handles are same-process; after a crash, `GetAgentRun` / `GetAgentStream` return `ErrRunNotFound` / `ErrStreamNotFound`, and `WithOffset(n>0)` returns `ErrStreamOffsetNotSupported`.
+1. Read [Restate runtime](https://docs.agenticenv.ai/runtimes/restate.md)
+2. Import `pkg/agent/runtime/restate` and add `restate.WithRestateConfig`
+3. Use `restate.WithRestateConfig` alone (mutually exclusive with Temporal options); `NewAgent` embeds the SDK endpoint
+4. When Restate runs in Docker and the agent on the host, set `Endpoint.DeploymentURL` (e.g. `http://host.docker.internal:9080`)
+5. Local setup: [restate-setup.md](https://github.com/agenticenv/agent-sdk-go/blob/main/restate-setup.md) · lab: [Durable Agent (Restate)](https://docs.agenticenv.ai/examples/durable-agent-restate.md) · `AGENT_RUNTIME=restate` + `task infra:restate:up`
 
-1. Read [Durable Execution](https://docs.agenticenv.ai/advanced/durable-execution.md) and [Temporal runtime](https://docs.agenticenv.ai/runtimes/temporal.md)
+### Reconnect after crash (Temporal or Restate)
+
+Crash reconnect requires a **durable runtime** (Temporal or Restate). `LocalRuntime` handles are same-process; after a crash, `GetAgentRun` / `GetAgentStream` return `ErrRunNotFound` / `ErrStreamNotFound`, and `WithOffset(n>0)` returns `ErrStreamOffsetNotSupported`.
+
+1. Read [Durable Execution](https://docs.agenticenv.ai/advanced/durable-execution.md) and [Temporal](https://docs.agenticenv.ai/runtimes/temporal.md) or [Restate](https://docs.agenticenv.ai/runtimes/restate.md)
 2. Persist the handle `ID()` immediately after `Run` / `Stream` — before `Get` / consuming `Events`
 3. For streams, persist each event’s opaque offset **before** handling the event
 4. On restart — stream: `GetAgentStream(ctx, savedRunID)` then `Events(ctx, agent.WithOffset(savedOffset))`
 5. On restart — run: `GetAgentRun(ctx, savedRunID)` then `Get(ctx)` (or `<-Done()` then `Get`)
-6. If the workflow already finished: `ErrRunAlreadyCompleted` — clear saved state; continue from conversation/memory
+6. If the run already finished: `ErrRunAlreadyCompleted` — clear saved state; continue from conversation/memory
 7. Cancelling `Run`/`Stream` ctx cancels the agent run; cancelling `Get`/`Events`/`GetAgentRun`/`GetAgentStream` ctx does not — call `Cancel()` on the handle to stop the run. After reconnect, `WithTimeout` starts fresh (not remaining time). Details: [Timeouts & Modes](https://docs.agenticenv.ai/advanced/timeouts-and-modes.md)
-8. Examples: [Reconnect](https://docs.agenticenv.ai/examples/reconnect.md) · [Durable Agent](https://docs.agenticenv.ai/examples/durable-agent.md)
+8. Examples: [Reconnect](https://docs.agenticenv.ai/examples/reconnect.md) · [Durable Agent (Temporal)](https://docs.agenticenv.ai/examples/durable-agent.md) · [Durable Agent (Restate)](https://docs.agenticenv.ai/examples/durable-agent-restate.md)
 
 ## Integration
 
@@ -79,6 +87,7 @@ Crash reconnect is **Temporal-only**. `LocalRuntime` handles are same-process; a
 | All agent options | [Configuration](https://docs.agenticenv.ai/getting-started/configuration.md) |
 | In-process runtime | [In-Process](https://docs.agenticenv.ai/runtimes/in-process.md) |
 | Temporal runtime | [Temporal](https://docs.agenticenv.ai/runtimes/temporal.md) |
+| Restate runtime | [Restate](https://docs.agenticenv.ai/runtimes/restate.md) |
 | MCP servers | [MCP](https://docs.agenticenv.ai/features/mcp.md) |
 | A2A remote agents | [A2A](https://docs.agenticenv.ai/features/a2a.md) |
 | Observability | [Telemetry](https://docs.agenticenv.ai/observability/telemetry.md) |

@@ -81,7 +81,7 @@ Skills are re-discovered on each run. See [A2A](/features/a2a).
 ```go
 math, _ := agent.NewAgent(
     agent.WithName("Math"),
-    agent.WithTemporalConfig(cfg),
+    temporal.WithTemporalConfig(cfg),
     agent.WithLLMClient(llmClient),
 )
 _ = a.SubAgentRegistry().Register(math)

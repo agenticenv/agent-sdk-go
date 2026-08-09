@@ -10,6 +10,7 @@ From the repo root:
 go run ./eval-harness/runner
 go run ./eval-harness/runner -prompt "custom prompt"
 go run ./eval-harness/runner -runtime temporal
+go run ./eval-harness/runner -runtime restate
 go run ./eval-harness/runner -tools 2
 go run ./eval-harness/runner -config eval-harness/runner/config.yaml
 ```
@@ -20,7 +21,7 @@ go run ./eval-harness/runner -config eval-harness/runner/config.yaml
 |------|---------|-------------|
 | `-config` | `eval-harness/runner/config.yaml` | Path to config file |
 | `-prompt` | from config | Override `user_prompt` |
-| `-runtime` | from config | Override `runtime` (`local` or `temporal`) |
+| `-runtime` | from config | Override `runtime` (`local`, `temporal`, or `restate`) |
 | `-tools` | from config | Override `agent.tool_count` |
 
 ### config.yaml
@@ -29,7 +30,7 @@ Default path: `eval-harness/runner/config.yaml`
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `runtime` | `local` | `local` or `temporal` |
+| `runtime` | `local` | `local`, `temporal`, or `restate` |
 | `user_prompt` | — | User message (required) |
 | `agent.name` | `eval-agent` | Agent name |
 | `agent.system_prompt` | built-in eval prompt | System instructions |
@@ -38,6 +39,11 @@ Default path: `eval-harness/runner/config.yaml`
 | `temporal.port` | `7233` | Temporal port |
 | `temporal.namespace` | `default` | Temporal namespace |
 | `temporal.task_queue` | `eval-harness` | Task queue |
+| `restate.ingress_url` | `http://localhost:8080` | Restate ingress when `runtime: restate` |
+| `restate.admin_url` | `http://localhost:9070` | Restate admin URL |
+| `restate.endpoint_listen_address` | `:9080` | Embedded SDK endpoint listen address |
+| `restate.deployment_url` | — | Optional callback URL (Docker) |
+| `restate.auth_key` | — | Optional ingress auth key |
 
 **Memory** (same file; `enabled: false` for default tool tests):
 
@@ -53,7 +59,7 @@ Default path: `eval-harness/runner/config.yaml`
 ./eval-harness/run_agent_memory.sh always
 ```
 
-Temporal mode uses an embedded local worker.
+Temporal mode uses an embedded local worker. Restate mode embeds the SDK endpoint; requires a running Restate server.
 
 ### Output
 

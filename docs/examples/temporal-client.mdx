@@ -3,14 +3,14 @@ title: "Temporal Client"
 description: "Build a caller-owned Temporal client connection for TLS, API keys, and Temporal Cloud"
 ---
 
-Uses `WithTemporalClient` instead of `WithTemporalConfig`. You create and own the Temporal SDK client — required for TLS, API key auth, Temporal Cloud, and custom connection options.
+Uses `temporal.WithTemporalClient` instead of `temporal.WithTemporalConfig` (from `pkg/agent/runtime/temporal`). You create and own the Temporal SDK client — required for TLS, API key auth, Temporal Cloud, and custom connection options.
 
 Source: [`examples/agent_with_temporal_client/`](https://github.com/agenticenv/agent-sdk-go/tree/main/examples/agent_with_temporal_client)
 
 ## What it demonstrates
 
 - `client.Dial` with your own `client.Options`
-- `WithTemporalClient(tc, taskQueue)` on `NewAgent`
+- `temporal.WithTemporalClient(tc, taskQueue)` on `NewAgent`
 - Caller-owned client lifecycle (`defer tc.Close()`)
 
 ## Run
@@ -35,7 +35,7 @@ tc, err := client.Dial(client.Options{
 defer tc.Close()
 
 a, err := agent.NewAgent(
-    agent.WithTemporalClient(tc, "my-task-queue"),
+    temporal.WithTemporalClient(tc, "my-task-queue"),
     agent.WithLLMClient(llmClient),
 )
 ```

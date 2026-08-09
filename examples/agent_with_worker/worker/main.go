@@ -31,7 +31,7 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt)
 
-	fmt.Printf("Agent worker starting on task queue %q. Run this before the agent.\n", cfg.TaskQueue)
+	fmt.Printf("Agent worker starting on task queue %q. Run this before the agent.\n", cfg.TaskQueue+"_remote-worker")
 	// Start() blocks until Stop() is called. Run it in a goroutine so we can handle shutdown.
 	go func() {
 		fmt.Println("Agent worker running. Press Ctrl+C to stop.")

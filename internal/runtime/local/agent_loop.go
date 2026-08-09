@@ -42,7 +42,7 @@ type AgentLoopInput struct {
 	// ApprovalHandler is called when a tool requires human approval. May be nil (approval → unavailable).
 	ApprovalHandler types.ApprovalHandler
 	// SubAgentRoutes maps sub-agent tool name → local route. Built by the local runtime from
-	// ExecuteRequest.SubAgents before RunAgentLoop is called. Mirrors AgentWorkflowInput.SubAgentRoutes.
+	// ExecuteRequest.SubAgents before executeAgentLoop is called. Mirrors AgentWorkflowInput.SubAgentRoutes.
 	SubAgentRoutes map[string]subAgentRoute
 	// SubAgentDepth is the current nesting depth (0 = top-level, 1 = direct sub-agent, etc.).
 	SubAgentDepth int
@@ -87,11 +87,11 @@ func (rt *LocalRuntime) publishEventToChannel(ctx context.Context, channelName s
 	}
 }
 
-// RunAgentLoop executes the full agent loop in-process using base.Runtime core methods.
+// executeAgentLoop executes the full agent loop in-process using base.Runtime core methods.
 // It mirrors the orchestration logic of AgentWorkflow but calls base methods directly
 // instead of dispatching to Temporal activities.
 // Events are published to rt.eventbus on input.ChannelName; callers subscribe to that channel.
-func (rt *LocalRuntime) RunAgentLoop(ctx context.Context, input AgentLoopInput) (*AgentLoopResult, error) {
+func (rt *LocalRuntime) executeAgentLoop(ctx context.Context, input AgentLoopInput) (*AgentLoopResult, error) {
 	log := rt.logger
 	telemetry := base.NewAgentTelemetry(time.Now())
 	agentName := rt.AgentSpec.Name
@@ -667,7 +667,7 @@ func (rt *LocalRuntime) executeSingleTool(
 					slog.Int("depth", input.SubAgentDepth+1))
 				emit(events.NewAgentStepStartedEvent(delegationName))
 				subResult, execErr := executeWithPolicy(ctx, rt.subAgentExecutionPolicy(), func(attemptCtx context.Context) (*AgentLoopResult, error) {
-					return subAgentRoute.runtime.RunAgentLoop(attemptCtx, AgentLoopInput{
+					return subAgentRoute.runtime.executeAgentLoop(attemptCtx, AgentLoopInput{
 						UserPrompt:       query,
 						RunID:            uuid.New().String(),
 						StreamingEnabled: input.StreamingEnabled,

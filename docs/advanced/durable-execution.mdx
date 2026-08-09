@@ -1,32 +1,32 @@
 ---
 title: "Durable Execution"
-description: "How agent runs survive crashes — automatic worker resilience and client-side Run / Stream recovery"
+description: "How agent runs survive crashes — automatic runtime resilience and client-side Run / Stream recovery"
 ---
 
 <Note>
-**Temporal runtime only.** Durable execution — including automatic activity retries and `GetAgentStream` / `GetAgentRun` — requires the [Temporal runtime](/runtimes/temporal). The `LocalRuntime` does not maintain a durable event log; non-zero offsets return `ErrStreamOffsetNotSupported`.
+**Durable runtimes only (Temporal or Restate).** Durable execution — including step retries and `GetAgentStream` / `GetAgentRun` — requires the [Temporal](/runtimes/temporal) or [Restate](/runtimes/restate) runtime. The in-process `LocalRuntime` does not maintain a durable event log; non-zero offsets return `ErrStreamOffsetNotSupported`.
 </Note>
 
-**The problem:** Agent runs invoke LLM calls, tools, and memory operations that take time — and any of these processes can crash mid-run. Workers can restart, your subscriber process can disconnect, and prompts get lost. Re-running the entire agent from scratch wastes tokens and time, and loses partially completed work.
+**The problem:** Agent runs invoke LLM calls, tools, and memory operations that take time — and any of these processes can crash mid-run. Workers or endpoints can restart, your subscriber process can disconnect, and prompts get lost. Re-running the entire agent from scratch wastes tokens and time, and loses partially completed work.
 
-**The solution:** The runtime records every step of the run as durable history. If a worker crashes, completed steps are not re-run — the run resumes exactly where it left off on any available worker. If your client process crashes mid-run, call `GetAgentRun` (non-stream) or `GetAgentStream` + `WithOffset` (stream) to reconnect without restarting the agent.
+**The solution:** The durable runtime records every step of the run as durable history. If the executing process crashes, completed steps are not re-run — the run resumes exactly where it left off. If your client process crashes mid-run, call `GetAgentRun` (non-stream) or `GetAgentStream` + `WithOffset` (stream) to reconnect without restarting the agent. The public reconnect API is the same on Temporal and Restate.
 
 These guarantees are independent:
 
 | Guarantee | What it means | Who handles it |
 |---|---|---|
-| **Server-side durability** | The run and all its steps survive worker crashes and restarts | Runtime — automatic, no SDK code needed |
+| **Server-side durability** | The run and all its steps survive process crashes and restarts | Runtime — automatic, no SDK code needed |
 | **Client-side stream recovery** | Your subscriber process can reconnect after a crash and resume the event stream from exactly where it left off | Your code — `GetAgentStream` + `WithOffset` |
 | **Client-side run recovery** | Your process can reconnect to a still-running non-stream `Run` and wait for the result | Your code — `GetAgentRun` then `Get` / `Done` |
 
 ## Keep the run alive across disconnects
 
-Temporal already records durable history. Your call-site context decides whether the **live run** is still there when you reconnect:
+The durable runtime already records history. Your call-site context decides whether the **live run** is still there when you reconnect:
 
-- Pass a long-lived ctx to `Run` / `Stream` (`context.Background()`, process-lifetime, or `context.WithoutCancel(req.Context())`) so disconnect or process shutdown does not cancel the workflow.
+- Pass a long-lived ctx to `Run` / `Stream` (`context.Background()`, process-lifetime, or `context.WithoutCancel(req.Context())`) so disconnect or process shutdown does not cancel the durable run.
 - Cancel only `Get` / `Events` when the HTTP client leaves or the API is shutting down — that drops the subscriber, not the run.
 - Bound run length with `WithTimeout` (or a long-lived deadline on the Stream/Run ctx).
-- Avoid passing a request/shutdown ctx into `Run` / `Stream` if it will be cancelled when the handler exits — that stops the workflow before reconnect.
+- Avoid passing a request/shutdown ctx into `Run` / `Stream` if it will be cancelled when the handler exits — that stops the run before reconnect.
 
 Full matrix: [Timeouts & Modes — What each context does](/advanced/timeouts-and-modes#what-each-context-does).
 
@@ -41,25 +41,32 @@ ch, err := s.Events(eventsCtx)
 
 ## Server-side durability
 
-The runtime records every step of the agent run — LLM calls, tool executions, approvals, memory operations — as durable activities in the workflow history. When a worker crashes or restarts:
+The durable runtime records every step of the agent run — LLM calls, tool executions, approvals, memory operations — in durable history (Temporal workflow history, or Restate journaled steps). When the executing process crashes or restarts:
 
-- **In-flight activities** are automatically retried on a recovered or different worker
-- **Completed activities** are not re-executed — the run fast-forwards through recorded history
-- **The final result is identical** regardless of how many worker interruptions occurred
+- **In-flight steps** are automatically retried on a recovered or different executor
+- **Completed steps** are not re-executed — the run fast-forwards through recorded history
+- **The final result is identical** regardless of how many interruptions occurred
 
-This is automatic. No SDK changes are needed beyond using the Temporal runtime.
+This is automatic. No SDK changes are needed beyond selecting Temporal or Restate.
 
-### Activity retry and streaming
+| Runtime | How steps are recorded | Who executes after a crash |
+|---|---|---|
+| **Temporal** | Workflow history + activities | Any worker polling the task queue |
+| **Restate** | Durable Restate steps / awakeables | Any registered SDK endpoint deployment |
 
-When an LLM activity retries (after a transient error or worker crash), the LLM call restarts on the new attempt. The SDK detects this and signals any connected subscribers to discard token events from the failed attempt. Subscribers transparently receive clean token delivery from the new attempt — no duplicate or garbled output.
+### Step retry and streaming
+
+When an LLM step retries (after a transient error or process crash), the LLM call restarts on the new attempt. The SDK detects this and signals any connected subscribers to discard token events from the failed attempt. Subscribers transparently receive clean token delivery from the new attempt — no duplicate or garbled output.
 
 ### Experiencing it
 
-The [Durable Agent](/examples/durable-agent) example is a hands-on lab for this behavior. Scenarios 3, 4, and 6 deliberately crash or stop workers mid-run and show:
+The [Durable Agent (Temporal)](/examples/durable-agent) example is a hands-on Temporal lab for this behavior (split `NewAgentWorker` topology). Scenarios 3, 4, and 6 deliberately crash or stop workers mid-run and show:
 
 - Runs completing after the worker that started them is killed
 - Graceful and crash restarts with no data loss
 - Multiple workers sharing a task queue
+
+Restate provides the same durability guarantees through journaled steps and an embedded endpoint — see [Durable Agent (Restate)](/examples/durable-agent-restate) and [Restate runtime](/runtimes/restate). Restart the agent process (or another registered deployment) and Restate resumes from the journal.
 
 ## Client-side stream recovery
 
@@ -155,9 +162,9 @@ case agent.AgentEventTypeRunFinished, agent.AgentEventTypeRunError:
     clearSavedRun(sessionID)
 ```
 
-### Reconnect requires a running workflow
+### Reconnect requires a live run
 
-`GetAgentStream` only works while the workflow is still executing. Once the workflow completes, fails, or times out, the stream log is no longer available for replay. Calling `GetAgentStream` on a finished run returns `ErrRunAlreadyCompleted` — clear your saved state and continue from conversation/memory or start a new run.
+`GetAgentStream` only works while the durable run is still executing. Once it completes, fails, or times out, the stream log is no longer available for replay. Calling `GetAgentStream` on a finished run returns `ErrRunAlreadyCompleted` — clear your saved state and continue from conversation/memory or start a new run.
 
 ```go
 agentStream, err := a.GetAgentStream(ctx, savedRunID)
@@ -171,9 +178,9 @@ if errors.Is(err, agent.ErrRunAlreadyCompleted) {
 }
 ```
 
-**Important:** `ErrRunAlreadyCompleted` does not mean the agent failed. Temporal completed the run — the LLM responded, tools ran, everything finished. What is lost is only the **streaming view** of those events. If you have `WithConversation` configured, the final response is already stored in conversation history and a follow-up turn will have full context.
+**Important:** `ErrRunAlreadyCompleted` does not mean the agent failed. The durable runtime completed the run — the LLM responded, tools ran, everything finished. What is lost is only the **streaming view** of those events. If you have `WithConversation` configured, the final response is already stored in conversation history and a follow-up turn will have full context.
 
-**Practical timing:** reconnect only works while the workflow is still running. For short queries that complete in seconds, it may finish before you reconnect. After `GetAgentRun` / `GetAgentStream`, `WithTimeout` (if set) starts **fresh** — not the remaining time from the original `Run` / `Stream`. See [Timeouts & Modes](/advanced/timeouts-and-modes#timeouts-after-reconnect-temporal).
+**Practical timing:** reconnect only works while the run is still live. For short queries that complete in seconds, it may finish before you reconnect. After `GetAgentRun` / `GetAgentStream`, `WithTimeout` (if set) starts **fresh** — not the remaining time from the original `Run` / `Stream`. See [Timeouts & Modes](/advanced/timeouts-and-modes#timeouts-after-reconnect-temporal).
 
 ### Approval events on reconnect
 
@@ -181,7 +188,7 @@ If an approval was already resolved while your subscriber was disconnected, the 
 
 ## Client-side run recovery
 
-If YOUR process started a non-stream `Run` and then crashed or exited before `Get` returned, the workflow continues on the server. Persist `runID` from `AgentRun.ID()` immediately after `Run`, then call `GetAgentRun` on restart to wait for the result:
+If YOUR process started a non-stream `Run` and then crashed or exited before `Get` returned, the durable run continues on the server. Persist `runID` from `AgentRun.ID()` immediately after `Run`, then call `GetAgentRun` on restart to wait for the result:
 
 ```go
 agentRun, err := a.Run(ctx, prompt, nil)
@@ -196,7 +203,7 @@ savedRunID := loadSavedRunID(sessionID)
 run, err := a.GetAgentRun(ctx, savedRunID)
 if err != nil {
     if errors.Is(err, agent.ErrRunAlreadyCompleted) {
-        // Workflow finished while disconnected — outcome is not on this handle.
+        // Run finished while disconnected — outcome is not on this handle.
         // Load from conversation/memory, or start a new run.
         clearSavedRun(sessionID)
         return nil
@@ -211,7 +218,7 @@ clearSavedRun(sessionID)
 fmt.Println(result.Content)
 ```
 
-Same rule as stream reconnect: `GetAgentRun` only works while the workflow is still executing. Once it completes, fails, or times out, you get `ErrRunAlreadyCompleted` — clear saved state and continue from conversation/memory. Cancelling the `GetAgentRun` / `Get` context does not cancel the workflow — use `AgentRun.Cancel`. After reconnect, `WithTimeout` starts fresh. See [Run](/getting-started/run#reconnect-with-getagentrun) and [Timeouts & Modes](/advanced/timeouts-and-modes#what-each-context-does).
+Same rule as stream reconnect: `GetAgentRun` only works while the durable run is still executing. Once it completes, fails, or times out, you get `ErrRunAlreadyCompleted` — clear saved state and continue from conversation/memory. Cancelling the `GetAgentRun` / `Get` context does not cancel the run — use `AgentRun.Cancel`. After reconnect, `WithTimeout` starts fresh. See [Run](/getting-started/run#reconnect-with-getagentrun) and [Timeouts & Modes](/advanced/timeouts-and-modes#what-each-context-does).
 
 ## API reference
 
@@ -228,7 +235,7 @@ func WithOffset(offset int64) AgentStreamOption
 func (a *Agent) GetAgentRun(ctx context.Context, runID string) (AgentRun, error)
 ```
 
-`ErrRunAlreadyCompleted` — returned when the workflow is no longer running. Clear saved state and start a new turn/run.
+`ErrRunAlreadyCompleted` — returned when the durable run is no longer live. Clear saved state and start a new turn/run.
 
 `ErrRunNotFound` — returned when `runID` is unknown or the runtime cannot reconnect (e.g. `LocalRuntime` after a crash).
 
@@ -238,17 +245,21 @@ func (a *Agent) GetAgentRun(ctx context.Context, runID string) (AgentRun, error)
 
 | Runtime | Server-side durability | Client-side reconnect |
 |---|---|---|
-| Temporal | Automatic — no code needed | `GetAgentStream` + `WithOffset`; `GetAgentRun` (while workflow is live) |
+| Temporal | Automatic — workflow history + activities | `GetAgentStream` + `WithOffset`; `GetAgentRun` (while run is live) |
+| Restate | Automatic — journaled steps + awakeables | Same public API as Temporal |
 | Local | No | Same-process handle only — no crash reconnect |
 
 ## Examples
 
 <CardGroup cols={2}>
-  <Card title="Durable Agent" icon="shield" href="/examples/durable-agent" horizontal>
-    Interactive lab: crash workers, kill processes, observe durability in action
+  <Card title="Durable Agent (Temporal)" icon="shield" href="/examples/durable-agent" horizontal>
+    Temporal lab: crash workers, kill processes, observe durability
+  </Card>
+  <Card title="Durable Agent (Restate)" icon="cube" href="/examples/durable-agent-restate" horizontal>
+    Restate lab: single process, kill mid-stream, reconnect
   </Card>
   <Card title="Reconnect" icon="rotate" href="/examples/reconnect" horizontal>
-    Single-process demo: stream, simulate crash, reconnect from saved offset
+    Temporal demo of the shared reconnect API (same calls work on Restate)
   </Card>
 </CardGroup>
 
@@ -256,7 +267,7 @@ func (a *Agent) GetAgentRun(ctx context.Context, runID string) (AgentRun, error)
 
 <CardGroup cols={2}>
   <Card title="Distributed Execution" icon="gears" href="/advanced/distributed-execution" horizontal>
-    Split agent client and worker into separate processes
+    Split agent client and Temporal worker into separate processes
   </Card>
   <Card title="Run" icon="play" href="/getting-started/run#reconnect-with-getagentrun" horizontal>
     GetAgentRun — reconnect a non-stream Run
@@ -268,6 +279,6 @@ func (a *Agent) GetAgentRun(ctx context.Context, runID string) (AgentRun, error)
     RunID, event types, and the streaming API
   </Card>
   <Card title="Temporal Runtime" icon="server" href="/runtimes/temporal" horizontal>
-    Durable execution architecture and event delivery
+    Temporal durability architecture and event delivery
   </Card>
 </CardGroup>

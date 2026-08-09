@@ -6,17 +6,15 @@
 [![License](https://img.shields.io/github/license/agenticenv/agent-sdk-go?label=License)](LICENSE)
 [![Mentioned in Awesome Go](https://awesome.re/mentioned-badge.svg)](https://github.com/avelino/awesome-go)
 
-**AI agents that keep running even when your process doesn't — powered by [Temporal](https://temporal.io).**
+**AI agents in Go that keep running even when your process doesn't — powered by [Temporal](https://temporal.io) or [Restate](https://restate.dev).**
 
-**Open-source Go SDK for building AI agents** — run in-process with zero setup, or on Temporal for crash-resilient, distributed execution that survives restarts and deploys. Every core component is a pluggable interface, so nothing is locked in.
+**Open-source Go SDK for building AI agents** — run in-process with zero setup, or scale to Temporal / Restate for crash-resilient, distributed execution that survives restarts and deploys. Every core component is a pluggable interface, so nothing is locked in.
 
 📖 [Documentation](https://docs.agenticenv.ai)  ·  [Quickstart](https://docs.agenticenv.ai/getting-started/quickstart)  ·  [Examples](https://docs.agenticenv.ai/examples/running-examples) 
 
-> **Versioning:** [Semantic versioning](https://semver.org/); releases are git tags. See the [latest release](https://github.com/agenticenv/agent-sdk-go/releases/latest).
+> Releases follow [Semantic Versioning](https://semver.org/); see the [latest release](https://github.com/agenticenv/agent-sdk-go/releases/latest).
 >
-> Independent community library — **not** affiliated with Temporal Technologies.
-
-
+> Independent community library — **not** affiliated with Temporal Technologies or Restate.
 
 ## Install
 
@@ -24,7 +22,7 @@
 go get github.com/agenticenv/agent-sdk-go@latest
 ```
 
-Go 1.26+. No infrastructure required for in-process mode. A running [Temporal](https://temporal.io) server is required for durable execution.
+Go 1.26+. No infrastructure required for in-process mode. A running [Temporal](https://temporal.io) or [Restate](https://restate.dev) server is required for durable execution — see [temporal-setup.md](temporal-setup.md) and [restate-setup.md](restate-setup.md).
 
 ## Quick Start
 
@@ -90,13 +88,15 @@ for event := range events {
 }
 ```
 
-**Temporal** (durable execution):
+**Temporal** (durable execution) — import `pkg/agent/runtime/temporal`:
 
 ```go
+import "github.com/agenticenv/agent-sdk-go/pkg/agent/runtime/temporal"
+
 a, _ := agent.NewAgent(
     agent.WithSystemPrompt("You are a helpful assistant."),
     agent.WithLLMClient(llmClient),
-    agent.WithTemporalConfig(&agent.TemporalConfig{
+    temporal.WithTemporalConfig(&temporal.TemporalConfig{
         Host:      "localhost",
         Port:      7233,
         Namespace: "default",
@@ -110,17 +110,7 @@ run, _ := a.Run(context.Background(), "Reply with a short greeting.", nil)
 result, _ := run.Get(context.Background())
 fmt.Println(result.Content)
 
-// --- Non-blocking ---
-run, _ = a.Run(context.Background(), "Explain durable agents in two short paragraphs.", nil)
-select {
-case <-run.Done():
-    result, _ = run.Get(context.Background())
-    fmt.Println(result.Content)
-case <-time.After(5 * time.Second):
-    fmt.Println("still running, check back later")
-}
-
-// --- Stream (AG-UI events: text deltas, tools, approvals, lifecycle, …) ---
+// --- Stream + reconnect ---
 stream, _ := a.Stream(context.Background(), "Write a four-line poem about the ocean.", nil)
 savedRunID := stream.ID() // persist before consuming events
 events, _ := stream.Events(context.Background())
@@ -128,9 +118,6 @@ for event := range events {
     // persist event.Offset() before handling — needed for WithOffset on reconnect
     _ = event
 }
-
-// --- Reconnect after a process crash ---
-// replace with last persisted offset from your storage
 savedOffset := int64(0)
 s, _ := a.GetAgentStream(context.Background(), savedRunID)
 ch, _ := s.Events(context.Background(), agent.WithOffset(savedOffset))
@@ -139,7 +126,30 @@ for event := range ch {
 }
 ```
 
-> Crashes and process restarts don't have to mean lost work or missed approvals — the [durable agent example](examples/durable_agent) shows how a run keeps executing durably even if your process crashes, and how to reconnect to an active run and stream its remaining events once it's back. For the stream reconnect protocol (`GetAgentStream` + `WithOffset`), see the [reconnect example](examples/agent_with_reconnect).
+**Restate** (durable execution) — import `pkg/agent/runtime/restate` (mutually exclusive with Temporal):
+
+```go
+import "github.com/agenticenv/agent-sdk-go/pkg/agent/runtime/restate"
+
+a, _ := agent.NewAgent(
+    agent.WithSystemPrompt("You are a helpful assistant."),
+    agent.WithLLMClient(llmClient),
+    restate.WithRestateConfig(&restate.RestateConfig{
+        Ingress: restate.IngressConfig{
+            URL: "http://localhost:8080",
+        },
+        Endpoint: restate.EndpointConfig{
+            ListenAddress: ":9080",
+            AdminURL:      "http://localhost:9070",
+        },
+    }),
+)
+defer a.Close()
+
+// Same Run / Stream / GetAgentStream + WithOffset APIs as Temporal
+```
+
+> Crashes and process restarts don't have to mean lost work or missed approvals — see [durable_agent/temporal](examples/durable_agent/temporal) (split worker) and [durable_agent/restate](examples/durable_agent/restate) (single process). For the stream reconnect protocol (`GetAgentStream` + `WithOffset`), see the [reconnect example](examples/agent_with_reconnect) and [Durable Execution](https://docs.agenticenv.ai/advanced/durable-execution).
 
 ## Features
 
@@ -155,8 +165,8 @@ for event := range ch {
 - **Token usage** — aggregate prompt, completion, and reasoning token counts per run
 - **Hooks & guardrails** — middleware at LLM, tool, retrieval, and memory lifecycle points
 - **Execution config** — per-operation timeouts and max attempts via `With*ExecutionConfig`
-- **Durable execution** — crash-resilient runs via Temporal; reconnect to active runs and resume event streams after a restart
-- **Distributed execution** — leverage Temporal to decouple client triggers from worker execution, scaling agent workloads horizontally across separate processes or nodes.
+- **Durable execution** — crash-resilient runs via Temporal or Restate; reconnect to active runs and resume event streams after a restart
+- **Distributed execution** — with Temporal, decouple client triggers from worker execution across processes; with Restate, scale via registered endpoint deployments
 - **Observability** — OpenTelemetry traces, metrics, and structured logs
 
 ## CLI (`agctl`)

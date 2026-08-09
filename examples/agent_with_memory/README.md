@@ -13,7 +13,9 @@ Uses the same Docker stack as retriever examples ([`../docker/`](../docker/)). `
 
 ## Prerequisites
 
-- **Runtime** — **`AGENT_RUNTIME=local`** (default): in-process, no Temporal. Optional **`AGENT_RUNTIME=temporal`**: from `examples/`, run `task infra:temporal:up` (and `task infra:temporal:wait` if the example fails to connect). See [`temporal-setup.md`](../../temporal-setup.md).
+- **Runtime** — **`AGENT_RUNTIME=local`** (default): in-process. Optional durable backends:
+  - **`AGENT_RUNTIME=temporal`**: from `examples/`, run `task infra:temporal:up` (and `task infra:temporal:wait` if needed). See [`temporal-setup.md`](../../temporal-setup.md).
+  - **`AGENT_RUNTIME=restate`**: from `examples/`, run `task infra:restate:up` (and `task infra:restate:wait` if needed). See [`restate-setup.md`](../../restate-setup.md).
 - **`examples/.env`** — `LLM_APIKEY`, `LLM_MODEL`, and **`EMBEDDING_OPENAI_APIKEY`** (see **`.env.defaults`**)
 - **Task** (`go-task`) and **Docker** (`task infra:weaviate:up` or `task infra:pgvector:up`)
 
@@ -55,14 +57,15 @@ Compose: [`docker/docker-compose.yml`](../docker/docker-compose.yml). Seed: [`do
 Verify the memory class exists:
 
 ```bash
-curl -s http://localhost:8080/v1/schema | jq '.classes[].class'
+curl -s http://localhost:8081/v1/schema | jq '.classes[].class'
 # expect Document and AgentMemory
 ```
 
 ### Environment
 
 ```bash
-WEAVIATE_HOST=localhost:8080
+WEAVIATE_HTTP_PORT=8081
+WEAVIATE_HOST=localhost:8081
 WEAVIATE_SCHEME=http
 WEAVIATE_MEMORY_CLASS=AgentMemory
 MEMORY_USER_ID=demo-user
@@ -87,11 +90,11 @@ SHOW_TELEMETRY=true go run ./agent_with_memory/weaviate
 | Symptom | What to do |
 |---------|------------|
 | `missing class data` / memory recall error on first run | Usually empty class — Weaviate returns `null` not `[]` (fixed in SDK). Update and re-run; or `MEMORY_RECALL_ENABLED=false` for store-only |
-| Class **`AgentMemory`** missing from schema | `task infra:weaviate:down && task infra:weaviate:up`; verify: `curl -s http://localhost:8080/v1/schema \| jq '.classes[].class'` |
+| Class **`AgentMemory`** missing from schema | `task infra:weaviate:down && task infra:weaviate:up`; verify: `curl -s http://localhost:8081/v1/schema \| jq '.classes[].class'` |
 | Compose / API key errors | Set `EMBEDDING_OPENAI_APIKEY`, then `task infra:weaviate:down && task infra:weaviate:up` |
-| Connection refused `:8080` | `task infra:status`, `curl -s http://localhost:8080/v1/.well-known/ready`, `docker logs weaviate` |
+| Connection refused `:8081` | `task infra:status`, `curl -s http://localhost:8081/v1/.well-known/ready`, `docker logs weaviate` |
 | Run 2 does not recall run 1 | Same `MEMORY_USER_ID`; ensure run 1 completed and run-end store succeeded (check `LOG_LEVEL=debug` or `SHOW_TELEMETRY=true`) |
-| Port 8080 / 50051 in use | `task infra:weaviate:down`; set `WEAVIATE_HTTP_PORT` / `WEAVIATE_GRPC_PORT` before `up` |
+| Port 8081 / 50051 in use | `task infra:weaviate:down`; set `WEAVIATE_HTTP_PORT` / `WEAVIATE_GRPC_PORT` (and matching `WEAVIATE_HOST`) before `up` |
 
 ```bash
 LOG_LEVEL=debug go run ./agent_with_memory/weaviate

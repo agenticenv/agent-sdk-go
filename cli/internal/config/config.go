@@ -18,6 +18,8 @@ import (
 	"github.com/adrg/xdg"
 	"github.com/agenticenv/agent-sdk-go/cli/internal/secrets"
 	"github.com/agenticenv/agent-sdk-go/pkg/agent"
+	agentrestate "github.com/agenticenv/agent-sdk-go/pkg/agent/runtime/restate"
+	agenttemporal "github.com/agenticenv/agent-sdk-go/pkg/agent/runtime/temporal"
 	"gopkg.in/yaml.v3"
 )
 
@@ -26,11 +28,12 @@ const EnvPrefix = "AGCTL_"
 
 // Config is the root agctl configuration.
 type Config struct {
-	// Runtime selects the agent execution backend: "local" (default) or "temporal".
+	// Runtime selects the agent execution backend: "local" (default), "temporal", or "restate".
 	Runtime      string                `yaml:"runtime"`
 	Name         string                `yaml:"name"`
 	SystemPrompt string                `yaml:"system_prompt"`
 	Temporal     *TemporalConfig       `yaml:"temporal,omitempty"`
+	Restate      *RestateConfig        `yaml:"restate,omitempty"`
 	LLM          *LLMConfig            `yaml:"llm,omitempty"`
 	Logger       *LoggerConfig         `yaml:"logger,omitempty"`
 	Conversation *ConversationConfig   `yaml:"conversation,omitempty"`
@@ -104,6 +107,15 @@ type TemporalConfig struct {
 	TaskQueue string `yaml:"taskQueue"`
 }
 
+// RestateConfig configures Restate when runtime is restate.
+type RestateConfig struct {
+	IngressURL            string `yaml:"ingressURL"`
+	AdminURL              string `yaml:"adminURL"`
+	AuthKey               string `yaml:"authKey,omitempty"`
+	EndpointListenAddress string `yaml:"endpointListenAddress"`
+	DeploymentURL         string `yaml:"deploymentURL,omitempty"`
+}
+
 type LLMConfig struct {
 	Provider string `yaml:"provider"`
 	APIKey   string `yaml:"apiKey,omitempty"`
@@ -124,18 +136,42 @@ func (c *Config) UseTemporalRuntime() bool {
 	return c != nil && strings.ToLower(strings.TrimSpace(c.Runtime)) == "temporal"
 }
 
-// RuntimeOption returns [agent.WithTemporalConfig] when runtime is "temporal", or nil for local.
+// UseRestateRuntime reports whether the restate backend is selected.
+func (c *Config) UseRestateRuntime() bool {
+	return c != nil && strings.ToLower(strings.TrimSpace(c.Runtime)) == "restate"
+}
+
+// RuntimeOption returns Temporal or Restate options when that backend is selected, or nil for local.
 func RuntimeOption(cfg *Config) []agent.Option {
-	if !cfg.UseTemporalRuntime() || cfg.Temporal == nil {
+	if cfg == nil {
 		return nil
 	}
-	return []agent.Option{
-		agent.WithTemporalConfig(&agent.TemporalConfig{
-			Host:      cfg.Temporal.Host,
-			Port:      cfg.Temporal.Port,
-			Namespace: cfg.Temporal.Namespace,
-			TaskQueue: cfg.Temporal.TaskQueue,
-		}),
+	switch {
+	case cfg.UseTemporalRuntime() && cfg.Temporal != nil:
+		return []agent.Option{
+			agenttemporal.WithTemporalConfig(&agenttemporal.TemporalConfig{
+				Host:      cfg.Temporal.Host,
+				Port:      cfg.Temporal.Port,
+				Namespace: cfg.Temporal.Namespace,
+				TaskQueue: cfg.Temporal.TaskQueue,
+			}),
+		}
+	case cfg.UseRestateRuntime() && cfg.Restate != nil:
+		return []agent.Option{
+			agentrestate.WithRestateConfig(&agentrestate.RestateConfig{
+				Ingress: agentrestate.IngressConfig{
+					URL:     cfg.Restate.IngressURL,
+					AuthKey: cfg.Restate.AuthKey,
+				},
+				Endpoint: agentrestate.EndpointConfig{
+					ListenAddress: cfg.Restate.EndpointListenAddress,
+					AdminURL:      cfg.Restate.AdminURL,
+					DeploymentURL: cfg.Restate.DeploymentURL,
+				},
+			}),
+		}
+	default:
+		return nil
 	}
 }
 
@@ -267,6 +303,18 @@ func ensureConfigStructs(cfg *Config) {
 	if strings.TrimSpace(cfg.Temporal.TaskQueue) == "" {
 		cfg.Temporal.TaskQueue = "agent-sdk-go"
 	}
+	if cfg.Restate == nil {
+		cfg.Restate = &RestateConfig{}
+	}
+	if strings.TrimSpace(cfg.Restate.IngressURL) == "" {
+		cfg.Restate.IngressURL = "http://localhost:8080"
+	}
+	if strings.TrimSpace(cfg.Restate.AdminURL) == "" {
+		cfg.Restate.AdminURL = "http://localhost:9070"
+	}
+	if strings.TrimSpace(cfg.Restate.EndpointListenAddress) == "" {
+		cfg.Restate.EndpointListenAddress = ":9080"
+	}
 	if strings.TrimSpace(cfg.Name) == "" {
 		cfg.Name = "agctl"
 	}
@@ -362,6 +410,21 @@ func applyEnvOverrides(cfg *Config) {
 	if v := env("TEMPORAL_TASKQUEUE"); v != "" {
 		cfg.Temporal.TaskQueue = v
 	}
+	if v := env("RESTATE_INGRESS_URL"); v != "" {
+		cfg.Restate.IngressURL = v
+	}
+	if v := env("RESTATE_ADMIN_URL"); v != "" {
+		cfg.Restate.AdminURL = v
+	}
+	if v := env("RESTATE_AUTH_KEY"); v != "" {
+		cfg.Restate.AuthKey = v
+	}
+	if v := env("RESTATE_ENDPOINT_LISTEN_ADDRESS"); v != "" {
+		cfg.Restate.EndpointListenAddress = v
+	}
+	if v := env("RESTATE_DEPLOYMENT_URL"); v != "" {
+		cfg.Restate.DeploymentURL = v
+	}
 	if v := env("LLM_PROVIDER"); v != "" {
 		cfg.LLM.Provider = v
 	}
@@ -405,13 +468,18 @@ type AgentOverrides struct {
 	TemporalNamespace string
 	TemporalTaskQueue string
 
+	RestateIngressURL            string
+	RestateAdminURL              string
+	RestateAuthKey               string
+	RestateEndpointListenAddress string
+	RestateDeploymentURL         string
+
 	LLMUsage bool // when true, enable usage summary for this invocation
 }
 
 // ApplyAgentOverrides applies non-empty chat/run flag overrides onto cfg.
-// Temporal connection fields are applied whenever provided; when runtime is
-// temporal and they are omitted, ensureConfigStructs defaults remain
-// (localhost:7233 / default / agent-sdk-go).
+// Temporal/Restate connection fields are applied whenever provided; when that
+// runtime is selected and fields are omitted, ensureConfigStructs defaults remain.
 func ApplyAgentOverrides(cfg *Config, o AgentOverrides) {
 	if cfg == nil {
 		return
@@ -447,9 +515,29 @@ func ApplyAgentOverrides(cfg *Config, o AgentOverrides) {
 	if strings.TrimSpace(o.TemporalTaskQueue) != "" {
 		cfg.Temporal.TaskQueue = strings.TrimSpace(o.TemporalTaskQueue)
 	}
+
+	if cfg.Restate == nil {
+		cfg.Restate = &RestateConfig{}
+	}
+	if strings.TrimSpace(o.RestateIngressURL) != "" {
+		cfg.Restate.IngressURL = strings.TrimSpace(o.RestateIngressURL)
+	}
+	if strings.TrimSpace(o.RestateAdminURL) != "" {
+		cfg.Restate.AdminURL = strings.TrimSpace(o.RestateAdminURL)
+	}
+	if strings.TrimSpace(o.RestateAuthKey) != "" {
+		cfg.Restate.AuthKey = strings.TrimSpace(o.RestateAuthKey)
+	}
+	if strings.TrimSpace(o.RestateEndpointListenAddress) != "" {
+		cfg.Restate.EndpointListenAddress = strings.TrimSpace(o.RestateEndpointListenAddress)
+	}
+	if strings.TrimSpace(o.RestateDeploymentURL) != "" {
+		cfg.Restate.DeploymentURL = strings.TrimSpace(o.RestateDeploymentURL)
+	}
+
 	if o.LLMUsage {
 		cfg.LLMUsage = true
 	}
-	// Re-apply built-in temporal defaults for any field still empty.
+	// Re-apply built-in defaults for any field still empty.
 	ensureConfigStructs(cfg)
 }

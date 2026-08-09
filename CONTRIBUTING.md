@@ -1,6 +1,6 @@
 # Contributing to agent-sdk-go
 
-Thank you for your interest in contributing. **agent-sdk-go** is a community Go SDK for AI agents — backed by [Temporal](https://temporal.io) for durable execution, or running in-process with no external dependencies. This document explains how to set up your environment and what we expect from contributors.
+Thank you for your interest in contributing. **agent-sdk-go** is a community Go SDK for AI agents — durable execution via [Temporal](https://temporal.io) or [Restate](https://restate.dev), or running in-process with no external dependencies. This document explains how to set up your environment and what we expect from contributors.
 
 ## Prerequisites
 
@@ -11,13 +11,18 @@ Before contributing, ensure you have:
 | **Go** | **Minimum `go 1.26.0`** (see the `go` line in `go.mod`; use that version or newer). |
 | **Task** | Task runner for all dev commands (`task build`, `task check`, `task lint`, ...). Install: `go install github.com/go-task/task/v3/cmd/task@latest` or see [taskfile.dev/installation](https://taskfile.dev/installation/) |
 | **Temporal server** | Required only for Temporal runtime examples, CLI, and Temporal-specific tests — see [Temporal setup](temporal-setup.md). Unit tests and in-process runtime examples run without it. |
+| **Restate server** | Required only for Restate runtime examples and Restate-specific tests — see [Restate setup](restate-setup.md). |
 | **golangci-lint** | Required for `task lint` — install **v2** with Go **≥** the `go` line in `go.mod`: `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest` |
 | **gofmt** | `task lint` runs `gofmt -s` check first; run `task fmt` to apply `gofmt -s -w` project-wide |
 | **misspell** | `task spell` or `task lint` — typos via `misspell` |
 
 ## Temporal setup
 
-Only needed for the **Temporal runtime** path — examples and tests that use `AGENT_RUNTIME=temporal` or `WithTemporalConfig`. In-process runtime examples and unit tests run without it. Full steps: **[temporal-setup.md](temporal-setup.md)**.
+Only needed for the **Temporal runtime** path — examples and tests that use `AGENT_RUNTIME=temporal` or `temporal.WithTemporalConfig`. In-process runtime examples and unit tests run without it. Full steps: **[temporal-setup.md](temporal-setup.md)**.
+
+## Restate setup
+
+Only needed for the **Restate runtime** path — examples and tests that use `AGENT_RUNTIME=restate` or `restate.WithRestateConfig`. Full steps: **[restate-setup.md](restate-setup.md)**.
 
 ## Development Workflow
 

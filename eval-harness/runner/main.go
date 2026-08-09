@@ -13,7 +13,7 @@ import (
 func main() {
 	configPath := flag.String("config", "", "path to config.yaml (default: runner/config.yaml)")
 	prompt := flag.String("prompt", "", "override user_prompt from config")
-	runtimeFlag := flag.String("runtime", "", "override runtime: local or temporal")
+	runtimeFlag := flag.String("runtime", "", "override runtime: local, temporal, or restate")
 	toolCount := flag.Int("tools", 0, "override agent.tool_count (0 = use config)")
 	memoryStoreMode := flag.String("memory-store-mode", "", "override memory.store_mode: ondemand or always")
 	memoryScenario := flag.Bool("memory", false, "enable memory store_recall scenario from config")

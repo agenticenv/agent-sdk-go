@@ -4,6 +4,8 @@ import (
 	"strings"
 
 	"github.com/agenticenv/agent-sdk-go/pkg/agent"
+	agentrestate "github.com/agenticenv/agent-sdk-go/pkg/agent/runtime/restate"
+	agenttemporal "github.com/agenticenv/agent-sdk-go/pkg/agent/runtime/temporal"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
 )
@@ -37,12 +39,25 @@ func RootOptions(
 	if cfg.Agent.Subagents.Levels > 0 {
 		opts = append(opts, agent.WithMaxSubAgentDepth(cfg.Agent.Subagents.Levels))
 	}
-	if cfg.UseTemporal() {
-		opts = append(opts, agent.WithTemporalConfig(&agent.TemporalConfig{
+	switch {
+	case cfg.UseTemporal():
+		opts = append(opts, agenttemporal.WithTemporalConfig(&agenttemporal.TemporalConfig{
 			Host:      cfg.Temporal.Host,
 			Port:      cfg.Temporal.Port,
 			Namespace: cfg.Temporal.Namespace,
 			TaskQueue: taskQueue,
+		}))
+	case cfg.UseRestate():
+		opts = append(opts, agentrestate.WithRestateConfig(&agentrestate.RestateConfig{
+			Ingress: agentrestate.IngressConfig{
+				URL:     cfg.Restate.IngressURL,
+				AuthKey: cfg.Restate.AuthKey,
+			},
+			Endpoint: agentrestate.EndpointConfig{
+				ListenAddress: cfg.Restate.EndpointListenAddress,
+				AdminURL:      cfg.Restate.AdminURL,
+				DeploymentURL: cfg.Restate.DeploymentURL,
+			},
 		}))
 	}
 	return opts

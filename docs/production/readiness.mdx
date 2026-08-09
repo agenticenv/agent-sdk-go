@@ -94,8 +94,8 @@ See [Timeouts & Modes](/advanced/timeouts-and-modes) for the full failure behavi
 ## Temporal worker scaling
 
 - **Workers are stateless** — Temporal holds all workflow state. Scale workers horizontally by adding replicas; each polls the same task queue and picks up available work.
-- **One task queue per agent type** — The root agent, each sub-agent, and each `NewAgentWorker` must use a unique task queue. Sharing a queue between different agent types causes workflow routing errors.
-- **Scale sub-agent workers independently** — Sub-agents are child workflows on separate task queues. A high-delegation workload may require more sub-agent workers than root agent workers.
+- **Stable agent names** — Keep `WithName` stable for an agent type across client and worker processes. Do not reuse one name for different agent types.
+- **Scale sub-agent workers independently** — Run a `NewAgentWorker` per specialist when using remote workers. A high-delegation workload may require more sub-agent workers than root agent workers.
 - **Size worker concurrency** — Each worker runs multiple workflow goroutines concurrently. Tune via Temporal worker options (max concurrent workflow tasks, activity tasks). Match to your LLM provider's concurrency quota to avoid throttling.
 - **Worker health checks** — Probe that workers are polling before accepting traffic. `AgentModeInteractive` with `DisableLocalWorker` performs a pre-check automatically — ensure at least one worker is registered on the task queue.
 - **Rolling deploys** — Temporal workflows replay on new workers. After an SDK upgrade, verify workflow replay compatibility in staging before rolling out to production workers.
@@ -132,7 +132,7 @@ Run these against your target environment to confirm configuration:
 
 | Check | Resource |
 |---|---|
-| Split client/worker and streaming | [Agent Worker](/examples/agent-worker), [Durable Agent](/examples/durable-agent) |
+| Split client/worker and streaming | [Agent Worker](/examples/agent-worker), [Durable Agent (Temporal)](/examples/durable-agent) |
 | OTLP export from agent and worker | [Observability example](/examples/observability) |
 | Behavioral regression | [Eval harness](/testing/eval-harness) |
 | End-to-end HTTP + Temporal + Postgres | [Agent Chat](/reference-apps/agent-chat) |

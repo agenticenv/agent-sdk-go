@@ -6,24 +6,29 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 
 	config "github.com/agenticenv/agent-sdk-go/examples"
 	"github.com/agenticenv/agent-sdk-go/examples/shared"
 	"github.com/agenticenv/agent-sdk-go/pkg/agent"
+	agentrestate "github.com/agenticenv/agent-sdk-go/pkg/agent/runtime/restate"
 	"github.com/agenticenv/agent-sdk-go/pkg/tools/calculator"
 )
 
-// This example demonstrates that tool approval events from a sub-agent (MathSpecialist)
-// flow up to the main agent's Stream subscriber on the same in-memory channel.
+// This example demonstrates that tool approval events from a sub-agent (math-specialist)
+// flow up to the main agent's Stream subscriber.
 //
 // Approval flow:
-//  1. Main agent asks to delegate to MathSpecialist → CUSTOM name=delegation
-//  2. MathSpecialist calls the calculator tool    → CUSTOM name=approval
+//  1. Main agent asks to delegate to math-specialist → CUSTOM name=delegation
+//  2. math-specialist calls the calculator tool    → CUSTOM name=approval
 //
-// Both approvals arrive on the main agent's Stream event channel, proving that
-// sub-agent events fan-in to the root agent's LocalChannelName.
+// Both approvals arrive on the main agent's Stream event channel. On Restate each
+// agent is independent (own listen port / AgentLoop service); when math runs as a
+// sub-agent it publishes into the main agent's AgentEventLog.
 func main() {
 	cfg := config.LoadFromEnv()
 
@@ -41,17 +46,18 @@ func main() {
 		close(lineCh)
 	}()
 
-	baseQueue := cfg.TaskQueue
-	mathQueue := baseQueue + "-math-specialist"
-	mainQueue := baseQueue + "-main-agent"
-
 	mathReg := agent.NewToolRegistry()
 	if err := mathReg.Register(calculator.New()); err != nil {
 		log.Fatalf("register tools: %v", err)
 	}
 
+	mathRuntimeOpts, mainRuntimeOpts, err := runtimeOptsForSubAgents(cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	mathAgentOpts := []agent.Option{
-		agent.WithName("MathSpecialist"),
+		agent.WithName("math-specialist"),
 		agent.WithDescription("Arithmetic specialist with calculator tool."),
 		agent.WithSystemPrompt("You are a math specialist. Use the calculator tool for arithmetic. Reply with a short final answer."),
 		agent.WithLLMClient(llmClient),
@@ -59,14 +65,7 @@ func main() {
 		agent.WithToolApprovalPolicy(agent.AutoToolApprovalPolicy()),
 		agent.WithLogger(config.NewLoggerFromLogConfig(cfg)),
 	}
-	if cfg.UseTemporalRuntime() {
-		mathAgentOpts = append(mathAgentOpts, agent.WithTemporalConfig(&agent.TemporalConfig{
-			Host:      cfg.Host,
-			Port:      cfg.Port,
-			Namespace: cfg.Namespace,
-			TaskQueue: mathQueue,
-		}))
-	}
+	mathAgentOpts = append(mathAgentOpts, mathRuntimeOpts...)
 	mathSpecialist, err := agent.NewAgent(mathAgentOpts...)
 	if err != nil {
 		log.Fatal(config.FormatNewAgentError("math specialist agent", err))
@@ -74,10 +73,10 @@ func main() {
 	defer mathSpecialist.Close()
 
 	mainAgentOpts := []agent.Option{
-		agent.WithName("Main agent"),
+		agent.WithName("main-agent"),
 		agent.WithDescription("General assistant."),
 		agent.WithSystemPrompt(
-			"You are the main assistant. For arithmetic, delegate using the MathSpecialist sub-agent tool. " +
+			"You are the main assistant. For arithmetic, delegate using the math-specialist sub-agent tool. " +
 				"When the specialist's answer comes back, do not stop there: continue as the main agent—give the user a concise final reply that includes the result, " +
 				"then add one short sentence of your own (e.g. sanity check, related tip, or offer to help further). " +
 				"Always produce visible assistant text after delegation completes.",
@@ -88,14 +87,7 @@ func main() {
 		agent.WithLogger(config.NewLoggerFromLogConfig(cfg)),
 	}
 	mainAgentOpts = append(mainAgentOpts, config.ToolApprovalOptions()...)
-	if cfg.UseTemporalRuntime() {
-		mainAgentOpts = append(mainAgentOpts, agent.WithTemporalConfig(&agent.TemporalConfig{
-			Host:      cfg.Host,
-			Port:      cfg.Port,
-			Namespace: cfg.Namespace,
-			TaskQueue: mainQueue,
-		}))
-	}
+	mainAgentOpts = append(mainAgentOpts, mainRuntimeOpts...)
 	mainAgent, err := agent.NewAgent(mainAgentOpts...)
 	if err != nil {
 		log.Fatal(config.FormatNewAgentError("main agent", err))
@@ -190,4 +182,73 @@ func main() {
 			shared.PrintRunFooters(res)
 		}
 	}
+}
+
+// runtimeOptsForSubAgents returns per-agent runtime options.
+// Restate: each agent is an independent deployment — unique listen port + DeploymentURL
+// (same pattern as multiple_agents). Temporal/local: shared RuntimeOption.
+func runtimeOptsForSubAgents(cfg *config.Config) (mathOpts, mainOpts []agent.Option, err error) {
+	if cfg == nil || !cfg.UseRestateRuntime() {
+		opts := config.RuntimeOption(cfg)
+		return opts, opts, nil
+	}
+	mathListen := cfg.Restate.EndpointListenAddress
+	mainListen, err := bumpListenPort(mathListen, 1)
+	if err != nil {
+		return nil, nil, fmt.Errorf("restate listen address for main-agent: %w", err)
+	}
+	return restateRuntimeOption(cfg, mathListen), restateRuntimeOption(cfg, mainListen), nil
+}
+
+func restateRuntimeOption(cfg *config.Config, listen string) []agent.Option {
+	deploy := cfg.Restate.DeploymentURL
+	if deploy != "" {
+		if port, err := listenPort(listen); err == nil {
+			deploy = withURLPort(deploy, port)
+		}
+	}
+	return []agent.Option{
+		agentrestate.WithRestateConfig(&agentrestate.RestateConfig{
+			Ingress: agentrestate.IngressConfig{
+				URL:     cfg.Restate.IngressURL,
+				AuthKey: cfg.Restate.AuthKey,
+			},
+			Endpoint: agentrestate.EndpointConfig{
+				ListenAddress: listen,
+				AdminURL:      cfg.Restate.AdminURL,
+				DeploymentURL: deploy,
+			},
+			EventLog: agentrestate.EventLogConfig{DisableClear: true},
+		}),
+	}
+}
+
+func bumpListenPort(listen string, delta int) (string, error) {
+	host, portStr, err := net.SplitHostPort(listen)
+	if err != nil {
+		return "", err
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return "", err
+	}
+	return net.JoinHostPort(host, strconv.Itoa(port+delta)), nil
+}
+
+func listenPort(listen string) (int, error) {
+	_, portStr, err := net.SplitHostPort(listen)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.Atoi(portStr)
+}
+
+func withURLPort(raw string, port int) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return raw
+	}
+	host := u.Hostname()
+	u.Host = net.JoinHostPort(host, strconv.Itoa(port))
+	return u.String()
 }

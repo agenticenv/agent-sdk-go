@@ -7,7 +7,7 @@ Outbound A2A: your agent calls **remote** A2A agents as tools.
 
 ## Prerequisites
 
-- **LLM** in **`examples/.env`** (see **`../.env.defaults`**). **Temporal** only when **`AGENT_RUNTIME=temporal`**.
+- **LLM** in **`examples/.env`** (see **`../.env.defaults`**). Durable runtime only when **`AGENT_RUNTIME=temporal`** or **`AGENT_RUNTIME=restate`**.
 
 **Required for A2A:** **`A2A_URL`** — base URL of the remote agent (scheme + host + port, **no path**). Optional: **`A2A_SERVER_NAME`**, **`A2A_TOKEN`**, **`A2A_HEADERS`** (JSON), **`A2A_TIMEOUT_SECONDS`**, **`A2A_SKIP_TLS_VERIFY`** (dev), **`A2A_ALLOW_SKILLS`** / **`A2A_BLOCK_SKILLS`** (comma-separated; mutually exclusive).
 

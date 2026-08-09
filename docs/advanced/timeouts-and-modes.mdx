@@ -209,7 +209,7 @@ On the **Temporal runtime**, process crashes and worker restarts do not appear a
 
 ```go
 a, _ := agent.NewAgent(
-    agent.WithTemporalConfig(cfg),
+    temporal.WithTemporalConfig(cfg),
     agent.WithLLMClient(llmClient),
     agent.DisableLocalWorker(),
     agent.WithAgentMode(agent.AgentModeInteractive),
@@ -221,7 +221,7 @@ a, _ := agent.NewAgent(
 
 ```go
 a, _ := agent.NewAgent(
-    agent.WithTemporalConfig(cfg),
+    temporal.WithTemporalConfig(cfg),
     agent.WithLLMClient(llmClient),
     agent.WithAgentMode(agent.AgentModeAutonomous),
     agent.WithTimeout(45 * time.Minute),

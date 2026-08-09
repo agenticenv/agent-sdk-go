@@ -41,7 +41,7 @@ flowchart LR
 
 **Agent** — the public handle you create with `NewAgent`. Holds the configuration and capability registries. Receives your `Run`/`Stream` call and hands it to the Runtime.
 
-**Runtime** — executes the agent loop. Two implementations: in-process (default, no infra) and Temporal (durable, scalable). Both run the same loop; only the execution environment differs.
+**Runtime** — executes the agent loop. Three implementations: in-process (default, no infra), Temporal (durable workflows + workers), and Restate (durable invocations + embedded endpoint). All run the same loop; only the execution environment differs.
 
 **Capabilities** — plugged into the Runtime at construction. Tools, MCP servers, and A2A agents form the tool surface the LLM can call. Memory, Conversation, and Retrieval shape the context the LLM receives.
 
@@ -75,17 +75,17 @@ Each iteration is one LLM round-trip. The loop repeats until the LLM returns a f
 
 ## Runtimes
 
-Run agents locally for development, or with Temporal for production-grade durability and fault tolerance. The same agent code runs on both — the SDK picks the backend based on which options you pass to `NewAgent`.
+Run agents locally for development, or with Temporal or Restate for production-grade durability and fault tolerance. The same agent code runs on all three — the SDK picks the backend based on which options you pass to `NewAgent`.
 
-| | In-process | Temporal |
-|---|---|---|
-| **How it runs** | Agent loop executes in your Go process | Agent loop becomes a Temporal workflow |
-| **Durability** | None — process crash loses the run | Full — Temporal replays after crashes |
-| **Worker scaling** | Single process | Horizontal — multiple worker processes on the same task queue |
-| **Setup** | No infra required | Requires a running Temporal server |
-| **When to use** | Development, scripts, low-volume APIs | Production, long-running tasks, multi-tenant services |
+| | In-process | Temporal | Restate |
+|---|---|---|---|
+| **How it runs** | Agent loop executes in your Go process | Agent loop becomes a Temporal workflow | Agent loop runs as a Restate durable invocation |
+| **Durability** | None — process crash loses the run | Full — Temporal replays after crashes | Full — Restate resumes from journaled steps |
+| **Worker scaling** | Single process | Horizontal — multiple worker processes on the same task queue | Multiple registered SDK endpoint deployments |
+| **Setup** | No infra required | Requires a running Temporal server | Requires a running Restate server |
+| **When to use** | Development, scripts, low-volume APIs | Production with Temporal workers | Production with Restate ingress + endpoint |
 
-Add `WithTemporalConfig` or `WithTemporalClient` to switch. Everything else stays the same.
+Add `temporal.WithTemporalConfig` / `temporal.WithTemporalClient` (from `pkg/agent/runtime/temporal`) or `restate.WithRestateConfig` (from `pkg/agent/runtime/restate`) to switch. Everything else stays the same.
 
 ### Temporal process topology
 
@@ -112,13 +112,37 @@ flowchart TD
     WF --> CW
 ```
 
-By default `NewAgent` embeds a local worker in the same process — no separate binary needed for development. For production, split client and worker — see [Distributed execution](/advanced/distributed-execution).
+By default `NewAgent` embeds a local Temporal worker in the same process. For production, split client and worker — see [Distributed execution](/advanced/distributed-execution).
+
+### Restate process topology
+
+With Restate, the agent process embeds the SDK endpoint. Your app submits through ingress; Restate calls back into the endpoint to run the loop:
+
+```mermaid
+flowchart TD
+    subgraph app["Agent process"]
+        App3["NewAgent + Run / Stream"]
+        EP["Embedded SDK endpoint"]
+        Loop["AgentLoop"]
+    end
+    subgraph rs["Restate server"]
+        Ingress["Ingress"]
+        Journal["Durable journal"]
+    end
+
+    App3 -->|"submit"| Ingress
+    Ingress --> Journal
+    Journal -->|"invoke"| EP
+    EP --> Loop
+```
+
+Restate uses an embedded SDK endpoint in `NewAgent`. See [Restate runtime](/runtimes/restate). For Temporal workers, see [Distributed Execution](/advanced/distributed-execution).
 
 ## Related
 
 <CardGroup cols={2}>
   <Card title="Runtimes" icon="server" href="/runtimes/overview" horizontal>
-    In-process vs Temporal — full comparison
+    In-process vs Temporal vs Restate — full comparison
   </Card>
   <Card title="Quickstart" icon="bolt" href="/getting-started/quickstart" horizontal>
     Build and run your first agent

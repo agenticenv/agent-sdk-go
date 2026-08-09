@@ -1,32 +1,20 @@
-// agent_with_reconnect demonstrates Agent.GetAgentStream: how to subscribe to a prior run's
-// Temporal Workflow Streams event log from a saved offset, simulating a mid-run crash
-// and recovery in a single process.
+// agent_with_reconnect demonstrates Agent.GetAgentStream: subscribe to a prior run's
+// durable event log from a saved offset, simulating a mid-run crash and recovery in a
+// single process. Works with Temporal and Restate (not local — no stream offsets).
 //
-// # Single-process mode (default)
+// Temporal embeds a worker; Restate embeds the SDK endpoint. Cancelling the Events
+// context only closes the subscriber-side event channel — the Stream context (and
+// durable run) keep running. Do not share one cancelable ctx for Stream and Events
+// when simulating a subscriber crash.
 //
-// No separate worker is needed. The embedded Temporal worker runs in the same process.
-// Cancelling the Events context only closes the subscriber-side event channel — the
-// Stream context (and Temporal workflow) keep running. Do not share one cancelable ctx
-// for Stream and Events when simulating a subscriber crash. On reconnect, events from
-// the saved offset are replayed and new events stream in live.
+//	AGENT_RUNTIME=temporal go run ./agent_with_reconnect [prompt]
+//	AGENT_RUNTIME=restate  go run ./agent_with_reconnect [prompt]
 //
-//	AGENT_RUNTIME=temporal go run . [prompt]
-//
-// # Separate worker mode (optional)
-//
-// Pass agent.DisableLocalWorker() and start the worker binary in a separate terminal to
-// demonstrate the agent+worker split. See agent_with_worker and durable_agent for the
-// full split-process story.
-//
-//	terminal 1:  AGENT_RUNTIME=temporal go run ./worker
-//	terminal 2:  AGENT_RUNTIME=temporal go run . [prompt]
-//
-// # Caller-side reconnect protocol
-//
-//  1. On Stream start, save runID alongside your correlation key (conversationID, request ID, …).
-//  2. Track the offset of each received event: ev.(interface{ Offset() (int64, bool) }).
-//  3. On process restart, call agent.GetAgentStream(ctx, savedRunID), then Events(ctx, agent.WithOffset(savedOffset)).
-//  4. Events at offset ≤ savedOffset are skipped; resume normal handling from new events.
+// Caller-side reconnect protocol:
+//  1. On Stream start, save runID alongside your correlation key.
+//  2. Track Offset() on each received event.
+//  3. On restart: GetAgentStream(ctx, savedRunID), then Events(ctx, WithOffset(savedOffset)).
+//  4. Events at offset ≤ savedOffset may be redelivered; discard duplicates if needed.
 //  5. Clear the saved runID on RUN_FINISHED or RUN_ERROR.
 package main
 
@@ -39,9 +27,10 @@ import (
 	"time"
 
 	config "github.com/agenticenv/agent-sdk-go/examples"
-	"github.com/agenticenv/agent-sdk-go/examples/agent_with_reconnect/opts"
 	"github.com/agenticenv/agent-sdk-go/examples/shared"
 	"github.com/agenticenv/agent-sdk-go/pkg/agent"
+	"github.com/agenticenv/agent-sdk-go/pkg/tools/calculator"
+	"github.com/agenticenv/agent-sdk-go/pkg/tools/currenttime"
 )
 
 func main() {
@@ -52,11 +41,28 @@ func main() {
 		log.Fatalf("failed to create LLM client: %v", err)
 	}
 
-	// No DisableLocalWorker() — the embedded worker runs in this process.
-	// Cancelling the Events context only closes the subscriber channel; the
-	// Stream context / workflow keep running so GetAgentStream can replay.
-	agentOpts := opts.Common(cfg.Host, cfg.Port, cfg.Namespace, cfg.TaskQueue, llmClient, config.NewLoggerFromLogConfig(cfg))
-	a, err := agent.NewAgent(agentOpts...)
+	if !cfg.UseTemporalRuntime() && !cfg.UseRestateRuntime() {
+		log.Fatal("agent_with_reconnect requires AGENT_RUNTIME=temporal or AGENT_RUNTIME=restate")
+	}
+
+	reg := agent.NewToolRegistry()
+	if err := agent.RegisterTools(reg, currenttime.New(), calculator.New()); err != nil {
+		log.Fatalf("failed to register tools: %v", err)
+	}
+
+	opts := []agent.Option{
+		agent.WithName("reconnect-agent"),
+		agent.WithDescription("Agent that demonstrates durable stream reconnect"),
+		agent.WithSystemPrompt("You are a helpful assistant that can tell the time and do math. Keep responses short."),
+		agent.WithTimeout(5 * time.Minute),
+		agent.WithLLMClient(llmClient),
+		agent.WithToolRegistry(reg),
+		agent.WithToolApprovalPolicy(agent.AutoToolApprovalPolicy()),
+		agent.WithLogger(config.NewLoggerFromLogConfig(cfg)),
+	}
+	opts = append(opts, config.RuntimeOption(cfg)...)
+
+	a, err := agent.NewAgent(opts...)
 	if err != nil {
 		log.Fatal(config.FormatNewAgentError("failed to create agent", err))
 	}
@@ -71,8 +77,8 @@ func main() {
 
 	// --- Phase A: start the stream and consume up to the first text chunk, then cancel Events ---
 
-	// Stream ctx owns the agent run. Use Background (or a long-lived request ctx) so "simulate
-	// crash" does not CancelWorkflow. Events gets its own cancelable ctx (subscriber only).
+	// Stream ctx owns the agent run. Use Background so "simulate crash" does not cancel the run.
+	// Events gets its own cancelable ctx (subscriber only).
 	agentStream, err := a.Stream(context.Background(), prompt, nil)
 	if err != nil {
 		log.Fatalf("Stream failed: %v", err)
@@ -82,8 +88,7 @@ func main() {
 	eventsCtx, cancelEvents := context.WithCancel(context.Background())
 	defer cancelEvents()
 
-	// runID is available synchronously before any events arrive.
-	// Step 1: save it alongside your correlation key before consuming the channel.
+	// Step 1: save runID before consuming the channel.
 	eventCh, err := agentStream.Events(eventsCtx)
 	if err != nil {
 		log.Fatalf("stream events: %v", err)
@@ -100,9 +105,7 @@ func main() {
 			continue
 		}
 
-		// Step 2: track offset on every event via the promoted Offset() accessor.
-		// Only events from the Temporal stream carry a non-zero offset; synthetic events
-		// (RUN_STARTED, RUN_FINISHED) emitted client-side by TemporalRuntime return (0, false).
+		// Step 2: track offset on every event.
 		if ob, ok := ev.(interface{ Offset() (int64, bool) }); ok {
 			if off, has := ob.Offset(); has {
 				lastOffset = off
@@ -112,25 +115,25 @@ func main() {
 
 		printEvent(ev)
 
-		// Cancel Events ctx after the first text chunk — subscriber gone; workflow keeps running.
+		// Cancel Events after the first text chunk and leave Phase A immediately so Phase B
+		// can reconnect while the durable run is still live (do not wait for channel drain /
+		// RUN_FINISHED — that races short runs to "already completed").
 		if ev.Type() == agent.AgentEventTypeTextMessageContent && !seenFirstTextChunk {
 			seenFirstTextChunk = true
 			fmt.Printf("\n=== simulated crash: saved runID=%s lastOffset=%d ===\n\n", runID, lastOffset)
 			cancelEvents()
+			break
 		}
 	}
 
 	if !seenFirstTextChunk {
-		// Run finished before we could simulate a crash (very fast response / no text content).
-		// The full replay below still demonstrates the reconnect API.
 		fmt.Println("(run completed before simulated crash; demonstrating replay from offset 0)")
 		lastOffset = 0
 		lastOffsetSet = true
 	}
 
 	if !lastOffsetSet {
-		// LocalRuntime or no events with offsets — reconnect is unsupported.
-		fmt.Println("no stream offsets received; this runtime does not support reconnect (use AGENT_RUNTIME=temporal)")
+		fmt.Println("no stream offsets received; this runtime does not support reconnect (use AGENT_RUNTIME=temporal or restate)")
 		return
 	}
 
@@ -138,14 +141,10 @@ func main() {
 
 	fmt.Printf("=== process restart: reconnecting from offset %d ===\n\n", lastOffset)
 
-	// Step 3: call GetAgentStream with the saved runID, then Events with WithOffset.
-	// A fresh context is used here to represent the new process.
 	reconnectCtx, cancelReconnect := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancelReconnect()
 
-	// GetAgentStream resumes delivery from lastOffset, skipping already-consumed events.
-	// Passing lastOffset (not lastOffset+1) here means we may receive the last already-seen
-	// event once; callers can discard events at offset <= savedOffset if deduplication matters.
+	// Step 3: GetAgentStream + Events(WithOffset).
 	agentStream, err = a.GetAgentStream(reconnectCtx, runID)
 	if err != nil {
 		log.Fatalf("GetAgentStream failed: %v", err)
@@ -169,13 +168,11 @@ func main() {
 	fmt.Println("--- stream end ---")
 }
 
-// printEvent renders a single event to stdout.
 func printEvent(ev agent.AgentEvent) {
 	if ev == nil {
 		return
 	}
 
-	// Show offset when available so callers can see the values to persist.
 	offsetStr := ""
 	if ob, ok := ev.(interface{ Offset() (int64, bool) }); ok {
 		if off, has := ob.Offset(); has {

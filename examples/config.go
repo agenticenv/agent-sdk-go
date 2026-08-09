@@ -13,6 +13,8 @@ import (
 
 	"github.com/agenticenv/agent-sdk-go/internal/types"
 	"github.com/agenticenv/agent-sdk-go/pkg/agent"
+	agentrestate "github.com/agenticenv/agent-sdk-go/pkg/agent/runtime/restate"
+	agenttemporal "github.com/agenticenv/agent-sdk-go/pkg/agent/runtime/temporal"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/llm"
 	"github.com/agenticenv/agent-sdk-go/pkg/llm/anthropic"
@@ -53,16 +55,29 @@ type MCPSettings struct {
 	TimeoutSeconds int
 }
 
+// RestateSettings holds RESTATE_* environment values when AGENT_RUNTIME=restate.
+type RestateSettings struct {
+	IngressURL            string
+	AdminURL              string
+	AuthKey               string
+	EndpointListenAddress string
+	DeploymentURL         string
+}
+
 type Config struct {
-	// AgentRuntime is "local" (default) or "temporal", loaded from AGENT_RUNTIME.
-	// Use TemporalOption(cfg) in examples instead of hardcoding agent.WithTemporalConfig so
-	// the runtime can be toggled without removing Temporal env vars.
+	// AgentRuntime is "local" (default), "temporal", or "restate", loaded from AGENT_RUNTIME.
+	// Use RuntimeOption(cfg) in examples instead of hardcoding temporal.WithTemporalConfig /
+	// restate.WithRestateConfig so the runtime can be toggled without code changes.
 	AgentRuntime string
 
 	Host      string
 	Port      int
 	Namespace string
 	TaskQueue string
+
+	// Restate holds Restate ingress/endpoint settings when AGENT_RUNTIME=restate.
+	Restate RestateSettings
+
 	// LogEnable controls whether NewLoggerFromLogConfig returns a real logger (true) or NoopLogger (false).
 	LogEnable bool
 	LogLevel  string
@@ -193,7 +208,7 @@ func applyEnvFiles(defaultsPath, envPath string) {
 func defaultTaskQueue() string {
 	const base = "agent-sdk-go"
 	// Derive a stable per-example queue suffix from the first path segment after ".../examples/".
-	// This makes agent/worker pairs under the same example (e.g. durable_agent/agent, durable_agent/worker)
+	// This makes agent/worker pairs under the same example (e.g. durable_agent/temporal/agent, durable_agent/temporal/worker)
 	// share a queue while different examples do not collide when run in parallel.
 	suffix := ""
 	pcs := make([]uintptr, 16)
@@ -253,12 +268,19 @@ func LoadFromEnv() *Config {
 		Port:         getEnvInt("TEMPORAL_PORT", 7233),
 		Namespace:    getEnv("TEMPORAL_NAMESPACE", "default"),
 		TaskQueue:    defaultTaskQueue(),
-		LogEnable:    getEnvBool("LOG_ENABLE", false),
-		LogLevel:     getEnv("LOG_LEVEL", "error"),
-		Provider:     interfaces.LLMProvider(getEnv("LLM_PROVIDER", "openai")),
-		APIKey:       getEnv("LLM_APIKEY", ""),
-		Model:        getEnv("LLM_MODEL", "gpt-4o"),
-		BaseURL:      getEnv("LLM_BASEURL", ""),
+		Restate: RestateSettings{
+			IngressURL:            strings.TrimSpace(getEnv("RESTATE_INGRESS_URL", "http://localhost:8080")),
+			AdminURL:              strings.TrimSpace(getEnv("RESTATE_ADMIN_URL", "http://localhost:9070")),
+			AuthKey:               strings.TrimSpace(getEnv("RESTATE_AUTH_KEY", "")),
+			EndpointListenAddress: strings.TrimSpace(getEnv("RESTATE_ENDPOINT_LISTEN_ADDRESS", ":9080")),
+			DeploymentURL:         strings.TrimSpace(getEnv("RESTATE_DEPLOYMENT_URL", "")),
+		},
+		LogEnable: getEnvBool("LOG_ENABLE", false),
+		LogLevel:  getEnv("LOG_LEVEL", "error"),
+		Provider:  interfaces.LLMProvider(getEnv("LLM_PROVIDER", "openai")),
+		APIKey:    getEnv("LLM_APIKEY", ""),
+		Model:     getEnv("LLM_MODEL", "gpt-4o"),
+		BaseURL:   getEnv("LLM_BASEURL", ""),
 		MCP: MCPSettings{
 			Transport:         strings.TrimSpace(strings.ToLower(getEnv("MCP_TRANSPORT", ""))),
 			StreamableHTTPURL: strings.TrimSpace(getEnv("MCP_STREAMABLE_HTTP_URL", "")),
@@ -296,25 +318,52 @@ func (c *Config) UseTemporalRuntime() bool {
 	return c != nil && c.AgentRuntime == "temporal"
 }
 
-// RuntimeOption returns [agent.WithTemporalConfig] when AGENT_RUNTIME=temporal, or nil for
-// the local runtime. Spread into the options slice:
+// UseRestateRuntime reports whether AGENT_RUNTIME is set to "restate".
+func (c *Config) UseRestateRuntime() bool {
+	return c != nil && c.AgentRuntime == "restate"
+}
+
+// RuntimeOption returns a Temporal or Restate option when AGENT_RUNTIME selects that backend,
+// or nil for the local runtime. Spread into the options slice:
 //
 //	opts = append(opts, config.RuntimeOption(cfg)...)
 //
 // This keeps examples runtime-agnostic: toggle via AGENT_RUNTIME without touching code.
-// If you need to hard-code a specific runtime in a single example, skip this helper and
-// call [agent.WithTemporalConfig] (or nothing) directly.
+// Temporal uses [agenttemporal.WithTemporalConfig]; Restate uses [agentrestate.WithRestateConfig].
+// If you need to hard-code a specific runtime in a single example, skip this helper and call
+// those options (or nothing) directly.
 func RuntimeOption(cfg *Config) []agent.Option {
-	if cfg == nil || !cfg.UseTemporalRuntime() {
+	if cfg == nil {
 		return nil
 	}
-	return []agent.Option{
-		agent.WithTemporalConfig(&agent.TemporalConfig{
-			Host:      cfg.Host,
-			Port:      cfg.Port,
-			Namespace: cfg.Namespace,
-			TaskQueue: cfg.TaskQueue,
-		}),
+	switch {
+	case cfg.UseTemporalRuntime():
+		return []agent.Option{
+			agenttemporal.WithTemporalConfig(&agenttemporal.TemporalConfig{
+				Host:      cfg.Host,
+				Port:      cfg.Port,
+				Namespace: cfg.Namespace,
+				TaskQueue: cfg.TaskQueue,
+			}),
+		}
+	case cfg.UseRestateRuntime():
+		return []agent.Option{
+			agentrestate.WithRestateConfig(&agentrestate.RestateConfig{
+				Ingress: agentrestate.IngressConfig{
+					URL:     cfg.Restate.IngressURL,
+					AuthKey: cfg.Restate.AuthKey,
+				},
+				Endpoint: agentrestate.EndpointConfig{
+					ListenAddress: cfg.Restate.EndpointListenAddress,
+					AdminURL:      cfg.Restate.AdminURL,
+					DeploymentURL: cfg.Restate.DeploymentURL,
+				},
+				// Short-lived examples exit before delayed Clear can run.
+				EventLog: agentrestate.EventLogConfig{DisableClear: true},
+			}),
+		}
+	default:
+		return nil
 	}
 }
 

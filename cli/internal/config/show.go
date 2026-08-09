@@ -3,8 +3,8 @@ package config
 import "strings"
 
 // ForShow returns a copy of the effective merged config for `agctl config show`
-// (defaults→xdg→user-file→env→flags), with secrets redacted. Temporal is only
-// included when that runtime is selected; empty MCP is omitted.
+// (defaults→xdg→user-file→env→flags), with secrets redacted. Temporal/Restate
+// blocks are only included when that runtime is selected; empty MCP is omitted.
 func ForShow(cfg *Config) *Config {
 	if cfg == nil {
 		return &Config{}
@@ -19,6 +19,13 @@ func ForShow(cfg *Config) *Config {
 	if cfg.UseTemporalRuntime() && cfg.Temporal != nil {
 		t := *cfg.Temporal
 		out.Temporal = &t
+	}
+	if cfg.UseRestateRuntime() && cfg.Restate != nil {
+		r := *cfg.Restate
+		if strings.TrimSpace(r.AuthKey) != "" {
+			r.AuthKey = "***"
+		}
+		out.Restate = &r
 	}
 
 	if cfg.LLM != nil {

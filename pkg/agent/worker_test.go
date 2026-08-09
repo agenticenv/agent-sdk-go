@@ -26,10 +26,10 @@ func TestAgentWorker_Start_WhenRuntimeNotWorkerRuntime(t *testing.T) {
 		agentConfig: agentConfig{
 			Name:      "w",
 			logger:    logger.DefaultLogger("error"),
-			taskQueue: "tq",
 			LLMClient: testLLM(t),
 		},
-		runtime: rt,
+		runtime:   rt,
+		taskQueue: "tq",
 	}
 	err := aw.Start(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "WorkerRuntime") {
@@ -46,11 +46,11 @@ func TestAgentWorker_Start_Stop_WithWorkerRuntime(t *testing.T) {
 
 	aw := &AgentWorker{
 		agentConfig: agentConfig{
-			Name:      "w",
-			logger:    logger.DefaultLogger("error"),
-			taskQueue: "tq",
+			Name:   "w",
+			logger: logger.DefaultLogger("error"),
 		},
-		runtime: wr,
+		runtime:   wr,
+		taskQueue: "tq",
 	}
 	if err := aw.Start(context.Background()); err != nil {
 		t.Fatal(err)

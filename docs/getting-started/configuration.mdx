@@ -5,7 +5,7 @@ description: "Configure NewAgent options — runtime, LLM, streaming, approvals,
 
 Configure agents by passing functional options to [`NewAgent`](/getting-started/quickstart). The same options apply to [`NewAgentWorker`](/advanced/distributed-execution) when running a separate worker process.
 
-Key defaults: **in-process runtime** (no Temporal options), **5 max iterations**, **parallel tool execution**, **5-minute timeout** on interactive mode. All options can be overridden at construction time; per-run overrides use [`AgentRunOptions`](#per-run-options).
+Key defaults: **in-process runtime** (no Temporal or Restate options), **5 max iterations**, **parallel tool execution**, **5-minute timeout** on interactive mode. All options can be overridden at construction time; per-run overrides use [`AgentRunOptions`](#per-run-options).
 
 ```go
 a, err := agent.NewAgent(
@@ -16,13 +16,13 @@ a, err := agent.NewAgent(
 )
 ```
 
-A Temporal connection is **optional**. Omit Temporal options to use the in-process runtime; add `WithTemporalConfig` or `WithTemporalClient` for durable execution. All other options work identically on both runtimes.
+A durable runtime connection is **optional**. Omit Temporal and Restate options to use the in-process runtime; import `pkg/agent/runtime/temporal` or `pkg/agent/runtime/restate` and add the matching config option for durable execution. All other options work identically across runtimes.
 
 ## Core options
 
 | Option | Description |
 |---|---|
-| `WithName(name)` | Human-readable agent label — appears on results and events |
+| `WithName(name)` | Unique identity for this agent (letters, digits, `-`, `_`; max 64 chars). Two agents with the same name are treated as the same logical agent and will collide at runtime — always pick a distinct name per agent |
 | `WithDescription(desc)` | Agent description — used in A2A agent card |
 | `WithSystemPrompt(prompt)` | System message prepended to every LLM call |
 | `WithLLMClient(client)` | LLM client — **required**. See [LLM Providers](/getting-started/llm-providers) |
@@ -35,28 +35,48 @@ A Temporal connection is **optional**. Omit Temporal options to use the in-proce
 
 | Option | Description |
 |---|---|
-| `WithTemporalConfig(cfg)` | Simple Temporal connection — host, port, namespace, task queue. Agent manages client lifecycle |
-| `WithTemporalClient(tc, taskQueue)` | Pre-built Temporal client — use for TLS, API keys, Temporal Cloud. You own the client lifecycle. Mutually exclusive with `WithTemporalConfig` |
-| `WithInstanceId(id)` | Distinguish multiple agents on the same base task queue. See [Multiple Agents](/advanced/multiple-agents) |
+| `temporal.WithTemporalConfig(cfg)` | Simple Temporal connection — host, port, namespace, task queue. Agent manages client lifecycle |
+| `temporal.WithTemporalClient(tc, taskQueue)` | Pre-built Temporal client — use for TLS, API keys, Temporal Cloud. You own the client lifecycle. Mutually exclusive with `WithTemporalConfig` |
+| `restate.WithRestateConfig(cfg)` | Restate ingress + embedded SDK endpoint. Mutually exclusive with Temporal options |
 | `WithAgentMode(mode)` | `AgentModeInteractive` (default, 5 min timeout, worker precheck) or `AgentModeAutonomous` (60 min timeout, skips worker precheck) |
-| `DisableLocalWorker()` | Agent process does not poll the task queue — pair with `NewAgentWorker` in a separate process |
+| `DisableLocalWorker()` | Temporal — agent process does not poll the task queue; pair with `NewAgentWorker` |
 | `WithDisableFingerprintCheck(disable)` | Skip agent config fingerprint check — break-glass option, not for production use |
 
-See [Runtimes](/runtimes/overview) and [Temporal runtime](/runtimes/temporal) for connection details.
+See [Runtimes](/runtimes/overview), [Temporal runtime](/runtimes/temporal), and [Restate runtime](/runtimes/restate) for connection details.
+
+<Warning>
+Provide **either** Temporal options **or** `restate.WithRestateConfig`, not both.
+</Warning>
 
 ### TemporalConfig fields
 
 ```go
-agent.WithTemporalConfig(&agent.TemporalConfig{
+temporal.WithTemporalConfig(&temporal.TemporalConfig{
     Host:      "localhost",
     Port:      7233,        // default Temporal gRPC port
     Namespace: "default",
-    TaskQueue: "my-app",   // must be unique per agent type
+    TaskQueue: "my-app",
+})
+```
+
+### RestateConfig fields
+
+```go
+restate.WithRestateConfig(&restate.RestateConfig{
+    Ingress: restate.IngressConfig{
+        URL:     "http://localhost:8080", // required
+        AuthKey: "",                      // optional (Restate Cloud)
+    },
+    Endpoint: restate.EndpointConfig{
+        ListenAddress: ":9080",                 // default
+        AdminURL:      "http://localhost:9070", // optional auto-register
+        DeploymentURL: "",                      // override when Restate is in Docker
+    },
 })
 ```
 
 <Note>
-`TaskQueue` must be unique per agent type. If you run multiple distinct agents (e.g. a math agent and a research agent), give each its own task queue. For multiple instances of the **same** agent (e.g. scaled pods), use `WithInstanceId` — each instance derives its queue as `{TaskQueue}-{InstanceId}`.
+Restate embeds the SDK endpoint in `NewAgent`. When Restate runs in Docker and the agent on the host, set `DeploymentURL` to something Restate can reach (e.g. `http://host.docker.internal:9080`). See [Restate runtime](/runtimes/restate) and [restate-setup.md](https://github.com/agenticenv/agent-sdk-go/blob/main/restate-setup.md).
 </Note>
 
 ## Execution options

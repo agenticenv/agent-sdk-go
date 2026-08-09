@@ -3,6 +3,10 @@ title: "Agent Worker"
 description: "Split the agent client and Temporal worker into separate processes using DisableLocalWorker and NewAgentWorker"
 ---
 
+<Note>
+**Temporal runtime.** `NewAgentWorker` and `DisableLocalWorker` apply to the [Temporal runtime](/runtimes/temporal). For Restate durability labs, see [Durable Agent (Restate)](/examples/durable-agent-restate).
+</Note>
+
 Minimal **agent + worker** split: worker polls the task queue; agent process starts runs with `DisableLocalWorker`.
 
 Source: [`examples/agent_with_worker/`](https://github.com/agenticenv/agent-sdk-go/tree/main/examples/agent_with_worker)
@@ -28,7 +32,7 @@ AGENT_RUNTIME=temporal go run ./agent_with_worker/worker
 AGENT_RUNTIME=temporal go run ./agent_with_worker/agent "Hello from remote agent!"
 ```
 
-For interactive durability scenarios (kill/restart), see [Durable Agent](/examples/durable-agent).
+For interactive durability scenarios (kill/restart), see [Durable Agent (Temporal)](/examples/durable-agent).
 
 ## Key code
 
@@ -38,7 +42,7 @@ For interactive durability scenarios (kill/restart), see [Durable Agent](/exampl
 w, err := agent.NewAgentWorker(
     agent.WithName("agent-worker"),
     agent.WithLLMClient(llmClient),
-    agent.WithTemporalConfig(temporalCfg),
+    temporal.WithTemporalConfig(temporalCfg),
 )
 w.Start()
 ```
@@ -49,7 +53,7 @@ w.Start()
 a, err := agent.NewAgent(
     agent.WithName("agent-worker"),
     agent.WithLLMClient(llmClient),
-    agent.WithTemporalConfig(temporalCfg),
+    temporal.WithTemporalConfig(temporalCfg),
     agent.DisableLocalWorker(),
 )
 // runID is available synchronously — persist for GetAgentStream before consuming events.
@@ -82,7 +86,7 @@ See [Distributed Execution](/advanced/distributed-execution) and [Temporal Runti
     Production split-process guide
   </Card>
 
-  <Card title="Durable Agent" icon="shield" href="/examples/durable-agent" horizontal>
+  <Card title="Durable Agent (Temporal)" icon="shield" href="/examples/durable-agent" horizontal>
     Advanced durability scenarios
   </Card>
 </CardGroup>

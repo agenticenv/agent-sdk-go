@@ -143,7 +143,6 @@ func TestBuildTemporalRuntime_RequiresTemporalOrClient(t *testing.T) {
 	// Neither WithTemporalConfig nor WithTemporalClient: must fail fast without dialing a server.
 	options := []Option{
 		WithLogger(logger.NoopLogger()),
-		WithInstanceId("test"),
 		WithRemoteWorker(false),
 		WithPolicyFingerprint("test"),
 		WithMCPFingerprint("test"),
@@ -171,19 +170,18 @@ func TestBuildTemporalRuntime_RequiresLLMClient(t *testing.T) {
 	}
 }
 
-func TestBuildTemporalRuntime_InstanceIdSuffix(t *testing.T) {
+func TestBuildTemporalRuntime_AgentNameSuffix(t *testing.T) {
 	tc := temporalmocks.NewClient(t)
 	rt, err := buildTemporalRuntime(
 		WithTemporalClient(tc, "myq"),
-		WithInstanceId("pod1"),
 		WithLogger(logger.NoopLogger()),
-		WithAgentSpec(sdkruntime.AgentSpec{Name: "x"}),
+		WithAgentSpec(sdkruntime.AgentSpec{Name: "pod1"}),
 		WithAgentConfig(sdkruntime.AgentConfig{LLM: sdkruntime.AgentLLM{Client: stubLLM{}}}),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rt.taskQueue != "myq-pod1" {
-		t.Fatalf("taskQueue = %q, want myq-pod1", rt.taskQueue)
+	if rt.taskQueue != "myq_pod1" {
+		t.Fatalf("taskQueue = %q, want myq_pod1", rt.taskQueue)
 	}
 }

@@ -16,7 +16,6 @@ import (
 	ifacemocks "github.com/agenticenv/agent-sdk-go/pkg/interfaces/mocks"
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
 	"github.com/agenticenv/agent-sdk-go/pkg/observability"
-	temporalmocks "go.temporal.io/sdk/mocks"
 )
 
 func testAgentWithRuntime(rt runtime.Runtime) *Agent {
@@ -332,10 +331,12 @@ func TestBuildSubAgentSpecs_noRuntimeStillBuilds(t *testing.T) {
 // plain Temporal client (see internal/runtime/temporal Stream), which has no
 // dependency on whether the agent process itself embeds a worker.
 func TestBuildAgent_DisableLocalWorker_Succeeds(t *testing.T) {
-	tc := temporalmocks.NewClient(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	mockRT := rtmocks.NewMockRuntime(ctrl)
 	a, err := buildAgent([]Option{
 		WithName("x"),
-		WithTemporalClient(tc, "q"),
+		withRuntimeFactory(&stubTemporalFactory{queue: "q", rt: mockRT}),
 		WithLLMClient(testLLM(t)),
 		DisableLocalWorker(),
 	})
@@ -344,6 +345,9 @@ func TestBuildAgent_DisableLocalWorker_Succeeds(t *testing.T) {
 	}
 	if a == nil {
 		t.Fatal("expected non-nil agent")
+	}
+	if a.localAgentWorker != nil {
+		t.Fatal("expected no embedded worker when DisableLocalWorker is set")
 	}
 }
 
@@ -449,7 +453,7 @@ func TestAgent_RegistryAccessors(t *testing.T) {
 	mcpReg := NewMCPRegistry(nil)
 	a2aReg := NewA2ARegistry(nil)
 	subReg := NewSubAgentRegistry()
-	child := &Agent{agentConfig: agentConfig{Name: "Child", taskQueue: "q-child"}}
+	child := &Agent{agentConfig: agentConfig{Name: "Child"}}
 	mustTestRegistries(t, &child.agentConfig)
 	if err := subReg.Register(child); err != nil {
 		t.Fatal(err)

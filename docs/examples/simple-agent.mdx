@@ -3,7 +3,7 @@ title: "Simple Agent"
 description: "Run a minimal agent with Run() using the in-process runtime and no extra setup"
 ---
 
-Minimal agent with a system prompt, LLM client, and a single blocking `Run()`. Use this to verify your LLM credentials and SDK install before adding tools or Temporal.
+Minimal agent with a system prompt, LLM client, and a single blocking `Run()`. Use this to verify your LLM credentials and SDK install before adding tools or a durable runtime.
 
 Source: [`examples/simple_agent/`](https://github.com/agenticenv/agent-sdk-go/tree/main/examples/simple_agent)
 
@@ -31,7 +31,7 @@ a, err := agent.NewAgent(
     agent.WithName("simple-agent"),
     agent.WithSystemPrompt("You are a helpful assistant that can generate text."),
     agent.WithLLMClient(llmClient),
-    // config.RuntimeOption(cfg) adds WithTemporalConfig when AGENT_RUNTIME=temporal
+    // config.RuntimeOption(cfg) adds Temporal or Restate options when AGENT_RUNTIME is set
 )
 if err != nil {
     log.Fatal(err)

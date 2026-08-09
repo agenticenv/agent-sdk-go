@@ -1,26 +1,27 @@
 ---
-title: "Durable Agent"
+title: "Durable Agent (Temporal)"
+sidebarTitle: "Durable Agent (Temporal)"
 description: "Test Temporal durability with worker crashes, process restarts, and mid-run recovery scenarios"
 ---
 
-The **`durable_agent`** example is an interactive **lab**, not a minimal hello-world. It runs the agent client and Temporal worker in **separate processes**, streams events over the workflow's event stream, and includes a REPL so you can deliberately break things — kill workers, crash processes, miss approvals — and observe how Temporal and the SDK behave.
+The **`durable_agent/temporal`** example is an interactive **Temporal lab**, not a minimal hello-world. It runs the agent client and Temporal worker in **separate processes**, streams events over the workflow's event stream, and includes a REPL so you can deliberately break things — kill workers, crash processes, miss approvals — and observe how Temporal and the SDK behave.
 
-Use it after [Agent Worker](/examples/agent-worker) when you need to **feel** durability guarantees, not just read about them.
+Use it after [Agent Worker](/examples/agent-worker) when you need to **feel** durability guarantees. For the single-process Restate lab, see [Durable Agent (Restate)](/examples/durable-agent-restate).
 
-Source: [`examples/durable_agent/`](https://github.com/agenticenv/agent-sdk-go/tree/main/examples/durable_agent)
+Source: [`examples/durable_agent/temporal/`](https://github.com/agenticenv/agent-sdk-go/tree/main/examples/durable_agent/temporal)
 
 <Note>
-For hands-on step-by-step exercises, follow **[`examples/durable_agent/README.md`](https://github.com/agenticenv/agent-sdk-go/blob/main/examples/durable_agent/README.md)**.
+For hands-on step-by-step exercises, follow **[`examples/durable_agent/temporal/README.md`](https://github.com/agenticenv/agent-sdk-go/blob/main/examples/durable_agent/temporal/README.md)**.
 </Note>
 
 ## Architecture
 
 | Process | Entry | SDK pattern |
 |---|---|---|
-| **Worker** | `durable_agent/worker` | `NewAgentWorker` — polls task queue `agent-sdk-go-durable-agent` (default), executes workflows and activities |
-| **Agent (client)** | `durable_agent/agent` | `NewAgent` with `DisableLocalWorker` — starts runs, consumes stream |
+| **Worker** | `durable_agent/temporal/worker` | `NewAgentWorker` — polls the Temporal task queue and executes workflows and activities |
+| **Agent (client)** | `durable_agent/temporal/agent` | `NewAgent` with `DisableLocalWorker` — starts runs, consumes stream |
 
-Both processes share the same agent options from `durable_agent/opts/opts.go` so the SDK **fingerprint** matches — name, LLM client, tools, approval policy, etc.
+Both processes share the same agent options from `durable_agent/temporal/opts/opts.go` so the SDK **fingerprint** matches — name, LLM client, tools, approval policy, etc.
 
 The agent uses **`Stream`**. The REPL prints event types as they arrive:
 
@@ -31,7 +32,7 @@ The agent uses **`Stream`**. The REPL prints event types as they arrive:
 
 Events are delivered by the runtime as a durable ordered stream. Each event carries a monotonic offset.
 
-The example persists `runID` and the last event offset to `/tmp/durable_agent_runstate.json` on every event. Kill the agent mid-stream with `pkill -SIGKILL` and restart — the REPL detects the saved state, asks whether to reconnect, and resumes via `GetAgentStream` + `WithOffset` from the exact offset. See the [README](https://github.com/agenticenv/agent-sdk-go/blob/main/examples/durable_agent/README.md) and [Durable Execution](/advanced/durable-execution) for the full protocol.
+The example persists `runID` and the last event offset to `/tmp/durable_agent_temporal_runstate.json` on every event. Kill the agent mid-stream with `pkill -SIGKILL` and restart — the REPL detects the saved state, asks whether to reconnect, and resumes via `GetAgentStream` + `WithOffset` from the exact offset. See the [README](https://github.com/agenticenv/agent-sdk-go/blob/main/examples/durable_agent/temporal/README.md) and [Durable Execution](/advanced/durable-execution) for the full protocol.
 
 ## Before you start
 
@@ -56,7 +57,7 @@ task infra:temporal:up && task infra:temporal:wait
 ```
 
 <Note>
-With the local Docker dev server, open [http://localhost:8233](http://localhost:8233) (**Temporal Web UI**) while the worker and agent run. Inspect workflows and activities in namespace `default` on task queue `agent-sdk-go-durable-agent`. Helpful when stepping through the scenarios below.
+With the local Docker dev server, open [http://localhost:8233](http://localhost:8233) (**Temporal Web UI**) while the worker and agent run. Inspect workflows and activities in namespace `default`. Helpful when stepping through the scenarios below.
 </Note>
 
 Stop Temporal when finished:
@@ -69,7 +70,7 @@ task infra:temporal:down
 |---|---|
 | **Start the worker before typing a prompt** | Interactive mode checks for available workers at **prompt submission**, not at agent startup |
 | **Worker poller check: ~15 seconds** | `AgentModeInteractive` — fails fast if no worker polls the queue before the stream starts |
-| **Run timeout in this example: 3 minutes** | Set in `durable_agent/opts/opts.go` via `WithTimeout(3 * time.Minute)` |
+| **Run timeout in this example: 3 minutes** | Set in `durable_agent/temporal/opts/opts.go` via `WithTimeout(3 * time.Minute)` |
 | **Autonomous mode skips worker pre-check** | `AgentModeAutonomous` queues in Temporal until a worker appears — different failure mode on misconfig |
 
 Minimal smoke test (from `examples/`):
@@ -77,26 +78,26 @@ Minimal smoke test (from `examples/`):
 **Terminal 1 — worker:**
 
 ```bash
-go run ./durable_agent/worker
+go run ./durable_agent/temporal/worker
 ```
 
 **Terminal 2 — agent REPL:**
 
 ```bash
-go run ./durable_agent/agent
+go run ./durable_agent/temporal/agent
 ```
 
 One-shot (no REPL):
 
 ```bash
-go run ./durable_agent/agent "Hello from remote agent!"`
+go run ./durable_agent/temporal/agent "Hello from remote agent!"`
 ```
 
-Type `exit`, `quit`, or `bye` to leave the REPL. For hands-on scenarios, see the [README](https://github.com/agenticenv/agent-sdk-go/blob/main/examples/durable_agent/README.md).
+Type `exit`, `quit`, or `bye` to leave the REPL. For hands-on scenarios, see the [README](https://github.com/agenticenv/agent-sdk-go/blob/main/examples/durable_agent/temporal/README.md).
 
 ## Durability scenarios
 
-Each scenario below lists **what to try** and **what you should learn**. Step-by-step instructions: [README](https://github.com/agenticenv/agent-sdk-go/blob/main/examples/durable_agent/README.md).
+Each scenario below lists **what to try** and **what you should learn**. Step-by-step instructions: [README](https://github.com/agenticenv/agent-sdk-go/blob/main/examples/durable_agent/temporal/README.md).
 
 ### 1. Baseline — worker first
 
@@ -109,7 +110,7 @@ Start worker, then agent, send `Hello from remote agent!`.
 Start agent **with no worker**, send a prompt. With no pollers on the task queue, the SDK checks Temporal before starting the stream (~**15 seconds**). Typical error:
 
 ```text
-[error] failed to start stream: no workers available on task queue agent-sdk-go-durable-agent
+[error] failed to start stream: no workers available on task queue agent-sdk-go-durable-agent_remote-worker
 ```
 
 If a worker **was** running recently, Temporal may still list stale pollers briefly — the stream can start, the workflow queues, and you hit the run timeout instead (**3 minutes**): `[error] request timed out (approval expired or deadline exceeded)`.
@@ -122,7 +123,7 @@ Then start the worker and **resend** the same prompt — run succeeds.
 
 **3a — Graceful stop:** Complete a run, Ctrl+C worker, restart worker, send another prompt.
 
-**3b — Crash:** Complete a run, kill the worker (`pkill -f 'go run ./durable_agent/worker|go-build/.*/worker'`), restart worker, send another prompt.
+**3b — Crash:** Complete a run, kill the worker (`pkill -f 'go run ./durable_agent/temporal/worker|go-build/.*/worker'`), restart worker, send another prompt.
 
 **Learn:** Planned or crash worker shutdown **between runs** does not lose completed work. Temporal history already recorded finished activities; the restarted worker does not re-execute them.
 
@@ -140,15 +141,15 @@ Send a long prompt (e.g. 7-day Japan travel plan). While tokens stream, stop the
 
 **5a — Graceful agent exit:** Finish a run, type `bye`, restart agent, new prompt works against same worker.
 
-**5b — Agent crash between runs:** Kill the agent (`pkill -f 'go run ./durable_agent/agent|go-build/.*/agent'`) after a completed run; worker keeps polling; new agent process connects and runs immediately.
+**5b — Agent crash between runs:** Kill the agent (`pkill -f 'go run ./durable_agent/temporal/agent|go-build/.*/agent'`) after a completed run; worker keeps polling; new agent process connects and runs immediately.
 
-**5c — Agent crash mid-LLM call:** Kill the agent while tokens stream (`pkill -f 'go run ./durable_agent/agent|go-build/.*/agent'`); **worker completes the run in Temporal** even though the user saw nothing. Restart agent — follow-up prompt has **no conversation memory** in this example (no `WithConversation` wired).
+**5c — Agent crash mid-LLM call:** Kill the agent while tokens stream (`pkill -f 'go run ./durable_agent/temporal/agent|go-build/.*/agent'`); **worker completes the run in Temporal** even though the user saw nothing. Restart agent — follow-up prompt has **no conversation memory** in this example (no `WithConversation` wired).
 
 **Learn:** Worker survives agent death; work can finish server-side. **This example does not persist chat history** — a follow-up like "What was the first destination?" gets no context. For production UIs where users expect continuity after reconnect, see [Agent Chat](/reference-apps/agent-chat) (Postgres + SSE + durable workflows).
 
 ### 6. Two workers, one queue
 
-Run two `durable_agent/worker` processes on the same task queue. Send prompts; stop one worker after a reply or during a long prompt while the other keeps polling; send another prompt.
+Run two `durable_agent/temporal/worker` processes on the same task queue. Send prompts; stop one worker after a reply or during a long prompt while the other keeps polling; send another prompt.
 
 **Learn:** Temporal load-balances across workers. Losing one worker mid-session does not drop an in-flight run if another worker polls the same queue.
 
@@ -157,12 +158,12 @@ Run two `durable_agent/worker` processes on the same task queue. Send prompts; s
 Point the **worker** at a different queue via env while the agent keeps the default from `.env` (see README — stop workers on the default queue first):
 
 ```bash
-TEMPORAL_TASKQUEUE=wrong-queue-durable-agent go run ./durable_agent/worker
+TEMPORAL_TASKQUEUE=wrong-queue-durable-agent go run ./durable_agent/temporal/worker
 ```
 
 Send a prompt from the agent. Outcome depends on timing (same as scenario 2):
 
-- **Typical:** `[error] failed to start stream: no workers available on task queue agent-sdk-go-durable-agent` (~15s poller check).
+- **Typical:** `[error] failed to start stream: no workers available on task queue agent-sdk-go-durable-agent_remote-worker` (~15s poller check).
 - **Stale pollers on the agent queue:** stream may start, then `[error] request timed out (approval expired or deadline exceeded)` after **3 minutes**.
 
 **Learn:** Misconfiguration surfaces clearly — not silent corruption. Restart both processes with matching `TEMPORAL_TASKQUEUE` (or remove the override).

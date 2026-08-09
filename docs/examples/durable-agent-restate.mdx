@@ -1,0 +1,79 @@
+---
+title: "Durable Agent (Restate)"
+sidebarTitle: "Durable Agent (Restate)"
+description: "Test Restate durability with a single agent process — kill mid-stream and reconnect from a saved offset"
+---
+
+The **`durable_agent/restate`** example is an interactive **Restate lab**. One process embeds the Restate SDK endpoint. Kill the agent mid-stream, keep Restate running, restart, and reconnect with `GetAgentStream` + `WithOffset`.
+
+Use it after [Restate runtime](/runtimes/restate) when you need to **feel** Restate durability. For the Temporal split worker/agent lab, see [Durable Agent (Temporal)](/examples/durable-agent).
+
+Source: [`examples/durable_agent/restate/`](https://github.com/agenticenv/agent-sdk-go/tree/main/examples/durable_agent/restate)
+
+<Note>
+Step-by-step exercises: **[`examples/durable_agent/restate/README.md`](https://github.com/agenticenv/agent-sdk-go/blob/main/examples/durable_agent/restate/README.md)**.
+</Note>
+
+## Architecture
+
+| Process | Entry | SDK pattern |
+|---|---|---|
+| **Agent** | `durable_agent/restate` | `NewAgent` + `restate.WithRestateConfig` — embedded SDK endpoint |
+| **Restate server** | `task infra:restate:up` | Ingress + journal; calls back into the endpoint |
+
+Streaming and reconnect use the same public APIs as Temporal (`GetAgentStream` + `WithOffset`, `GetAgentRun`).
+
+State file: `/tmp/durable_agent_restate_runstate.json`.
+
+## Before you start
+
+From **`examples/`**, after [Configuration](/examples/configuration):
+
+```bash
+AGENT_RUNTIME=restate
+RESTATE_INGRESS_URL=http://localhost:8080
+RESTATE_ADMIN_URL=http://localhost:9070
+RESTATE_ENDPOINT_LISTEN_ADDRESS=:9080
+# RESTATE_DEPLOYMENT_URL=http://host.docker.internal:9080  # if Restate is in Docker
+```
+
+```bash
+task infra:restate:up && task infra:restate:wait
+go run ./durable_agent/restate
+```
+
+Admin UI: http://localhost:9070. Full local notes: [restate-setup.md](https://github.com/agenticenv/agent-sdk-go/blob/main/restate-setup.md).
+
+## Durability scenarios
+
+| Scenario | What to try | What you learn |
+|---|---|---|
+| **1. Happy path** | REPL + short prompt | End-to-end Restate stream |
+| **2. Kill mid-stream** | `pkill` during a long prompt; restart; answer `y` to reconnect | `GetAgentStream` + `WithOffset` while invocation is live |
+| **3. Graceful Ctrl+C** | Stop and restart while Restate still has the run | Same reconnect path |
+| **4. Already finished** | Restart after completion | `ErrRunAlreadyCompleted` — start a new turn |
+| **5. Restate down** | Stop Restate, run agent | Clear connect/start failure |
+| **6. Docker callback** | Set `RESTATE_DEPLOYMENT_URL` | Host endpoint reachable from containerized Restate |
+
+Full steps: [README](https://github.com/agenticenv/agent-sdk-go/blob/main/examples/durable_agent/restate/README.md). Protocol details: [Durable Execution](/advanced/durable-execution).
+
+## Learn more
+
+<CardGroup cols={2}>
+
+  <Card title="Durable Execution" icon="shield-check" href="/advanced/durable-execution" horizontal>
+    Shared reconnect protocol (Temporal and Restate)
+  </Card>
+
+  <Card title="Restate Runtime" icon="cube" href="/runtimes/restate" horizontal>
+    Ingress, embedded endpoint, streaming
+  </Card>
+
+  <Card title="Durable Agent (Temporal)" icon="server" href="/examples/durable-agent" horizontal>
+    Split worker/agent crash lab
+  </Card>
+
+  <Card title="Reconnect Example" icon="rotate" href="/examples/reconnect" horizontal>
+    Focused GetAgentStream demo (Temporal binary)
+  </Card>
+</CardGroup>
