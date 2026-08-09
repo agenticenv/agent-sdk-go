@@ -100,6 +100,34 @@ tasks:
         echo "❌ Temporal not ready after 60s"
         exit 1
 
+  infra:restate:up:
+    desc: Start Restate
+    deps: [prereq:check]
+    cmds:
+      - docker compose -f docker/docker-compose.yml up -d --wait restate
+
+  infra:restate:down:
+    desc: Stop Restate
+    deps: [prereq:check]
+    cmds:
+      - docker compose -f docker/docker-compose.yml down restate
+
+  infra:restate:wait:
+    desc: Wait for Restate admin API to be ready (port 9070)
+    deps: [prereq:check]
+    cmds:
+      - echo "⏳ waiting for Restate..."
+      - |
+        for i in $(seq 1 30); do
+          if curl -sf http://localhost:9070/health > /dev/null 2>&1; then
+            echo "✅ Restate ready"
+            exit 0
+          fi
+          sleep 2
+        done
+        echo "❌ Restate not ready after 60s"
+        exit 1
+
   infra:lgtm:up:
     desc: Start LGTM (OpenTelemetry collector)
     deps: [prereq:check]
@@ -189,7 +217,9 @@ tasks:
         fi
         mkdir -p "{{.TASKFILE_DIR}}/logs"
         echo "🚀 Starting A2A server..."
-        go run ./agent_with_a2a_server >> "{{.TASKFILE_DIR}}/logs/a2a-server.log" 2>&1 &
+        # Run the agent with the local runtime only
+        # or else restate linsting port conflicts with the other examples.
+        AGENT_RUNTIME=local go run ./agent_with_a2a_server >> "{{.TASKFILE_DIR}}/logs/a2a-server.log" 2>&1 &
         printf '%s\n' "$!" > "{{.A2A_PID_FILE}}"
       - task: infra:a2a:wait
 

@@ -1,20 +1,17 @@
-// Interactive streaming REPL for the durable_agent example.
+// Interactive streaming REPL for the durable_agent Restate lab.
 //
-// Usage:
+// Usage (from examples/):
 //
-//	go run . [initial prompt]
+//	go run ./durable_agent/restate [initial prompt]
 //
-// Streams events delivered via Temporal Workflow Streams, so each run has a
-// durable event log hosted in the Temporal server. Kill the worker or this
-// process mid-run, then restart to observe workflow replay and recovery.
+// Single process: NewAgent embeds the Restate SDK endpoint (no NewAgentWorker).
+// Events are durable via Restate PubSub. Kill this process mid-run, keep Restate
+// up, then restart to reconnect with GetAgentStream + WithOffset.
 //
-// GetAgentStream support: on startup the agent checks for a saved run state
-// (runID + last offset) in /tmp/durable_agent_runstate.json. If one exists it
-// asks whether to reconnect from the last known offset. This demonstrates the
-// full crash-and-recover cycle without any extra infrastructure.
+// On startup the agent checks /tmp/durable_agent_restate_runstate.json for a
+// saved runID + offset and offers reconnect.
 //
-// At the "you>" prompt type any message. Approval requests pause the stream
-// and ask for y/n before continuing.  Type "exit" or "quit" to stop.
+// At the "you>" prompt type any message. Type "exit" or "quit" to stop.
 package main
 
 import (
@@ -29,16 +26,17 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	config "github.com/agenticenv/agent-sdk-go/examples"
-	"github.com/agenticenv/agent-sdk-go/examples/durable_agent/opts"
 	"github.com/agenticenv/agent-sdk-go/examples/shared"
 	"github.com/agenticenv/agent-sdk-go/pkg/agent"
+	agentrestate "github.com/agenticenv/agent-sdk-go/pkg/agent/runtime/restate"
 )
 
 // stateFile is where the agent persists runID + offset between process restarts.
 // Use /tmp so it is easy to locate and does not pollute the repo.
-const stateFile = "/tmp/durable_agent_runstate.json"
+const stateFile = "/tmp/durable_agent_restate_runstate.json"
 
 // runState holds the mid-stream position that survives a process crash.
 type runState struct {
@@ -87,12 +85,27 @@ func main() {
 		log.Fatalf("failed to create LLM client: %v", err)
 	}
 
-	baseOpts := opts.Common(cfg.Host, cfg.Port, cfg.Namespace, cfg.TaskQueue, llmClient, config.NewLoggerFromLogConfig(cfg))
-	agentOpts := append(baseOpts,
-		agent.DisableLocalWorker(),
+	a, err := agent.NewAgent(
+		agent.WithName("restate-durable-agent"),
+		agent.WithDescription("Single-process durable agent on Restate (embedded SDK endpoint)"),
+		agent.WithSystemPrompt("You are a helpful assistant."),
+		agent.WithTimeout(3*time.Minute),
+		agent.WithLLMClient(llmClient),
+		agent.WithLogger(config.NewLoggerFromLogConfig(cfg)),
+		agentrestate.WithRestateConfig(&agentrestate.RestateConfig{
+			Ingress: agentrestate.IngressConfig{
+				URL:     cfg.Restate.IngressURL,
+				AuthKey: cfg.Restate.AuthKey,
+			},
+			Endpoint: agentrestate.EndpointConfig{
+				ListenAddress: cfg.Restate.EndpointListenAddress,
+				AdminURL:      cfg.Restate.AdminURL,
+				DeploymentURL: cfg.Restate.DeploymentURL,
+			},
+			// Example process may exit before delayed Clear can run.
+			EventLog: agentrestate.EventLogConfig{DisableClear: true},
+		}),
 	)
-
-	a, err := agent.NewAgent(agentOpts...)
 	if err != nil {
 		log.Fatal(config.FormatNewAgentError("failed to create agent", err))
 	}
@@ -118,7 +131,7 @@ func main() {
 		}()
 		select {
 		case <-done:
-			fmt.Println("durable_agent stopped.")
+			fmt.Println("durable_agent/restate stopped.")
 			os.Exit(0)
 		case <-sigChan:
 			fmt.Println("Second signal: forcing exit.")
@@ -126,11 +139,23 @@ func main() {
 		}
 	}()
 
-	fmt.Println("=== durable_agent interactive stream ===")
-	fmt.Println("Events are delivered via Temporal Workflow Streams (durable, replayable).")
-	fmt.Println("Kill this process mid-stream (Ctrl+C / pkill), then restart to reconnect.")
-	fmt.Println("Type 'exit' or 'quit' or 'bye' to stop.")
+	// Task batch (examples:*) sets EXAMPLES_AUTO_APPROVE; manual go run leaves it unset.
+	batch := strings.EqualFold(strings.TrimSpace(os.Getenv("EXAMPLES_AUTO_APPROVE")), "true")
+
+	fmt.Println("=== durable_agent/restate interactive stream ===")
+	fmt.Println("Events are durable via Restate (embedded SDK endpoint).")
+	if batch {
+		fmt.Println("Batch mode: one-shot stream (no REPL).")
+	} else {
+		fmt.Println("Kill this process mid-stream (Ctrl+C / pkill), keep Restate up, then restart to reconnect.")
+		fmt.Println("Type 'exit' or 'quit' or 'bye' to stop.")
+	}
 	fmt.Println()
+
+	// Batch: skip leftover reconnect prompts so task runs never block on y/n.
+	if batch {
+		clearRunState()
+	}
 
 	scanner := bufio.NewScanner(os.Stdin)
 
@@ -156,6 +181,11 @@ func main() {
 	initial := strings.Join(os.Args[1:], " ")
 	if initial != "" {
 		runStream(ctx, a, scanner, initial)
+	}
+
+	// Batch + CLI prompt: exit after the one-shot run (stdin is still a TTY under task).
+	if batch {
+		return
 	}
 
 	for {

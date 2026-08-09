@@ -20,8 +20,9 @@
 #   agctl chat
 #   agctl run --prompt "Hello"
 
-# Runtime: local (default) or temporal.
+# Runtime: local (default), temporal, or restate.
 # Override: AGCTL_RUNTIME=temporal agctl chat
+#           AGCTL_RUNTIME=restate agctl chat
 runtime: local
 
 # Agent identity (AGCTL_NAME / AGCTL_SYSTEM_PROMPT)
@@ -36,6 +37,16 @@ system_prompt: "You are a helpful agent. Use the tools available to you whenever
 #   port: 7233            # AGCTL_TEMPORAL_PORT
 #   namespace: default     # AGCTL_TEMPORAL_NAMESPACE
 #   taskQueue: agent-sdk-go   # AGCTL_TEMPORAL_TASKQUEUE
+
+# Restate connection — only used when runtime is restate (uncomment to customize).
+# Defaults if omitted: ingress http://localhost:8080, admin http://localhost:9070, listen :9080.
+#
+# restate:
+#   ingressURL: http://localhost:8080              # AGCTL_RESTATE_INGRESS_URL
+#   adminURL: http://localhost:9070                # AGCTL_RESTATE_ADMIN_URL
+#   authKey: ""                                    # AGCTL_RESTATE_AUTH_KEY
+#   endpointListenAddress: ":9080"                 # AGCTL_RESTATE_ENDPOINT_LISTEN_ADDRESS
+#   deploymentURL: ""                              # AGCTL_RESTATE_DEPLOYMENT_URL (Docker callback)
 
 # Conversation store: inmem (default) or redis.
 # Override: AGCTL_CONVERSATION_STORE=redis

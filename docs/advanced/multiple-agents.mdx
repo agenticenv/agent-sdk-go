@@ -1,72 +1,70 @@
 ---
 title: "Multiple Agents"
-description: "Run several agents in one process or deployment with unique task queues and instance IDs"
+description: "Run several agents in one process"
 ---
 
-**The problem:** You need more than one agent — an orchestrator and a specialist, two agents with different system prompts, or many instances of the same agent scaled across pods. Each needs its own identity and Temporal routing without interfering with the others.
+**The problem:** You need more than one agent in the same process — different system prompts or roles.
 
-**The solution:** Each `Agent` instance is independent. Give distinct agents unique task queues; give scaled instances of the same agent a shared base queue plus a unique `WithInstanceId`. This page covers patterns for co-locating agents in one process and scaling them across pods.
-
-## One agent per task queue
-
-Each agent needs a **unique `TaskQueue`** in Temporal. Sub-agents also require separate queues. This prevents workflow and activity routing collisions:
+**The solution:** Create one `NewAgent` per role, each with its own distinct [`WithName`](/getting-started/configuration).
 
 ```go
-mainAgent, _ := agent.NewAgent(
-    agent.WithName("Orchestrator"),
-    agent.WithTemporalConfig(&agent.TemporalConfig{
-        Host: "localhost", Port: 7233, Namespace: "default",
-        TaskQueue: "my-app-main",
-    }),
-    agent.WithLLMClient(llmClient),
-)
-
-mathAgent, _ := agent.NewAgent(
-    agent.WithName("MathSpecialist"),
-    agent.WithTemporalConfig(&agent.TemporalConfig{
-        Host: "localhost", Port: 7233, Namespace: "default",
-        TaskQueue: "my-app-math",
-    }),
-    agent.WithLLMClient(llmClient),
-)
-```
-
-Register specialists on the main agent with [`WithSubAgents`](/features/sub-agents) rather than sharing a task queue.
-
-## WithInstanceId
-
-When multiple agents share a **base task queue name** — for example scaled pods running the same agent definition — use [`WithInstanceId`](/getting-started/configuration) so each instance gets a unique derived queue: `{TaskQueue}-{InstanceId}`.
-
-<Note>
-`WithInstanceId` applies to the **Temporal runtime** only. On the local runtime, agents run in-process with no task queue requirement and instance IDs have no effect.
-</Note>
-
-```go
-cfg := &agent.TemporalConfig{
+cfg := &temporal.TemporalConfig{
     Host: "localhost", Port: 7233, Namespace: "default",
     TaskQueue: "my-app",
 }
 
 a1, _ := agent.NewAgent(
-    agent.WithName("agent-1"),
-    agent.WithTemporalConfig(cfg),
-    agent.WithInstanceId("agent-1"),
+    agent.WithName("math-agent"),
+    temporal.WithTemporalConfig(cfg),
     agent.WithLLMClient(llmClient),
 )
 defer a1.Close()
 
 a2, _ := agent.NewAgent(
-    agent.WithName("agent-2"),
-    agent.WithTemporalConfig(cfg),
-    agent.WithInstanceId("agent-2"),
+    agent.WithName("writing-agent"),
+    temporal.WithTemporalConfig(cfg),
     agent.WithLLMClient(llmClient),
 )
 defer a2.Close()
-
-// a1 polls "my-app-agent-1", a2 polls "my-app-agent-2"
 ```
 
-Use the **same** `TaskQueue` and `InstanceId` on `NewAgent` and `NewAgentWorker` for a given agent so client and worker pair correctly.
+Use the **same** options on `NewAgent` and `NewAgentWorker` for a given agent so client and worker pair correctly.
+
+### Restate
+
+Same process: set a distinct `Endpoint.ListenAddress` per agent.
+
+```go
+a1, _ := agent.NewAgent(
+    agent.WithName("math-agent"),
+    restate.WithRestateConfig(&restate.RestateConfig{
+        Ingress: restate.IngressConfig{URL: "http://localhost:8080"},
+        Endpoint: restate.EndpointConfig{
+            ListenAddress: ":9081",
+            AdminURL:      "http://localhost:9070",
+        },
+    }),
+    agent.WithLLMClient(llmClient),
+)
+defer a1.Close()
+
+a2, _ := agent.NewAgent(
+    agent.WithName("writing-agent"),
+    restate.WithRestateConfig(&restate.RestateConfig{
+        Ingress: restate.IngressConfig{URL: "http://localhost:8080"},
+        Endpoint: restate.EndpointConfig{
+            ListenAddress: ":9082",
+            AdminURL:      "http://localhost:9070",
+        },
+    }),
+    agent.WithLLMClient(llmClient),
+)
+defer a2.Close()
+```
+
+See [Restate runtime](/runtimes/restate) and the [Multiple Agents](/examples/multiple-agents) example.
+
+Register specialists on the main agent with [`WithSubAgents`](/features/sub-agents). Sub-agent names must differ from the root agent name.
 
 ## Same process, concurrent runs
 
@@ -94,8 +92,6 @@ Example: [Concurrent Runs](/examples/concurrent-runs).
 
 ### Multiple agents, concurrent runs
 
-Multiple `NewAgent` instances in one process each start their own embedded worker (unless `DisableLocalWorker` is set). Use separate instances when the agents have different configurations, system prompts, or task queues:
-
 ```go
 var wg sync.WaitGroup
 wg.Add(2)
@@ -121,7 +117,8 @@ Example: [Multiple Agents](/examples/multiple-agents).
 | Resource | Per agent or shared |
 |---|---|
 | LLM client | Can share one client across agents — use [`WithLLMSampling`](/getting-started/configuration) for per-agent overrides |
-| Task queue | **Unique per agent** (or per instance via `WithInstanceId`) |
+| Temporal config | Can reuse the same `TemporalConfig` across agents |
+| Restate in one process | Give each agent its own `ListenAddress` |
 | Conversation store | Shared backend OK — isolate by conversation ID |
 | Memory store | Shared backend OK — isolate by scope (user, tenant, agent name) |
 | Tool registries | **Per agent** — each `Agent` has its own registries |
@@ -130,7 +127,7 @@ Example: [Multiple Agents](/examples/multiple-agents).
 
 When splitting client and worker:
 
-1. Create one `NewAgentWorker` **per task queue** (main agent and each sub-agent queue)
+1. Create one `NewAgentWorker` **per agent**
 2. Pass matching options to each worker and its corresponding `NewAgent`
 3. Use Redis conversation when any agent uses remote workers
 
@@ -138,7 +135,7 @@ See [Distributed Execution](/advanced/distributed-execution).
 
 ## In-process runtime
 
-Multiple in-process agents (no Temporal) are also supported — omit Temporal options on each `NewAgent`. Each agent runs its loop inside your Go process with no task queue requirement. Use this for development and single-process deployments.
+Multiple in-process agents (no Temporal/Restate) are also supported — omit Temporal and Restate options on each `NewAgent`. Each agent runs its loop inside your Go process. Use this for development and single-process deployments.
 
 See [In-Process runtime](/runtimes/in-process).
 
@@ -149,7 +146,7 @@ See [In-Process runtime](/runtimes/in-process).
     Fan-out on a single Agent instance
   </Card>
   <Card title="Multiple Agents" icon="play" href="/examples/multiple-agents" horizontal>
-    Instance IDs and task queue patterns
+    Several agents in one process
   </Card>
 </CardGroup>
 
@@ -162,6 +159,6 @@ See [In-Process runtime](/runtimes/in-process).
   </Card>
 
   <Card title="Distributed Execution" icon="server" href="/advanced/distributed-execution" horizontal>
-    One worker per task queue
+    Client and worker pairing
   </Card>
 </CardGroup>

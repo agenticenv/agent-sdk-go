@@ -25,5 +25,6 @@ We appreciate responsible disclosure and will acknowledge security researchers w
 ## Out of Scope
 
 - Temporal server or Temporal Cloud
+- Restate server or Restate Cloud
 - Third-party LLM providers (OpenAI, Anthropic, Google)
 - General usage questions

@@ -24,7 +24,7 @@ When you omit `WithToolApprovalPolicy`, the default is **require-all**. If your 
 ```go
 approvalPol, err := agent.AllowlistToolApprovalPolicy(agent.AllowlistToolApprovalConfig{
     ToolNames:     []string{"calculator"},
-    SubAgentNames: []string{"MathSpecialist"},
+    SubAgentNames: []string{"math-specialist"},
     MCPTools:      map[string][]string{"remote": {"search"}}, // optional
 })
 if err != nil {
@@ -144,7 +144,7 @@ for ev := range eventCh {
 Parent and specialist agents have **independent** policies:
 
 ```text
-Main agent:  RequireAll  → delegate to MathSpecialist → user approval on main stream
+Main agent:  RequireAll  → delegate to math-specialist → user approval on main stream
 Math agent:  Auto        → calculator inside specialist → no approval
 Math agent:  RequireAll  → calculator inside specialist → approval (fan-in on main stream)
 ```

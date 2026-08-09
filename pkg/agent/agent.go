@@ -81,7 +81,7 @@ func buildAgent(opts []Option) (*Agent, error) {
 	// LocalRuntime executes in-process via Execute/ExecuteStream; creating a worker for it would
 	// log a spurious error because LocalRuntime does not implement WorkerRuntime.
 	if !a.disableLocalWorker && cfg.hasTemporalRuntime() {
-		a.localAgentWorker = &AgentWorker{agentConfig: *cfg, runtime: rt}
+		a.localAgentWorker = newAgentWorker(cfg, rt)
 	}
 
 	return a, nil
@@ -94,7 +94,7 @@ func NewAgent(opts ...Option) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	a.logger.Info(context.Background(), "agent created", slog.String("scope", "agent"), slog.String("name", a.Name), slog.String("taskQueue", a.taskQueue), slog.Bool("embedWorker", a.localAgentWorker != nil))
+	a.logger.Info(context.Background(), "agent created", slog.String("scope", "agent"), slog.String("name", a.Name), slog.Bool("embedWorker", a.localAgentWorker != nil))
 	if a.localAgentWorker != nil {
 		go func() {
 			if err := a.localAgentWorker.Start(context.Background()); err != nil {

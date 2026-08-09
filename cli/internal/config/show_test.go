@@ -73,4 +73,30 @@ func TestForShowIncludesTemporalWhenSelected(t *testing.T) {
 	if out.Temporal == nil || out.Temporal.Host != "localhost" {
 		t.Fatalf("expected temporal in show, got %#v", out.Temporal)
 	}
+	if out.Restate != nil {
+		t.Fatalf("restate should be omitted for temporal runtime, got %#v", out.Restate)
+	}
+}
+
+func TestForShowIncludesRestateWhenSelected(t *testing.T) {
+	cfg := &Config{
+		Runtime: "restate",
+		Restate: &RestateConfig{
+			IngressURL:            "http://localhost:8080",
+			AdminURL:              "http://localhost:9070",
+			AuthKey:               "secret-key",
+			EndpointListenAddress: ":9080",
+		},
+		LLM: &LLMConfig{Provider: "openai", Model: "gpt-4o"},
+	}
+	out := ForShow(cfg)
+	if out.Restate == nil || out.Restate.IngressURL != "http://localhost:8080" {
+		t.Fatalf("expected restate in show, got %#v", out.Restate)
+	}
+	if out.Restate.AuthKey != "***" {
+		t.Fatalf("auth key should be redacted, got %q", out.Restate.AuthKey)
+	}
+	if out.Temporal != nil {
+		t.Fatalf("temporal should be omitted for restate runtime, got %#v", out.Temporal)
+	}
 }

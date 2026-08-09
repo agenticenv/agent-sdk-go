@@ -1,6 +1,6 @@
 ---
 title: "Introduction"
-description: "Build production-grade AI agents in Go with Temporal durability, MCP, A2A, and full observability"
+description: "Build production-grade AI agents in Go with Temporal or Restate durability, MCP, A2A, and full observability"
 ---
 
 **Agent SDK for Go** is a Go library for building production AI agents. It handles the full execution loop — LLM calls, tool use, approvals, memory, multi-agent delegation — so you write configuration and business logic, not plumbing.
@@ -35,29 +35,29 @@ That's it — configure once, call repeatedly. Tools, memory, streaming, and dur
 go get github.com/agenticenv/agent-sdk-go@latest
 ```
 
-Go 1.26+. OpenAI API key required for the example above; Anthropic and Gemini are also built in. Temporal is optional.
+Go 1.26+. OpenAI API key required for the example above; Anthropic and Gemini are also built in. Temporal and Restate are optional.
 
 ## Why Agent SDK for Go
 
 - **Idiomatic Go** — functional options, typed interfaces, no reflection magic. Swap any component (LLM client, memory backend, approval policy) by passing a different option.
-- **Same code, two runtimes** — run in-process for development with no infrastructure, then add `WithTemporalConfig` for crash-proof durable execution in production. Nothing else changes.
-- **Concurrent by default** — one `Agent` instance handles parallel `Run` and `Stream` calls; Temporal issues each a unique workflow automatically.
+- **Same code, three runtimes** — run in-process for development with no infrastructure, then add `temporal.WithTemporalConfig` (from `pkg/agent/runtime/temporal`) or `restate.WithRestateConfig` (from `pkg/agent/runtime/restate`) for crash-proof durable execution in production. Nothing else changes.
+- **Concurrent by default** — one `Agent` instance handles parallel `Run` and `Stream` calls; durable runtimes issue each a unique run automatically.
 - **Protocol-native integrations** — MCP tool servers, A2A agent-to-agent delegation, and AG-UI streaming events are first-class, not adapters bolted on after the fact.
 - **Middleware hooks** — intercept LLM calls, tool use, retrieval, and memory at any lifecycle point for logging, PII scrubbing, and guardrails without touching agent logic.
 - **Cache-aware requests** — LLM requests are structured for provider caching, with Anthropic prompt-cache breakpoints to reduce cost on multi-turn runs.
 
 ## Runtimes
 
-Run agents locally for development, or with Temporal for production-grade durability and fault tolerance.
+Run agents locally for development, or with Temporal or Restate for production-grade durability and fault tolerance.
 
-| | In-process (default) | Temporal |
-|---|---|---|
-| Setup | No infra | Running Temporal server |
-| Durability | None | Survives crashes and restarts |
-| Scale | Single process | Horizontal worker pools |
-| When | Dev, scripts, low-volume APIs | Production, long-running tasks |
+| | In-process (default) | Temporal | Restate |
+|---|---|---|---|
+| Setup | No infra | Running Temporal server | Running Restate server |
+| Durability | None | Survives crashes and restarts | Survives crashes and restarts |
+| Scale | Single process | Horizontal worker pools | Multiple registered endpoints |
+| When | Dev, scripts, low-volume APIs | Production, long-running tasks | Production, long-running tasks |
 
-Add `WithTemporalConfig` to switch. See [Runtimes](/runtimes/overview).
+Add `temporal.WithTemporalConfig` or `restate.WithRestateConfig` to switch. See [Runtimes](/runtimes/overview).
 
 ## Start here
 

@@ -21,7 +21,7 @@ const (
 
 // AgentOverrides are shared chat/run flags that override the merged config.
 type AgentOverrides struct {
-	Runtime  string `name:"runtime" help:"Execution runtime: local or temporal." env:"AGCTL_RUNTIME"`
+	Runtime  string `name:"runtime" help:"Execution runtime: local, temporal, or restate." env:"AGCTL_RUNTIME"`
 	Provider string `name:"provider" help:"LLM provider (openai, anthropic, gemini, ...)." env:"AGCTL_LLM_PROVIDER"`
 	Model    string `name:"model" help:"LLM model name." env:"AGCTL_LLM_MODEL"`
 	APIKey   string `name:"api-key" help:"LLM API key." env:"AGCTL_LLM_APIKEY"`
@@ -30,6 +30,12 @@ type AgentOverrides struct {
 	TemporalPort      int    `name:"temporal-port" help:"Temporal gRPC port (with --runtime temporal)." env:"AGCTL_TEMPORAL_PORT"`
 	TemporalNamespace string `name:"temporal-namespace" help:"Temporal namespace (with --runtime temporal)." env:"AGCTL_TEMPORAL_NAMESPACE"`
 	TemporalTaskQueue string `name:"temporal-task-queue" help:"Temporal task queue (with --runtime temporal)." env:"AGCTL_TEMPORAL_TASKQUEUE"`
+
+	RestateIngressURL            string `name:"restate-ingress-url" help:"Restate ingress URL (with --runtime restate)." env:"AGCTL_RESTATE_INGRESS_URL"`
+	RestateAdminURL              string `name:"restate-admin-url" help:"Restate admin URL (with --runtime restate)." env:"AGCTL_RESTATE_ADMIN_URL"`
+	RestateAuthKey               string `name:"restate-auth-key" help:"Restate ingress auth key (with --runtime restate)." env:"AGCTL_RESTATE_AUTH_KEY"`
+	RestateEndpointListenAddress string `name:"restate-endpoint-listen-address" help:"SDK endpoint listen address (with --runtime restate)." env:"AGCTL_RESTATE_ENDPOINT_LISTEN_ADDRESS"`
+	RestateDeploymentURL         string `name:"restate-deployment-url" help:"URL Restate uses to call this process (with --runtime restate)." env:"AGCTL_RESTATE_DEPLOYMENT_URL"`
 
 	LLMUsage bool `name:"llm-usage" help:"Print token usage summary on exit." env:"AGCTL_LLM_USAGE"`
 }
@@ -41,15 +47,20 @@ type ChatCmd struct {
 
 func (c *ChatCmd) Run(cfg *config.Config) error {
 	config.ApplyAgentOverrides(cfg, config.AgentOverrides{
-		Runtime:           c.Runtime,
-		Provider:          c.Provider,
-		Model:             c.Model,
-		APIKey:            c.APIKey,
-		TemporalHost:      c.TemporalHost,
-		TemporalPort:      c.TemporalPort,
-		TemporalNamespace: c.TemporalNamespace,
-		TemporalTaskQueue: c.TemporalTaskQueue,
-		LLMUsage:          c.LLMUsage,
+		Runtime:                      c.Runtime,
+		Provider:                     c.Provider,
+		Model:                        c.Model,
+		APIKey:                       c.APIKey,
+		TemporalHost:                 c.TemporalHost,
+		TemporalPort:                 c.TemporalPort,
+		TemporalNamespace:            c.TemporalNamespace,
+		TemporalTaskQueue:            c.TemporalTaskQueue,
+		RestateIngressURL:            c.RestateIngressURL,
+		RestateAdminURL:              c.RestateAdminURL,
+		RestateAuthKey:               c.RestateAuthKey,
+		RestateEndpointListenAddress: c.RestateEndpointListenAddress,
+		RestateDeploymentURL:         c.RestateDeploymentURL,
+		LLMUsage:                     c.LLMUsage,
 	})
 
 	built, err := agent.Build(cfg, false)

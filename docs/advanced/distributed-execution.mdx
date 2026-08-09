@@ -4,7 +4,7 @@ description: "Run the agent client and worker in separate processes for independ
 ---
 
 <Note>
-**Temporal runtime only.** Running a separate worker process requires the [Temporal runtime](/runtimes/temporal). The `LocalRuntime` executes everything in-process and does not support `NewAgentWorker`.
+**Temporal runtime.** `NewAgentWorker` and `DisableLocalWorker` apply to the [Temporal runtime](/runtimes/temporal). For Restate’s ingress + embedded endpoint topology, see [Restate runtime](/runtimes/restate).
 </Note>
 
 **The problem:** Your API or UI process needs to submit agent runs and stream results to users — but you don't want it to also host the worker that executes LLM calls and tools. Mixing both in one process couples your UI latency to compute load, limits independent scaling, and makes deploys riskier.
@@ -36,7 +36,7 @@ See [Temporal runtime](/runtimes/temporal) for the full architecture diagram.
 
 ```go
 w, err := agent.NewAgentWorker(
-    agent.WithTemporalConfig(&agent.TemporalConfig{
+    temporal.WithTemporalConfig(&temporal.TemporalConfig{
         Host: "localhost", Port: 7233,
         Namespace: "default", TaskQueue: "my-app",
     }),
@@ -61,7 +61,7 @@ go func() {
 
 ```go
 a, err := agent.NewAgent(
-    agent.WithTemporalConfig(&agent.TemporalConfig{
+    temporal.WithTemporalConfig(&temporal.TemporalConfig{
         Host: "localhost", Port: 7233,
         Namespace: "default", TaskQueue: "my-app",
     }),
@@ -81,7 +81,7 @@ if err != nil {
 result, err := agentRun.Get(ctx)
 ```
 
-`NewAgentWorker` requires Temporal — it cannot run with the in-process runtime alone.
+`NewAgentWorker` is a Temporal API — use it with the [Temporal runtime](/runtimes/temporal).
 
 ## Configuration alignment
 
@@ -89,8 +89,7 @@ Both processes must share **identical agent configuration**:
 
 | Must match | Why |
 |---|---|
-| Task queue and namespace | Worker polls what the client submits to |
-| `WithInstanceId` (if set) | Derives `{TaskQueue}-{InstanceId}` on both sides |
+| Task queue, namespace, and `WithName` | Client and worker must use the same values |
 | LLM client, system prompt, tools | Fingerprint check at activity entry |
 | Tool approval policy and execution mode | Same approval semantics |
 | MCP, A2A, sub-agent setup | Same tool surface for the LLM |
@@ -109,7 +108,7 @@ The SDK uses a **fingerprint** check to detect config drift between the client t
 
 ```go
 a, _ := agent.NewAgent(
-    agent.WithTemporalConfig(cfg),
+    temporal.WithTemporalConfig(cfg),
     agent.WithLLMClient(llmClient),
     agent.DisableLocalWorker(),
 )
@@ -163,9 +162,9 @@ eventCh, _ := agentStream.Events(ctx, agent.WithOffset(savedOffset))
 
 ## Sub-agents
 
-Each sub-agent typically runs on its **own task queue** with its **own worker**. Pair `NewAgentWorker` with the same options as the `NewAgent` that runs that sub-agent.
+Each sub-agent typically has its **own worker**. Pair `NewAgentWorker` with the same options (including `WithName`) as the `NewAgent` that runs that sub-agent.
 
-Example: [Agent Worker](/examples/agent-worker) · [Durable Agent](/examples/durable-agent).
+Example: [Agent Worker](/examples/agent-worker) · [Durable Agent (Temporal)](/examples/durable-agent).
 
 ## Example
 
@@ -173,7 +172,7 @@ Example: [Agent Worker](/examples/agent-worker) · [Durable Agent](/examples/dur
   <Card title="Agent Worker" icon="play" href="/examples/agent-worker" horizontal>
     Minimal split client and worker
   </Card>
-  <Card title="Durable Agent" icon="shield" href="/examples/durable-agent" horizontal>
+  <Card title="Durable Agent (Temporal)" icon="shield" href="/examples/durable-agent" horizontal>
     Crash and restart walkthrough with split processes
   </Card>
 </CardGroup>
@@ -191,6 +190,6 @@ Example: [Agent Worker](/examples/agent-worker) · [Durable Agent](/examples/dur
   </Card>
 
   <Card title="Multiple Agents" icon="layer-group" href="/advanced/multiple-agents" horizontal>
-    Task queues and instance IDs
+    Several agents in one process
   </Card>
 </CardGroup>

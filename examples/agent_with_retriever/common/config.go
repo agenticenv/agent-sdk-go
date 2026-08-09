@@ -73,7 +73,7 @@ func LoadSettings() (*Settings, error) {
 	s := &Settings{
 		RetrieverMode: mode,
 
-		WeaviateHost:          getEnv("WEAVIATE_HOST", "localhost:8080"),
+		WeaviateHost:          getEnv("WEAVIATE_HOST", "localhost:8081"),
 		WeaviateScheme:        getEnv("WEAVIATE_SCHEME", "http"),
 		WeaviateClass:         getEnv("WEAVIATE_CLASS", "Document"),
 		WeaviateRetrieverName: getEnv("WEAVIATE_RETRIEVER_NAME", "weaviate-kb"),

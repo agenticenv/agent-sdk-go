@@ -71,13 +71,13 @@ Full example with approvals: [Non-blocking Run](/examples/nonblocking-run).
 
 ## Reconnect with GetAgentRun
 
-On the [Temporal runtime](/runtimes/temporal), persist `agentRun.ID()` before waiting. After a process crash, reconnect and wait again — the workflow keeps running server-side:
+On a durable runtime ([Temporal](/runtimes/temporal) or [Restate](/runtimes/restate)), persist `agentRun.ID()` before waiting. After a process crash, reconnect and wait again — the run keeps executing server-side:
 
 ```go
 run, err := a.GetAgentRun(ctx, savedRunID)
 if err != nil {
     if errors.Is(err, agent.ErrRunAlreadyCompleted) {
-        // Workflow finished while disconnected — load outcome from
+        // Run finished while disconnected — load outcome from
         // conversation/memory, or start a new run.
         return nil
     }
@@ -86,7 +86,7 @@ if err != nil {
 result, err := run.Get(ctx) // or <-run.Done() then Get
 ```
 
-Cancelling the `GetAgentRun` or `Get` context does not cancel the workflow — use `AgentRun.Cancel` for that. After reconnect, `WithTimeout` (if set) starts **fresh** — it is not the remaining time from the original `Run`. Full cancel/timeout rules: [Timeouts & Modes](/advanced/timeouts-and-modes#what-each-context-does).
+Cancelling the `GetAgentRun` or `Get` context does not cancel the durable run — use `AgentRun.Cancel` for that. After reconnect, `WithTimeout` (if set) starts **fresh** — it is not the remaining time from the original `Run`. Full cancel/timeout rules: [Timeouts & Modes](/advanced/timeouts-and-modes#what-each-context-does).
 
 `LocalRuntime` cannot reconnect after a crash (`ErrRunNotFound`). Full protocol: [Durable Execution](/advanced/durable-execution#client-side-run-recovery).
 

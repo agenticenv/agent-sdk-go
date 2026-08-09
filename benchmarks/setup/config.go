@@ -18,6 +18,7 @@ const defaultMemoryUserID = "benchmark-user"
 type Config struct {
 	Runtime  string         `yaml:"runtime"`
 	Temporal TemporalConfig `yaml:"temporal"`
+	Restate  RestateConfig  `yaml:"restate"`
 	LLM      LLMConfig      `yaml:"llm"`
 	Tool     ToolConfig     `yaml:"tool"`
 	Agent    AgentConfig    `yaml:"agent"`
@@ -32,6 +33,15 @@ type TemporalConfig struct {
 	Namespace    string `yaml:"namespace"`
 	TaskQueue    string `yaml:"task_queue"`
 	WorkersCount int    `yaml:"workers_count"`
+}
+
+// RestateConfig configures Restate when runtime is restate.
+type RestateConfig struct {
+	IngressURL            string `yaml:"ingress_url"`
+	AdminURL              string `yaml:"admin_url"`
+	AuthKey               string `yaml:"auth_key"`
+	EndpointListenAddress string `yaml:"endpoint_listen_address"`
+	DeploymentURL         string `yaml:"deployment_url"`
 }
 
 type LLMConfig struct {
@@ -85,6 +95,15 @@ type OutputConfig struct {
 
 func (c *Config) UseTemporal() bool {
 	return c != nil && strings.EqualFold(strings.TrimSpace(c.Runtime), "temporal")
+}
+
+func (c *Config) UseRestate() bool {
+	return c != nil && strings.EqualFold(strings.TrimSpace(c.Runtime), "restate")
+}
+
+// UseDurableRuntime reports whether Temporal or Restate is selected.
+func (c *Config) UseDurableRuntime() bool {
+	return c.UseTemporal() || c.UseRestate()
 }
 
 func (c *Config) ExternalWorkersEnabled() bool {
@@ -154,6 +173,15 @@ func LoadConfig(path string) (*Config, error) {
 }
 
 func (c *Config) validate() error {
+	switch strings.ToLower(strings.TrimSpace(c.Runtime)) {
+	case "", "local":
+		if c.Runtime == "" {
+			c.Runtime = "local"
+		}
+	case "temporal", "restate":
+	default:
+		return fmt.Errorf("runtime must be %q, %q, or %q", "local", "temporal", "restate")
+	}
 	if c.Agent.Runs <= 0 {
 		return fmt.Errorf("agent.runs must be > 0")
 	}
@@ -174,6 +202,9 @@ func (c *Config) validate() error {
 	}
 	if c.Temporal.WorkersCount < 0 {
 		return fmt.Errorf("temporal.workers_count must be >= 0")
+	}
+	if c.UseRestate() && c.Temporal.WorkersCount > 0 {
+		return fmt.Errorf("temporal.workers_count is Temporal-only; Restate embeds the SDK endpoint (set workers_count to 0)")
 	}
 	if c.LLM.MockTokens <= 0 {
 		c.LLM.MockTokens = 500
@@ -201,6 +232,15 @@ func (c *Config) validate() error {
 	}
 	if c.Temporal.Namespace == "" {
 		c.Temporal.Namespace = "default"
+	}
+	if c.Restate.IngressURL == "" {
+		c.Restate.IngressURL = "http://localhost:8080"
+	}
+	if c.Restate.AdminURL == "" {
+		c.Restate.AdminURL = "http://localhost:9070"
+	}
+	if c.Restate.EndpointListenAddress == "" {
+		c.Restate.EndpointListenAddress = ":9080"
 	}
 	c.Memory.applyDefaults()
 	if c.Memory.Enabled {

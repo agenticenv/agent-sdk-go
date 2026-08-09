@@ -2,20 +2,20 @@
 
 This directory contains a standalone performance utility for the Go Agent SDK. It runs real `pkg/agent` execution loops under configurable load—mock LLM and tools by default—so you can measure latency, memory, CPU, token counts, and success rate without external API keys.
 
-Use it to stress-test orchestration behavior (multi-turn runs, tool batches, sub-agents, local vs Temporal runtime) before pointing the same harness at real LLMs and tools.
+Use it to stress-test orchestration behavior (multi-turn runs, tool batches, sub-agents, local / Temporal / Restate runtime) before pointing the same harness at real LLMs and tools.
 
 ---
 
 ## The Core Purpose
 
-Most agent benchmarks focus on token throughput alone. Production workloads also depend on how well the **orchestration layer** scales: many concurrent runs, multi-turn tool loops, sub-agent delegation, durable Temporal workflows, and stable memory use over hundreds of executions.
+Most agent benchmarks focus on token throughput alone. Production workloads also depend on how well the **orchestration layer** scales: many concurrent runs, multi-turn tool loops, sub-agent delegation, durable Temporal/Restate runs, and stable memory use over hundreds of executions.
 
 This benchmark exercises the SDK’s actual agent engine (`agent.NewAgent`, `Run`) with:
 
 - Configurable run count and concurrency
 - Mock or (later) real LLM + tool backends
 - Optional sub-agent trees
-- Local in-process runtime or Temporal with optional external workers
+- Local in-process runtime, Temporal (optional external workers), or Restate (embedded endpoint)
 - Structured metrics and reports for comparison across config changes
 
 ---
@@ -131,7 +131,17 @@ temporal:
 go run ./benchmarks/ -config benchmarks/config.yaml
 ```
 
-**External root workers** (`workers_count: 1+`) — benchmark spawns separate worker processes that also poll the root agent's task queue. Embedded local workers still run for the root agent and all sub-agents (sub-agents always use embedded workers on their own task queues).
+**Restate runtime** — requires a running Restate server; embeds the SDK endpoint (`workers_count` must stay `0`):
+
+```yaml
+runtime: restate
+restate:
+  ingress_url: http://localhost:8080
+  admin_url: http://localhost:9070
+  endpoint_listen_address: ":9080"
+```
+
+**External root workers** (`workers_count: 1+`) — Temporal. Benchmark spawns separate worker processes that also poll the root agent's task queue. Embedded local workers still run for the root agent and all sub-agents (sub-agents always use embedded workers on their own task queues).
 
 ```yaml
 runtime: temporal
@@ -166,8 +176,9 @@ All paths in config (`dir` fields) are relative to the **repository root** unles
 
 | Value | Description |
 | :--- | :--- |
-| `local` | In-process SDK runtime (default). No Temporal server required. |
+| `local` | In-process SDK runtime (default). No durable server required. |
 | `temporal` | Durable execution via Temporal. Server must be running before the benchmark. |
+| `restate` | Durable execution via Restate. Server must be running; embedded SDK endpoint (no external workers). |
 
 ### `temporal`
 
@@ -177,7 +188,17 @@ All paths in config (`dir` fields) are relative to the **repository root** unles
 | `port` | gRPC port (default `7233`). |
 | `namespace` | Temporal namespace (default `default`). |
 | `task_queue` | Root agent task queue (default `agent-sdk-go`). Sub-agents use `{task_queue}-subagent-*` suffixes. |
-| `workers_count` | `0` = embedded worker only. `1+` = spawn that many external root worker processes (Temporal only). Ignored when `runtime: local`. |
+| `workers_count` | `0` = embedded worker only. `1+` = spawn that many external root worker processes (Temporal). Used when `runtime: temporal`. |
+
+### `restate`
+
+| Field | Description |
+| :--- | :--- |
+| `ingress_url` | Restate ingress URL (default `http://localhost:8080`). |
+| `admin_url` | Restate admin URL (default `http://localhost:9070`). |
+| `endpoint_listen_address` | Embedded SDK endpoint listen address (default `:9080`). |
+| `deployment_url` | Optional URL Restate uses to call back (Docker: `http://host.docker.internal:9080`). |
+| `auth_key` | Optional ingress auth key. |
 
 ### `llm`
 
@@ -334,4 +355,4 @@ Written to `benchmarks/reports/benchmark_<timestamp>.json`:
 
 LLM and tool calls are **mocked by default** with configurable latency and fixed token counts to keep results reproducible and free of API cost. Latency percentiles, memory, and CPU reflect real SDK orchestration overhead under that simulation.
 
-When you swap in **real LLMs and tools**, metrics will change: latency follows network and model speed, token counts come from provider usage, and cost requires your own pricing model (the benchmark leaves `est_cost_usd` at `0` until configured). The harness structure—runs, concurrency, reporting, Temporal workers—stays the same; only the LLM client and tool registry need to be replaced in `benchmarks/setup/`.
+When you swap in **real LLMs and tools**, metrics will change: latency follows network and model speed, token counts come from provider usage, and cost requires your own pricing model (the benchmark leaves `est_cost_usd` at `0` until configured). The harness structure—runs, concurrency, reporting, Temporal/Restate orchestration—stays the same; only the LLM client and tool registry need to be replaced in `benchmarks/setup/`.

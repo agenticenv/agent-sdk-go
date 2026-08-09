@@ -1,7 +1,7 @@
 // agent_with_concurrent_runs shows multiple Run calls dispatched concurrently on a single
 // Agent instance. The same agent handles all requests in parallel — no separate Agent per
-// request needed. Works with both the local (default) and Temporal runtimes; toggle with
-// AGENT_RUNTIME=temporal.
+// request needed. Works with local (default), Temporal, and Restate; toggle with
+// AGENT_RUNTIME=temporal or AGENT_RUNTIME=restate.
 package main
 
 import (

@@ -8,7 +8,7 @@ These two programs use the **same env-driven MCP transport** but wire the agent 
 ## Prerequisites
 
 - **`examples/.env`** with **`LLM_*`** set (see **`../.env.defaults`**; defaults load automatically).
-- **`AGENT_RUNTIME=temporal`** only if you want durable workflows — then Temporal per **[temporal-setup.md](../../temporal-setup.md)** or `task -t examples/Taskfile.yml infra:temporal:up`.
+- Durable runtime (optional): **`AGENT_RUNTIME=temporal`** per **[temporal-setup.md](../../temporal-setup.md)** / `task infra:temporal:up`, or **`AGENT_RUNTIME=restate`** per **[restate-setup.md](../../restate-setup.md)** / `task infra:restate:up`.
 
 ## Configure MCP
 
@@ -84,7 +84,7 @@ curl -sS -o /dev/null -w "%{http_code}\n" "http://localhost:8123/mcp"
 - **`streamable_http`:** Confirm the URL is reachable from the machine running the example. Example: `curl -sS -o /dev/null -w "%{http_code}\n" "$MCP_STREAMABLE_HTTP_URL"` — status depends on the implementation.
 - **`stdio`:** Run the same command line as **`MCP_STDIO_COMMAND`** / **`MCP_STDIO_ARGS`** in a terminal once to ensure the binary starts.
 
-You still need **LLM** credentials in **`examples/.env`** (and Temporal when using **`AGENT_RUNTIME=temporal`**).
+You still need **LLM** credentials in **`examples/.env`** (and Temporal/Restate when using the matching **`AGENT_RUNTIME`**).
 
 ## Env vars (MCP)
 

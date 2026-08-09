@@ -3,7 +3,7 @@ title: "Quickstart"
 description: "Create your first agent and run it in under 5 minutes"
 ---
 
-Create a minimal agent on the **in-process runtime** and run a single prompt. No Temporal server required.
+Create a minimal agent on the **in-process runtime** and run a single prompt. No Temporal or Restate server required.
 
 **Requirements:** Go 1.26+ and an API key for at least one LLM provider. Verify your Go version with `go version`.
 
@@ -92,22 +92,22 @@ Expected output includes the agent name, model, and assistant reply in `result.C
 | `openai.NewClient` | Creates an [`interfaces.LLMClient`](/getting-started/llm-providers) for OpenAI |
 | `agent.NewAgent` | Builds the agent with your prompt and LLM client; uses in-process runtime by default |
 | `a.Run` | Starts a run and returns an [`AgentRun`](/getting-started/run) handle; call `Get` for [`*AgentRunResult`](/features/token-usage) |
-| `a.Close` | Stops any embedded Temporal worker and flushes OTLP exporters; active Temporal workflows are **not** terminated |
+| `a.Close` | Stops any embedded Temporal worker or Restate SDK endpoint and flushes OTLP exporters; active durable runs are **not** terminated |
 
 <Warning>
-`defer a.Close()` is not optional when using the Temporal runtime — it shuts down the embedded local worker. On the in-process runtime it is a no-op but still good practice.
+`defer a.Close()` is not optional when using a durable runtime — it shuts down the embedded Temporal worker or Restate SDK endpoint. On the in-process runtime it is a no-op but still good practice.
 
-**Durability note:** `Close` does not terminate in-flight Temporal workflows. Workflows continue running on the Temporal server and resume on any available worker after a restart — this is the core durability guarantee.
+**Durability note:** `Close` does not terminate in-flight Temporal workflows or Restate invocations. Runs continue on the server and resume when a worker or endpoint is available again — this is the core durability guarantee.
 </Warning>
 
 
 ## Switch to Temporal (optional)
 
-Add `WithTemporalConfig` to run the same agent durably. A running Temporal cluster is required — see [Temporal runtime](/runtimes/temporal).
+Import `pkg/agent/runtime/temporal` and add `temporal.WithTemporalConfig` to run the same agent durably. A running Temporal cluster is required — see [Temporal runtime](/runtimes/temporal).
 
 ```go
 a, err := agent.NewAgent(
-    agent.WithTemporalConfig(&agent.TemporalConfig{
+    temporal.WithTemporalConfig(&temporal.TemporalConfig{
         Host:      "localhost",
         Port:      7233,
         Namespace: "default",
@@ -120,6 +120,33 @@ a, err := agent.NewAgent(
 ```
 
 No other code changes. The agent loop now runs as a durable Temporal workflow. See [Temporal runtime](/runtimes/temporal) for connection options including Temporal Cloud.
+
+## Switch to Restate (optional)
+
+Import `pkg/agent/runtime/restate` and add `restate.WithRestateConfig` to run the same agent durably. A running Restate server is required — see [Restate runtime](/runtimes/restate) and [restate-setup.md](https://github.com/agenticenv/agent-sdk-go/blob/main/restate-setup.md).
+
+```go
+a, err := agent.NewAgent(
+    restate.WithRestateConfig(&restate.RestateConfig{
+        Ingress: restate.IngressConfig{
+            URL: "http://localhost:8080",
+        },
+        Endpoint: restate.EndpointConfig{
+            ListenAddress: ":9080",
+            AdminURL:      "http://localhost:9070",
+        },
+    }),
+    agent.WithName("quickstart-agent"),
+    agent.WithSystemPrompt("You are a helpful assistant."),
+    agent.WithLLMClient(llmClient),
+)
+```
+
+No other code changes. The agent loop now runs as a durable Restate invocation with an embedded SDK endpoint. See [Restate runtime](/runtimes/restate) for ingress, deployment URL, and Cloud options.
+
+<Warning>
+Use **either** Temporal **or** Restate — not both on the same agent.
+</Warning>
 
 ## Try the repository example
 

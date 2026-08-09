@@ -30,6 +30,7 @@ type Runtime string
 const (
 	RuntimeLocal    Runtime = "local"
 	RuntimeTemporal Runtime = "temporal"
+	RuntimeRestate  Runtime = "restate"
 )
 
 // LLMConfig configures the built-in mock LLM (internal defaults, not in YAML).
@@ -48,6 +49,15 @@ type TemporalConfig struct {
 	TaskQueue string `yaml:"task_queue"`
 }
 
+// RestateConfig configures Restate when Runtime is restate.
+type RestateConfig struct {
+	IngressURL            string `yaml:"ingress_url"`
+	AdminURL              string `yaml:"admin_url"`
+	AuthKey               string `yaml:"auth_key"`
+	EndpointListenAddress string `yaml:"endpoint_listen_address"`
+	DeploymentURL         string `yaml:"deployment_url"`
+}
+
 // MemoryConfig configures long-term memory for eval harness runs.
 type MemoryConfig struct {
 	Enabled      bool
@@ -63,6 +73,7 @@ type Config struct {
 	UserPrompt   string
 	Runtime      Runtime
 	Temporal     TemporalConfig
+	Restate      RestateConfig
 	AgentName    string
 	SystemPrompt string
 	LLM          LLMConfig
@@ -81,6 +92,7 @@ type FileConfig struct {
 	Agent      FileAgentConfig  `yaml:"agent"`
 	Memory     FileMemoryConfig `yaml:"memory"`
 	Temporal   TemporalConfig   `yaml:"temporal"`
+	Restate    RestateConfig    `yaml:"restate"`
 }
 
 // FileMemoryConfig holds memory fields from YAML.
@@ -110,6 +122,7 @@ func (f *FileConfig) Config() Config {
 		UserPrompt:   f.UserPrompt,
 		Runtime:      Runtime(f.Runtime),
 		Temporal:     f.Temporal,
+		Restate:      f.Restate,
 		AgentName:    f.Agent.Name,
 		SystemPrompt: f.Agent.SystemPrompt,
 		ToolCount:    f.Agent.ToolCount,
@@ -171,9 +184,9 @@ func (f *FileConfig) validate() error {
 		if f.Runtime == "" {
 			f.Runtime = string(RuntimeLocal)
 		}
-	case string(RuntimeTemporal):
+	case string(RuntimeTemporal), string(RuntimeRestate):
 	default:
-		return fmt.Errorf("runtime must be %q or %q", RuntimeLocal, RuntimeTemporal)
+		return fmt.Errorf("runtime must be %q, %q, or %q", RuntimeLocal, RuntimeTemporal, RuntimeRestate)
 	}
 	if f.Agent.ToolCount <= 0 && !f.Memory.Enabled {
 		f.Agent.ToolCount = DefaultToolCount
@@ -196,6 +209,15 @@ func (f *FileConfig) validate() error {
 	if f.Temporal.Namespace == "" {
 		f.Temporal.Namespace = "default"
 	}
+	if f.Restate.IngressURL == "" {
+		f.Restate.IngressURL = "http://localhost:8080"
+	}
+	if f.Restate.AdminURL == "" {
+		f.Restate.AdminURL = "http://localhost:9070"
+	}
+	if f.Restate.EndpointListenAddress == "" {
+		f.Restate.EndpointListenAddress = ":9080"
+	}
 	if f.Memory.Enabled {
 		if _, err := ParseMemoryStoreMode(f.Memory.StoreMode); err != nil {
 			return err
@@ -215,6 +237,16 @@ func (f *FileConfig) validate() error {
 // UseTemporal reports whether cfg selects the Temporal runtime.
 func (c *Config) UseTemporal() bool {
 	return c != nil && strings.EqualFold(strings.TrimSpace(string(c.Runtime)), string(RuntimeTemporal))
+}
+
+// UseRestate reports whether cfg selects the Restate runtime.
+func (c *Config) UseRestate() bool {
+	return c != nil && strings.EqualFold(strings.TrimSpace(string(c.Runtime)), string(RuntimeRestate))
+}
+
+// UseDurableRuntime reports whether cfg selects Temporal or Restate.
+func (c *Config) UseDurableRuntime() bool {
+	return c.UseTemporal() || c.UseRestate()
 }
 
 // MemoryEnabled reports whether memory is wired for this run.
@@ -276,6 +308,15 @@ func (c *Config) ApplyDefaults() {
 	if c.Temporal.Namespace == "" {
 		c.Temporal.Namespace = "default"
 	}
+	if c.Restate.IngressURL == "" {
+		c.Restate.IngressURL = "http://localhost:8080"
+	}
+	if c.Restate.AdminURL == "" {
+		c.Restate.AdminURL = "http://localhost:9070"
+	}
+	if c.Restate.EndpointListenAddress == "" {
+		c.Restate.EndpointListenAddress = ":9080"
+	}
 }
 
 // ValidateMemory checks memory-related config when enabled.
@@ -307,9 +348,9 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("config is required")
 	}
 	switch strings.ToLower(strings.TrimSpace(string(c.Runtime))) {
-	case string(RuntimeLocal), string(RuntimeTemporal):
+	case string(RuntimeLocal), string(RuntimeTemporal), string(RuntimeRestate):
 	default:
-		return fmt.Errorf("runtime must be %q or %q", RuntimeLocal, RuntimeTemporal)
+		return fmt.Errorf("runtime must be %q, %q, or %q", RuntimeLocal, RuntimeTemporal, RuntimeRestate)
 	}
 	if !c.UsesMemoryScenario() && c.UserPrompt == "" {
 		return fmt.Errorf("user prompt is required")

@@ -34,10 +34,11 @@ Load order: `.env.defaults` → `.env` → process environment. Process-level ex
 
 | Dependency | When needed |
 |---|---|
-| **Docker + Compose** | Weaviate, pgvector, Redis, Temporal, OTLP collector |
+| **Docker + Compose** | Weaviate, pgvector, Redis, Temporal, Restate, OTLP collector |
 | **[Task](https://taskfile.dev)** | `task infra:*:up` targets from `examples/` |
 | **Node.js** | MCP stdio server (`npx`), AG-UI Next.js UI |
 | **Temporal server** | When `AGENT_RUNTIME=temporal` |
+| **Restate server** | When `AGENT_RUNTIME=restate` |
 | **Embedding API key** | pgvector and some memory/retriever examples — `EMBEDDING_OPENAI_APIKEY` in `.env` |
 
 ## Runtime modes
@@ -46,6 +47,7 @@ Load order: `.env.defaults` → `.env` → process environment. Process-level ex
 |---|---|---|
 | **Local** (default) | `AGENT_RUNTIME=local` or unset | None |
 | **Temporal** | `AGENT_RUNTIME=temporal` | Running Temporal server — `task infra:temporal:up && task infra:temporal:wait` |
+| **Restate** | `AGENT_RUNTIME=restate` | Running Restate server — `task infra:restate:up && task infra:restate:wait` |
 
 ## Environment variables
 
@@ -57,7 +59,7 @@ Load order: `.env.defaults` → `.env` → process environment. Process-level ex
 | `LLM_APIKEY` | API key — **required** |
 | `LLM_MODEL` | e.g. `gpt-4o`, `claude-sonnet-4-20250514`, `gemini-2.5-flash` |
 | `LLM_BASEURL` | Optional custom or proxy endpoint |
-| `AGENT_RUNTIME` | `local` (default) or `temporal` |
+| `AGENT_RUNTIME` | `local` (default), `temporal`, or `restate` |
 | `LOG_ENABLE` | `false` (default) or `true` — `false` uses `NoopLogger`; set `true` to enable SDK stderr logs |
 | `LOG_LEVEL` | `error` (default), `warn`, `info`, `debug` — applied when `LOG_ENABLE=true` |
 | `SHOW_LLM_USAGE` | `true` to print token usage footer after each run |
@@ -73,6 +75,18 @@ Used when `AGENT_RUNTIME=temporal`:
 | `TEMPORAL_PORT` | `7233` |
 | `TEMPORAL_NAMESPACE` | `default` |
 | `TEMPORAL_TASKQUEUE` | `agent-sdk-go` (each example appends a suffix) |
+
+### Restate
+
+Used when `AGENT_RUNTIME=restate`. See also [restate-setup.md](https://github.com/agenticenv/agent-sdk-go/blob/main/restate-setup.md).
+
+| Variable | Default |
+|---|---|
+| `RESTATE_INGRESS_URL` | `http://localhost:8080` |
+| `RESTATE_ADMIN_URL` | `http://localhost:9070` |
+| `RESTATE_ENDPOINT_LISTEN_ADDRESS` | `:9080` |
+| `RESTATE_DEPLOYMENT_URL` | empty (defaults to `http://127.0.0.1:9080`; set `http://host.docker.internal:9080` when Restate is in Docker) |
+| `RESTATE_AUTH_KEY` | empty |
 
 ### Conversation
 

@@ -2,12 +2,12 @@
 # Seed Weaviate after compose service is up (schema + sample documents).
 set -euo pipefail
 
-WEAVIATE_URL="${WEAVIATE_URL:-http://localhost:8080}"
 WEAVIATE_CLASS="${WEAVIATE_CLASS:-Document}"
 READY_TIMEOUT_SEC="${WEAVIATE_READY_TIMEOUT_SEC:-120}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXAMPLES_DIR="${SCRIPT_DIR}/../.."
+DEFAULTS_ENV_FILE="${EXAMPLES_DIR}/.env.defaults"
 ENV_FILE="${EXAMPLES_DIR}/.env"
 ROOT_ENV_FILE="${EXAMPLES_DIR}/../.env"
 DOCS_FILE="${SCRIPT_DIR}/sample-documents.json"
@@ -44,6 +44,33 @@ resolve_embedding_api_key() {
   exit 1
 }
 
+# Prefer env, then .env / .env.defaults, then built-in default (8081 — Restate uses 8080).
+resolve_weaviate_url() {
+  local f host scheme
+  if [[ -z "${WEAVIATE_URL:-}" ]]; then
+    if [[ -z "${WEAVIATE_HOST:-}" ]]; then
+      for f in "$ENV_FILE" "$DEFAULTS_ENV_FILE" "$ROOT_ENV_FILE"; do
+        if host="$(read_env_value WEAVIATE_HOST "$f" 2>/dev/null)" && [[ -n "$host" ]]; then
+          WEAVIATE_HOST="$host"
+          break
+        fi
+      done
+    fi
+    if [[ -z "${WEAVIATE_SCHEME:-}" ]]; then
+      for f in "$ENV_FILE" "$DEFAULTS_ENV_FILE" "$ROOT_ENV_FILE"; do
+        if scheme="$(read_env_value WEAVIATE_SCHEME "$f" 2>/dev/null)" && [[ -n "$scheme" ]]; then
+          WEAVIATE_SCHEME="$scheme"
+          break
+        fi
+      done
+    fi
+    WEAVIATE_SCHEME="${WEAVIATE_SCHEME:-http}"
+    WEAVIATE_HOST="${WEAVIATE_HOST:-localhost:8081}"
+    WEAVIATE_URL="${WEAVIATE_SCHEME}://${WEAVIATE_HOST}"
+  fi
+  export WEAVIATE_URL WEAVIATE_HOST WEAVIATE_SCHEME
+}
+
 wait_for_ready() {
   local deadline=$((SECONDS + READY_TIMEOUT_SEC))
   echo "Waiting for Weaviate at ${WEAVIATE_URL}..."
@@ -61,6 +88,7 @@ wait_for_ready() {
 require_cmd curl
 require_cmd jq
 resolve_embedding_api_key
+resolve_weaviate_url
 wait_for_ready
 
 echo "Creating class ${WEAVIATE_CLASS}..."

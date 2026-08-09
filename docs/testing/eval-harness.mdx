@@ -76,7 +76,7 @@ Default path: `eval-harness/runner/config.yaml`
 | `temporal.namespace` | `default` | Temporal namespace |
 | `temporal.task_queue` | `eval-harness` | Task queue |
 
-Temporal mode uses an embedded local worker — no separate worker process required.
+Temporal mode uses an embedded local worker. Restate mode embeds the SDK endpoint in the runner process.
 
 ### Memory scenarios
 
@@ -205,7 +205,7 @@ npx promptfoo eval -c config.yaml
 npx promptfoo view   # web UI for results
 ```
 
-Requires Node.js. PromptFoo installs on demand via `npx`.
+Requires Node.js `>=22.22.0` (24 LTS recommended). PromptFoo installs on demand via `npx`.
 
 | Piece | Role |
 |---|---|

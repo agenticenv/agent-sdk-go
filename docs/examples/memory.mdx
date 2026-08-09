@@ -45,7 +45,7 @@ go run ./agent_with_memory/weaviate
 task infra:weaviate:down   # when finished
 ```
 
-Verify schema: `curl -s http://localhost:8080/v1/schema | jq '.classes[].class'` — expect `Document` and `AgentMemory`.
+Verify schema: `curl -s http://localhost:8081/v1/schema | jq '.classes[].class'` — expect `Document` and `AgentMemory` (examples compose publishes Weaviate on host **8081**; Restate uses **8080**).
 
 **pgvector:**
 

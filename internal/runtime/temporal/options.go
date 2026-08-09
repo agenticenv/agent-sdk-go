@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	sdkruntime "github.com/agenticenv/agent-sdk-go/internal/runtime"
 	"github.com/agenticenv/agent-sdk-go/internal/store"
@@ -35,12 +36,6 @@ func WithTemporalClient(tc client.Client, taskQueue string) Option {
 		rt.taskQueue = taskQueue
 		rt.ownsTemporalClient = false
 	}
-}
-
-// WithInstanceId appends a suffix to the task queue (e.g. "myq-pod1") so multiple
-// instances of the same agent can run on isolated queues.
-func WithInstanceId(instanceId string) Option {
-	return func(rt *TemporalRuntime) { rt.instanceId = instanceId }
 }
 
 // WithRemoteWorker marks the runtime as a remote worker (true for [NewAgentWorker],
@@ -100,10 +95,10 @@ func WithAgentMode(mode string) Option {
 	return func(rt *TemporalRuntime) { rt.agentMode = mode }
 }
 
-// WithAgentToolExecutionMode sets the tool execution mode. The value is stored in
+// WithToolExecutionMode sets the tool execution mode. The value is stored in
 // the embedded [base.Runtime.ToolExecutionMode] so it drives both fingerprinting and
 // workflow-level tool execution.
-func WithAgentToolExecutionMode(mode types.AgentToolExecutionMode) Option {
+func WithToolExecutionMode(mode types.AgentToolExecutionMode) Option {
 	return func(rt *TemporalRuntime) { rt.ToolExecutionMode = mode }
 }
 
@@ -183,9 +178,11 @@ func buildTemporalRuntime(opts ...Option) (*TemporalRuntime, error) {
 		}
 	}
 
-	if rt.instanceId != "" {
-		rt.taskQueue = rt.taskQueue + "-" + rt.instanceId
+	name := strings.TrimSpace(rt.AgentSpec.Name)
+	if name == "" {
+		return nil, fmt.Errorf("agent name is required")
 	}
+	rt.taskQueue = rt.taskQueue + "_" + name
 
 	if rt.AgentConfig.LLM.Client == nil {
 		return nil, fmt.Errorf("llm client is required")
@@ -209,7 +206,6 @@ func buildTemporalRuntime(opts ...Option) (*TemporalRuntime, error) {
 		slog.String("scope", "runtime"),
 		slog.String("agentName", rt.AgentSpec.Name),
 		slog.String("taskQueue", rt.taskQueue),
-		slog.String("instanceId", rt.instanceId),
 		slog.Int("maxIterations", rt.AgentConfig.Limits.MaxIterations),
 		slog.Bool("remoteWorker", rt.remoteWorker),
 		slog.String("agentMode", rt.agentMode),

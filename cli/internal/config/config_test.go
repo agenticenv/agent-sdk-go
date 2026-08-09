@@ -158,6 +158,39 @@ func TestApplyAgentOverridesAPIKeyAndTemporal(t *testing.T) {
 	}
 }
 
+func TestApplyAgentOverridesRestate(t *testing.T) {
+	cfg := &Config{Runtime: "local", LLM: &LLMConfig{}}
+	ensureConfigStructs(cfg)
+
+	ApplyAgentOverrides(cfg, AgentOverrides{
+		Runtime:                      "restate",
+		RestateIngressURL:            "http://restate.example:8080",
+		RestateAdminURL:              "http://restate.example:9070",
+		RestateAuthKey:               "key",
+		RestateEndpointListenAddress: ":9090",
+		RestateDeploymentURL:         "http://host.docker.internal:9090",
+	})
+	if cfg.Runtime != "restate" {
+		t.Fatalf("runtime: %q", cfg.Runtime)
+	}
+	if cfg.Restate.IngressURL != "http://restate.example:8080" ||
+		cfg.Restate.AdminURL != "http://restate.example:9070" ||
+		cfg.Restate.AuthKey != "key" ||
+		cfg.Restate.EndpointListenAddress != ":9090" ||
+		cfg.Restate.DeploymentURL != "http://host.docker.internal:9090" {
+		t.Fatalf("restate overrides: %+v", cfg.Restate)
+	}
+
+	cfg2 := &Config{Runtime: "local", LLM: &LLMConfig{}}
+	ensureConfigStructs(cfg2)
+	ApplyAgentOverrides(cfg2, AgentOverrides{Runtime: "restate"})
+	if cfg2.Restate.IngressURL != "http://localhost:8080" ||
+		cfg2.Restate.AdminURL != "http://localhost:9070" ||
+		cfg2.Restate.EndpointListenAddress != ":9080" {
+		t.Fatalf("expected restate defaults, got %+v", cfg2.Restate)
+	}
+}
+
 func TestToolEnabledDefaultsAndOverrides(t *testing.T) {
 	dir := t.TempDir()
 	cfgHome := filepath.Join(dir, "xdg")

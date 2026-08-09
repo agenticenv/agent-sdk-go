@@ -1,14 +1,14 @@
 ---
 title: "In-Process Runtime"
 sidebarTitle: "In-Process"
-description: "Run the full agent loop in-process with no external infrastructure or Temporal required"
+description: "Run the full agent loop in-process with no external infrastructure or durable runtime required"
 ---
 
-The in-process runtime is the **default**. When you call [`NewAgent`](/getting-started/quickstart) without Temporal options, the agent loop runs directly inside your Go process. No Temporal server, no workers, no external orchestration.
+The in-process runtime is the **default**. When you call [`NewAgent`](/getting-started/quickstart) without Temporal or Restate options, the agent loop runs directly inside your Go process — no external orchestration server.
 
 ## Enable
 
-Omit all Temporal configuration:
+Omit all Temporal and Restate configuration:
 
 ```go
 a, err := agent.NewAgent(
@@ -52,7 +52,7 @@ All SDK capabilities are available on the in-process runtime:
 - Human-in-the-loop approvals
 - OpenTelemetry observability
 
-The only capabilities exclusive to Temporal are **durable execution** (crash recovery) and **horizontal worker scaling**.
+Durable execution (crash recovery) and durable reconnect (`GetAgentRun` / `GetAgentStream` + `WithOffset`) require the [Temporal](/runtimes/temporal) or [Restate](/runtimes/restate) runtime. Temporal also offers horizontal worker scaling via `NewAgentWorker`; Restate scales via multiple registered endpoint deployments.
 
 ## Limitations
 
@@ -61,11 +61,11 @@ The only capabilities exclusive to Temporal are **durable execution** (crash rec
 | **No crash recovery** | If the process exits mid-run, the run is lost — no replay, no resume |
 | **No crash reconnect** | `GetAgentRun` / `GetAgentStream` return `ErrRunNotFound` / `ErrStreamNotFound` after a crash; `Events(..., WithOffset(n))` with `n > 0` returns `ErrStreamOffsetNotSupported` |
 | **Single process** | No horizontal worker scaling |
-| **In-memory conversation only** | Redis works technically, but split-process deployments require Temporal |
-| **No split client/worker** | `DisableLocalWorker` and `NewAgentWorker` require the Temporal runtime |
+| **In-memory conversation only** | Redis works technically, but Temporal split-process deployments require Redis for shared conversation |
+| **Split client/worker** | Available on Temporal via `DisableLocalWorker` and `NewAgentWorker` |
 
 <Note>
-Handles from `Run` / `Stream` are same-process only. For crash reconnect (`GetAgentRun`, `GetAgentStream` + `WithOffset`), use the [Temporal runtime](/runtimes/temporal).
+Handles from `Run` / `Stream` are same-process only. For crash reconnect (`GetAgentRun`, `GetAgentStream` + `WithOffset`), use the [Temporal](/runtimes/temporal) or [Restate](/runtimes/restate) runtime.
 </Note>
 
 ## Error handling
@@ -117,16 +117,18 @@ Any panic inside a tool call is caught and returned as a `RUN_ERROR` event / err
 | Local development and unit testing | Ideal |
 | CI pipelines and integration tests | Ideal |
 | Simple API or script with short runs | Good |
-| Production chat with crash recovery required | Use Temporal |
-| Multi-process or horizontally scaled execution | Use Temporal |
+| Production chat with crash recovery required | Use Temporal or Restate |
+| Multi-process or horizontally scaled execution | Use Temporal (`NewAgentWorker`) or Restate (multiple endpoint deployments) |
 
-## Switch to Temporal
+## Switch to a durable runtime
 
-Add `WithTemporalConfig` — no other code changes:
+Import a durable runtime package and add its config option — no other code changes:
+
+**Temporal:**
 
 ```go
 a, err := agent.NewAgent(
-    agent.WithTemporalConfig(&agent.TemporalConfig{
+    temporal.WithTemporalConfig(&temporal.TemporalConfig{
         Host: "localhost", Port: 7233,
         Namespace: "default", TaskQueue: "my-app",
     }),
@@ -135,7 +137,20 @@ a, err := agent.NewAgent(
 )
 ```
 
-A running Temporal server is required. See [Temporal](/runtimes/temporal).
+**Restate:**
+
+```go
+a, err := agent.NewAgent(
+    restate.WithRestateConfig(&restate.RestateConfig{
+        Ingress:  restate.IngressConfig{URL: "http://localhost:8080"},
+        Endpoint: restate.EndpointConfig{ListenAddress: ":9080", AdminURL: "http://localhost:9070"},
+    }),
+    agent.WithLLMClient(llmClient),
+    agent.WithSystemPrompt("You are a helpful assistant."),
+)
+```
+
+A running Temporal or Restate server is required. See [Temporal](/runtimes/temporal) or [Restate](/runtimes/restate).
 
 ## Examples
 

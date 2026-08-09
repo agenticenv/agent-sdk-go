@@ -1,11 +1,19 @@
-runtime: local          # local or temporal
+runtime: local          # local, temporal, or restate
 
 temporal:
   host: localhost
   port: 7233
   namespace: default
   task_queue: agent-sdk-go
-  workers_count: 0   # 0 = embedded worker only; 1+ = spawn external root workers
+  workers_count: 0   # 0 = embedded worker only; 1+ = spawn external root workers (Temporal only)
+
+# Used when runtime: restate (embedded SDK endpoint; workers_count must stay 0)
+restate:
+  ingress_url: http://localhost:8080
+  admin_url: http://localhost:9070
+  auth_key: ""
+  endpoint_listen_address: ":9080"
+  deployment_url: ""
 
 llm:
   latency_ms: 200

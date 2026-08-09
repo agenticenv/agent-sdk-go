@@ -105,7 +105,7 @@ func LoadSettings() (*Settings, error) {
 		RecallEnabled:       getEnvBool("MEMORY_RECALL_ENABLED", true),
 		RecallLimit:         getEnvInt("MEMORY_RECALL_LIMIT", 10),
 		RecallMinScore:      float32(getEnvFloat("MEMORY_RECALL_MIN_SCORE", 0.35)),
-		WeaviateHost:        getEnv("WEAVIATE_HOST", "localhost:8080"),
+		WeaviateHost:        getEnv("WEAVIATE_HOST", "localhost:8081"),
 		WeaviateScheme:      getEnv("WEAVIATE_SCHEME", "http"),
 		WeaviateClass:       getEnv("WEAVIATE_CLASS", "Document"),
 		WeaviateMemoryClass: getEnv("WEAVIATE_MEMORY_CLASS", "AgentMemory"),

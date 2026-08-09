@@ -217,7 +217,7 @@ See [Token Usage](/features/token-usage) for field details.
 
 ## Reconnect with GetAgentStream
 
-On the [Temporal runtime](/runtimes/temporal), persist `agentStream.ID()` and each event’s offset **before** handling the event. After a process crash, reconnect and resume — the workflow keeps running server-side:
+On a durable runtime ([Temporal](/runtimes/temporal) or [Restate](/runtimes/restate)), persist `agentStream.ID()` and each event’s offset **before** handling the event. After a process crash, reconnect and resume — the run keeps executing server-side:
 
 ```go
 // During initial stream

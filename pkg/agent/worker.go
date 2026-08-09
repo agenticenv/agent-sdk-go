@@ -13,19 +13,35 @@ import (
 // AgentWorker runs the execution runtime's worker for an agent (polls the task queue and executes runs).
 type AgentWorker struct {
 	agentConfig
-	runtime runtime.Runtime
+	runtime   runtime.Runtime
+	taskQueue string // Temporal task queue; resolved from TemporalRuntime at construction
+}
+
+// newAgentWorker builds an AgentWorker and resolves the Temporal task queue from the runtime if present.
+func newAgentWorker(cfg *agentConfig, rt runtime.Runtime) *AgentWorker {
+	aw := &AgentWorker{agentConfig: *cfg, runtime: rt}
+	type taskQueueProvider interface {
+		TaskQueue() string
+	}
+	if tq, ok := rt.(taskQueueProvider); ok {
+		aw.taskQueue = tq.TaskQueue()
+	}
+	return aw
 }
 
 // NewAgentWorker creates an AgentWorker that polls and executes runs for the configured backend.
 // Same options as [NewAgent]. Use when the agent is created with [DisableLocalWorker].
-// AgentWorker requires a Temporal backend (WithTemporalConfig or WithTemporalClient).
+// AgentWorker requires a Temporal backend (WithTemporalConfig/WithTemporalClient, or the
+// opt-in pkg/agent/runtime/temporal equivalents). Restate is not supported here: a
+// [RestateRuntime] embeds its own SDK endpoint instead of polling a task queue, so there is
+// no separate worker process to start.
 func NewAgentWorker(opts ...Option) (*AgentWorker, error) {
 	cfg, err := buildAgentConfig(opts)
 	if err != nil {
 		return nil, err
 	}
 	if !cfg.hasTemporalRuntime() {
-		return nil, fmt.Errorf("AgentWorker requires a Temporal backend: use WithTemporalConfig or WithTemporalClient")
+		return nil, fmt.Errorf("AgentWorker requires a Temporal backend: use WithTemporalConfig, WithTemporalClient, or pkg/agent/runtime/temporal")
 	}
 	cfg.remoteWorker = true
 	if cfg.disableFingerprintCheck {
@@ -35,7 +51,7 @@ func NewAgentWorker(opts ...Option) (*AgentWorker, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &AgentWorker{agentConfig: *cfg, runtime: rt}, nil
+	return newAgentWorker(cfg, rt), nil
 }
 
 // Start starts the worker (blocks until Stop is called).

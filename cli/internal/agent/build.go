@@ -178,5 +178,8 @@ func createErrorHint(err error) string {
 	if errors.Is(err, types.ErrTemporalDialTimeout) || errors.Is(err, types.ErrTemporalNamespaceCheckTimeout) {
 		return "\n\nFor a local Temporal dev server, see temporal-setup.md at the repository root."
 	}
+	if err != nil && strings.Contains(strings.ToLower(err.Error()), "restate") {
+		return "\n\nFor a local Restate server, see restate-setup.md at the repository root."
+	}
 	return ""
 }

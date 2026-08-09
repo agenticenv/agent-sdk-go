@@ -27,15 +27,20 @@ func (c *RunCmd) Run(cfg *config.Config) error {
 		return err
 	}
 	config.ApplyAgentOverrides(cfg, config.AgentOverrides{
-		Runtime:           c.Runtime,
-		Provider:          c.Provider,
-		Model:             c.Model,
-		APIKey:            c.APIKey,
-		TemporalHost:      c.TemporalHost,
-		TemporalPort:      c.TemporalPort,
-		TemporalNamespace: c.TemporalNamespace,
-		TemporalTaskQueue: c.TemporalTaskQueue,
-		LLMUsage:          c.LLMUsage,
+		Runtime:                      c.Runtime,
+		Provider:                     c.Provider,
+		Model:                        c.Model,
+		APIKey:                       c.APIKey,
+		TemporalHost:                 c.TemporalHost,
+		TemporalPort:                 c.TemporalPort,
+		TemporalNamespace:            c.TemporalNamespace,
+		TemporalTaskQueue:            c.TemporalTaskQueue,
+		RestateIngressURL:            c.RestateIngressURL,
+		RestateAdminURL:              c.RestateAdminURL,
+		RestateAuthKey:               c.RestateAuthKey,
+		RestateEndpointListenAddress: c.RestateEndpointListenAddress,
+		RestateDeploymentURL:         c.RestateDeploymentURL,
+		LLMUsage:                     c.LLMUsage,
 	})
 
 	built, err := agent.Build(cfg, true)

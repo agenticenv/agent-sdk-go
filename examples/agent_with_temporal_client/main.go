@@ -1,7 +1,7 @@
-// agent_with_temporal_client demonstrates using WithTemporalClient to pass a pre-configured
-// Temporal client to the agent. The caller owns the client lifecycle: create it, pass to the
-// agent, and close it when done. Use this pattern when you need TLS, API key auth, Temporal
-// Cloud, or other connection options not supported by WithTemporalConfig.
+// agent_with_temporal_client demonstrates using temporal.WithTemporalClient to pass a
+// pre-configured Temporal client to the agent. The caller owns the client lifecycle: create it,
+// pass to the agent, and close it when done. Use this pattern when you need TLS, API key auth,
+// Temporal Cloud, or other connection options not supported by temporal.WithTemporalConfig.
 package main
 
 import (
@@ -14,8 +14,9 @@ import (
 
 	config "github.com/agenticenv/agent-sdk-go/examples"
 	"github.com/agenticenv/agent-sdk-go/examples/shared"
-	"github.com/agenticenv/agent-sdk-go/internal/runtime/temporal"
+	irt "github.com/agenticenv/agent-sdk-go/internal/runtime/temporal"
 	"github.com/agenticenv/agent-sdk-go/pkg/agent"
+	agenttemporal "github.com/agenticenv/agent-sdk-go/pkg/agent/runtime/temporal"
 	"go.temporal.io/sdk/client"
 )
 
@@ -35,7 +36,7 @@ func main() {
 	tc, err := client.Dial(client.Options{
 		HostPort:  hostPort,
 		Namespace: cfg.Namespace,
-		Logger:    temporal.NewLogAdapter(config.NewLoggerFromLogConfig(cfg)),
+		Logger:    irt.NewLogAdapter(config.NewLoggerFromLogConfig(cfg)),
 	})
 	if err != nil {
 		log.Fatalf("failed to create Temporal client: %v", err)
@@ -46,7 +47,7 @@ func main() {
 		agent.WithName("temporal-client-agent"),
 		agent.WithDescription("Agent using caller-owned Temporal client"),
 		agent.WithSystemPrompt("You are a helpful assistant."),
-		agent.WithTemporalClient(tc, cfg.TaskQueue),
+		agenttemporal.WithTemporalClient(tc, cfg.TaskQueue),
 		agent.WithLLMClient(llmClient),
 		agent.WithLogger(config.NewLoggerFromLogConfig(cfg)),
 	)

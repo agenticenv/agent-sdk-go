@@ -3,7 +3,7 @@ title: "Concurrent Runs"
 description: "Run multiple prompts concurrently on one Agent instance using Run handles and sync.WaitGroup"
 ---
 
-Dispatches several `Run` calls simultaneously on **one** `Agent` instance. Each run gets its own Temporal workflow (or local goroutine) — no separate `Agent` per request required.
+Dispatches several `Run` calls simultaneously on **one** `Agent` instance. Each run gets its own durable invocation (Temporal workflow / Restate invocation) or local goroutine — no separate `Agent` per request required.
 
 Source: [`examples/agent_with_concurrent_runs/`](https://github.com/agenticenv/agent-sdk-go/tree/main/examples/agent_with_concurrent_runs)
 
@@ -11,7 +11,7 @@ Source: [`examples/agent_with_concurrent_runs/`](https://github.com/agenticenv/a
 
 - Concurrent `Run` + `Get` with `sync.WaitGroup` for fan-out across one agent
 - Results printed as they arrive (arrival order varies)
-- Runtime-agnostic: `local` and `temporal` both supported via `AGENT_RUNTIME`
+- Runtime-agnostic: `local`, `temporal`, and `restate` via `AGENT_RUNTIME`
 
 ## Run
 
@@ -24,9 +24,13 @@ go run ./agent_with_concurrent_runs
 # pass your own prompts
 go run ./agent_with_concurrent_runs "Who wrote Hamlet?" "What is sqrt(144)?" "Name a primary color."
 
-# Temporal runtime
+# Temporal
 task infra:temporal:up && task infra:temporal:wait
 AGENT_RUNTIME=temporal go run ./agent_with_concurrent_runs
+
+# Restate
+task infra:restate:up && task infra:restate:wait
+AGENT_RUNTIME=restate go run ./agent_with_concurrent_runs
 ```
 
 ## Key code
@@ -35,7 +39,7 @@ AGENT_RUNTIME=temporal go run ./agent_with_concurrent_runs
 a, _ := agent.NewAgent(
     agent.WithName("concurrent-agent"),
     agent.WithLLMClient(llmClient),
-    // ...same options for local or Temporal
+    // ...same options for local, Temporal, or Restate
 )
 
 var wg sync.WaitGroup
@@ -83,7 +87,7 @@ Arrival order varies — results print as each run finishes, not in submission o
 
 <CardGroup cols={2}>
   <Card title="Multiple Agents" icon="layer-group" href="/examples/multiple-agents" horizontal>
-    Separate agent instances with distinct task queues
+    Several agents in one process
   </Card>
   <Card title="Non-blocking Run" icon="bolt" href="/examples/nonblocking-run" horizontal>
     Non-blocking Run with Done() and Get()

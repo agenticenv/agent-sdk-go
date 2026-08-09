@@ -58,7 +58,6 @@ type TemporalRuntime struct {
 	temporalConfig     *TemporalConfig
 	temporalClient     client.Client
 	taskQueue          string
-	instanceId         string
 	ownsTemporalClient bool
 	// remoteWorker: true for NewAgentWorker (polls activities); false for client Agent runtime.
 	remoteWorker bool
@@ -117,6 +116,11 @@ func NewTemporalRuntime(opts ...Option) (*TemporalRuntime, error) {
 			slog.String("taskQueue", rt.taskQueue))
 	}
 	return rt, nil
+}
+
+// TaskQueue returns the Temporal task queue this runtime was configured with.
+func (rt *TemporalRuntime) TaskQueue() string {
+	return rt.taskQueue
 }
 
 // fetchTools resolves tools from registries at activity time via [resolveToolsFn].
@@ -392,7 +396,7 @@ func (rt *TemporalRuntime) Run(ctx context.Context, req *runtime.RunRequest) (ru
 
 	threadID := conversationID
 	if threadID == "" {
-		threadID = rt.instanceId
+		threadID = strings.TrimSpace(rt.AgentSpec.Name)
 		if threadID == "" {
 			threadID = runID
 		}
@@ -732,10 +736,10 @@ func (rt *TemporalRuntime) Stream(ctx context.Context, req *runtime.RunRequest) 
 	}
 
 	runID := uuid.New().String()
-	// threadID labels synthetic lifecycle events; fall back to instance then runID.
+	// threadID labels synthetic lifecycle events; fall back to agent name then runID.
 	threadID := conversationID
 	if threadID == "" {
-		threadID = rt.instanceId
+		threadID = strings.TrimSpace(rt.AgentSpec.Name)
 		if threadID == "" {
 			threadID = runID
 		}
@@ -866,7 +870,7 @@ func (rt *TemporalRuntime) GetStreamHandle(ctx context.Context, runID string) (r
 	runCtx, runCancel := rt.newDriveContext(context.Background())
 
 	// threadID for synthetic lifecycle events; ConversationID is not available on reconnect.
-	threadID := rt.instanceId
+	threadID := strings.TrimSpace(rt.AgentSpec.Name)
 	if threadID == "" {
 		threadID = runID
 	}

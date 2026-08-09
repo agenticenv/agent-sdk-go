@@ -64,7 +64,7 @@ Later wins; partial YAML is fine.
 2. Register it on `CLI` in `cli.go` with `` `cmd:""` `` and help text.
 3. If `Run` needs injected values, add `ctx.Bind(...)` in `Execute` (today: `*config.Config`, version, config path, embedded YAML bytes).
 
-Chat and run share runtime/LLM/temporal flags through **`AgentOverrides`** embedded on both structs. Extend that embed instead of copying Kong tags.
+Chat and run share runtime/LLM/temporal/restate flags through **`AgentOverrides`** embedded on both structs. Extend that embed instead of copying Kong tags.
 
 ## Tests and release
 

@@ -1,11 +1,17 @@
 ---
 title: "Sub-agents"
-description: "Register specialist sub-agents and configure delegation depth, approval policies, and task queue routing"
+description: "Register specialist sub-agents and configure delegation depth and approval policies"
 ---
 
-Sub-agents let a **main agent** delegate work to **specialist agents** — each with its own LLM, tools, prompts, and Temporal task queue. The main agent sees each specialist as a delegation tool the LLM can invoke.
+Sub-agents let a **main agent** delegate work to **specialist agents** — each with its own LLM, tools, prompts, and distinct [`WithName`](/getting-started/configuration). The main agent sees each specialist as a delegation tool the LLM can invoke.
 
-When delegation fires, the runtime determines how it runs. On **Temporal**, the specialist runs as a **child workflow** on its own task queue — it can be scheduled on different workers and survives restarts independently. On the **local runtime**, it executes in-process. In both cases, the sub-agent result is fed back as a tool result to the main agent's LLM for the next round.
+When delegation fires, the runtime determines how it runs:
+
+- **Temporal** — the specialist runs as a **child workflow** on its task queue.
+- **Restate** — the specialist is an independent agent (own `AgentLoop` service and listen port); the parent invokes that service and stream events fan in to the parent's event log.
+- **Local runtime** — it executes in-process.
+
+In all cases, the sub-agent result is fed back as a tool result to the main agent's LLM for the next round.
 
 Use sub-agents for domain specialists (math, research, coding) without concentrating every capability into one prompt and tool list. Sub-agents also let you apply different models, system prompts, and tool policies per domain.
 
@@ -15,11 +21,11 @@ Build each specialist with `NewAgent`, then register it on the main agent:
 
 ```go
 mathAgent, err := agent.NewAgent(
-    agent.WithName("MathSpecialist"),
+    agent.WithName("math-specialist"),
     agent.WithDescription("Arithmetic; uses calculator tools."),
-    agent.WithTemporalConfig(&agent.TemporalConfig{
+    temporal.WithTemporalConfig(&temporal.TemporalConfig{
         Host: "localhost", Port: 7233, Namespace: "default",
-        TaskQueue: "my-app-math",  // unique task queue for this specialist
+        TaskQueue: "my-app",
     }),
     agent.WithLLMClient(llmClient),
     agent.WithToolRegistry(mathTools),
@@ -31,11 +37,11 @@ if err != nil {
 defer mathAgent.Close()
 
 mainAgent, err := agent.NewAgent(
-    agent.WithName("Orchestrator"),
+    agent.WithName("orchestrator"),
     agent.WithSystemPrompt("You are a helpful assistant."),
-    agent.WithTemporalConfig(&agent.TemporalConfig{
+    temporal.WithTemporalConfig(&temporal.TemporalConfig{
         Host: "localhost", Port: 7233, Namespace: "default",
-        TaskQueue: "my-app-main",
+        TaskQueue: "my-app",
     }),
     agent.WithLLMClient(llmClient),
     agent.WithSubAgents(mathAgent),
@@ -58,7 +64,7 @@ result, err := agentRun.Get(ctx)
 | [`WithSubAgents`](/getting-started/configuration) | Register specialists at creation |
 | [`WithMaxSubAgentDepth`](/getting-started/configuration) | Max delegation nesting depth — default **2** |
 
-Each specialist needs a **unique** `TaskQueue` when using Temporal. Use clear `WithName` and `WithDescription` values — they appear in the delegation tool schema the LLM sees for routing decisions.
+Sub-agent names must differ from the root. Use clear `WithName` and `WithDescription` values — they appear in the delegation tool schema the LLM sees for routing decisions.
 
 <Note>
 Each delegation is a tool round on the **main agent** — it consumes one iteration from `WithMaxIterations`. An orchestrator that delegates twice and then generates a final answer uses at least 3 iterations. With the default of 5, headroom is tight. Increase `WithMaxIterations` on the main agent to match your expected delegation depth: a good starting point is `2 × expected delegations + 2`.

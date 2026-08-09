@@ -20,3 +20,11 @@ temporal:
   port: 7233
   namespace: default
   task_queue: eval-harness
+
+# Used when runtime: restate
+restate:
+  ingress_url: http://localhost:8080
+  admin_url: http://localhost:9070
+  auth_key: ""
+  endpoint_listen_address: ":9080"
+  deployment_url: ""

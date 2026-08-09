@@ -1,6 +1,6 @@
 # Examples
 
-These programs exercise **agent-sdk-go** (`github.com/agenticenv/agent-sdk-go`). By default examples run on the **local** runtime (in-process, no external services). Set `AGENT_RUNTIME=temporal` in `.env` for durable Temporal execution.
+These programs exercise **agent-sdk-go** (`github.com/agenticenv/agent-sdk-go`). By default examples run on the **local** runtime (in-process, no external services). Set `AGENT_RUNTIME=temporal` or `AGENT_RUNTIME=restate` in `.env` for durable execution.
 
 ## Configuration
 
@@ -11,9 +11,9 @@ Set this up once before running any example. Per-example READMEs only list extra
 1. **`cd examples`** — every `go run` and `task` command assumes this directory.
 2. **Create `examples/.env`** — gitignored file for your API key and any overrides (see below).
 3. **Run an example** — e.g. `go run ./simple_agent "Hello"`. On startup, [`config.go`](config.go) loads env vars and each program builds its agent from that config.
-4. **Optional infra** — if the example needs Redis, Temporal, Weaviate, etc., start it first with `task infra:*:up` ([Setup](#setup)), then `go run`.
+4. **Optional infra** — if the example needs Redis, Temporal, Restate, Weaviate, etc., start it first with `task infra:*:up` ([Setup](#setup)), then `go run`.
 
-You do not copy or edit `.env.defaults` for normal use — it supplies committed defaults (ports, stdio MCP command, Temporal host, etc.) and is loaded automatically before your `.env`.
+You do not copy or edit `.env.defaults` for normal use — it supplies committed defaults (ports, stdio MCP command, Temporal/Restate hosts, etc.) and is loaded automatically before your `.env`.
 
 ### Requirements
 
@@ -46,16 +46,17 @@ LLM_MODEL=gpt-4o
 EOF
 ```
 
-Never commit API keys. Override any default the same way — e.g. `AGENT_RUNTIME=temporal`, remote `A2A_URL`, or `MCP_TRANSPORT=streamable_http` + `MCP_STREAMABLE_HTTP_URL`.
+Never commit API keys. Override any default the same way — e.g. `AGENT_RUNTIME=temporal`, `AGENT_RUNTIME=restate`, remote `A2A_URL`, or `MCP_TRANSPORT=streamable_http` + `MCP_STREAMABLE_HTTP_URL`.
 
 ### Optional dependencies
 
 | Dependency | When needed |
 |---|---|
-| **Docker + Compose** | Weaviate, pgvector, Redis, Temporal, OTLP collector |
+| **Docker + Compose** | Weaviate, pgvector, Redis, Temporal, Restate, OTLP collector |
 | **[Task](https://taskfile.dev)** | `task infra:*:up` from `examples/` — see [Setup](#setup) |
 | **Node.js** | MCP stdio server (`npx`), AG-UI Next.js UI |
 | **Temporal server** | When `AGENT_RUNTIME=temporal` — see [Runtime](#runtime) |
+| **Restate server** | When `AGENT_RUNTIME=restate` — see [Runtime](#runtime) |
 | **`EMBEDDING_OPENAI_APIKEY`** | pgvector and some memory/retriever examples |
 
 Full variable list: [Env vars](#env-vars) below and [`.env.defaults`](.env.defaults).
@@ -66,18 +67,23 @@ Full variable list: [Env vars](#env-vars) below and [`.env.defaults`](.env.defau
 |------|--------------|-------------|
 | `local` (default) | `AGENT_RUNTIME=local` (or unset) | Nothing — runs in-process |
 | `temporal` | `AGENT_RUNTIME=temporal` | **`task infra:temporal:up`** + **`infra:temporal:wait`** from `examples/`, or **[Temporal setup](../temporal-setup.md)** |
+| `restate` | `AGENT_RUNTIME=restate` | **`task infra:restate:up`** + **`infra:restate:wait`** from `examples/`, or **[Restate setup](../restate-setup.md)** |
 
 When using Temporal the examples read `TEMPORAL_HOST`, `TEMPORAL_PORT`, and `TEMPORAL_NAMESPACE` from `.env` (default: localhost, 7233, default).
+
+When using Restate the examples read `RESTATE_INGRESS_URL`, `RESTATE_ADMIN_URL`, `RESTATE_ENDPOINT_LISTEN_ADDRESS`, and optional `RESTATE_DEPLOYMENT_URL` / `RESTATE_AUTH_KEY` from `.env` (defaults: ingress `http://localhost:8080`, admin `http://localhost:9070`, listen `:9080`). If Restate runs in Docker and the agent on the host, set `RESTATE_DEPLOYMENT_URL=http://host.docker.internal:9080`. Example Weaviate is published on host **8081** (`WEAVIATE_HOST=localhost:8081`) so it does not collide with Restate ingress on **8080**.
 
 ## Examples overview
 
 From **`examples/`**, use [Task](https://taskfile.dev) and [`Taskfile.yml`](Taskfile.yml) for infra in the table below, then **`go run ./<example>`**. Install **`task`**, infra targets, and batch runs: [Setup](#setup). Third-party MCP/A2A servers stay manual — see each example’s README.
 
-### Works with both runtimes
+### Works with local, Temporal, and Restate
 
-These examples run with `AGENT_RUNTIME=local` (default) or `AGENT_RUNTIME=temporal`.
+These examples run with `AGENT_RUNTIME=local` (default), `AGENT_RUNTIME=temporal`, or `AGENT_RUNTIME=restate` via `config.RuntimeOption`.
 
-**Temporal runtime:** set `AGENT_RUNTIME=temporal` in `.env`, then run **`task infra:temporal:up`** and **`task infra:temporal:wait`** before `go run` (for every row below, in addition to the infra in the third column).
+**Temporal:** set `AGENT_RUNTIME=temporal` in `.env`, then run **`task infra:temporal:up`** and **`task infra:temporal:wait`** before `go run` (for every row below, in addition to the infra in the third column).
+
+**Restate:** set `AGENT_RUNTIME=restate` in `.env`, then run **`task infra:restate:up`** and **`task infra:restate:wait`** before `go run`. Restate embeds the SDK endpoint in the example process.
 
 | Example | What it demonstrates | Infra (Task, from `examples/`) |
 |---------|---------------------|--------------------------------|
@@ -93,7 +99,7 @@ These examples run with `AGENT_RUNTIME=local` (default) or `AGENT_RUNTIME=tempor
 | `agent_with_stream_conversation` | Stream + conversation; avoid printing the same text twice (**`TEXT_MESSAGE_CONTENT`** deltas vs **`RUN_FINISHED`** body) | — |
 | `agent_with_nonblocking_run` | Non-blocking `Run` — wait on `AgentRun.Done()`, then `Get()`; `WithApprovalHandler` for approvals | — |
 | `agent_with_concurrent_runs` | Multiple `Run` calls in parallel on a **single** `Agent` instance — fan-out with `WaitGroup`, results via `Get` as they arrive | — |
-| `multiple_agents` | Multiple agents with `WithInstanceId` — sequential or concurrent | — |
+| `multiple_agents` | Multiple agents in one process — sequential or concurrent | — |
 | `agent_with_subagents` | Main agent + math specialist — `WithSubAgents`; prints **`STEP_STARTED` / `STEP_FINISHED`** (sub-agent name) around each child run when using `Stream` | — |
 | `agent_with_json_response` | Structured LLM output — `WithResponseFormat` + `interfaces.JSONSchema` (JSON with schema; no tools) | — |
 | `agent_with_reasoning` | Generic `interfaces.LLMReasoning` via `WithLLMSampling` — `Stream` to observe `thinking_delta` (e.g. Anthropic) | — |
@@ -110,22 +116,39 @@ These examples run with `AGENT_RUNTIME=local` (default) or `AGENT_RUNTIME=tempor
 | `agent_with_workflows` | Deterministic workflow execution via `run_workflow` tool — `WorkflowRunner` interface; `inprocess_runner.go` (default, no infra) and `temporal_runner.go` (`ORCHESTRATION_ENGINE=temporal`) | `infra:temporal:up`, `infra:temporal:wait` (Temporal engine only) |
 | `agent_with_code_execution` | Sandboxed code execution via `execute_code` tool — `SandboxRuntime` interface; `local_runner.go` (default, needs Python/Node) and `docker_runner.go` (`SANDBOX_ENV=docker`) | Docker (Docker runner only) |
 
-### Temporal only
+### Durable runtimes (Temporal or Restate)
 
-Set **`AGENT_RUNTIME=temporal`**. Start **`task infra:temporal:up`** and **`task infra:temporal:wait`** before `go run`.
+Requires **`AGENT_RUNTIME=temporal`** or **`AGENT_RUNTIME=restate`** (not local — no stream offsets). Same reconnect APIs on both; single process by default.
 
 | Example | What it demonstrates | Infra (Task, from `examples/`) |
 |---------|---------------------|--------------------------------|
-| `agent_with_temporal_client` | Caller-owned Temporal client — `WithTemporalClient` + `WithTaskQueue`; TLS, API key, Cloud | `infra:temporal:up`, `infra:temporal:wait` |
+| `agent_with_reconnect` | **`GetAgentStream`** end to end — simulate subscriber crash, resume from offset — **[README](agent_with_reconnect/README.md)** | `infra:temporal:*` or `infra:restate:*` |
+
+### Temporal only
+
+Set **`AGENT_RUNTIME=temporal`**. Start **`task infra:temporal:up`** and **`task infra:temporal:wait`** before `go run`. These use Temporal-specific APIs (`WithTemporalClient`, `NewAgentWorker`, split-process labs). For Restate durability labs, see [Restate only](#restate-only) below.
+
+| Example | What it demonstrates | Infra (Task, from `examples/`) |
+|---------|---------------------|--------------------------------|
+| `agent_with_temporal_client` | Caller-owned Temporal client — `temporal.WithTemporalClient`; TLS, API key, Cloud | `infra:temporal:up`, `infra:temporal:wait` |
 | `agent_with_worker` | Agent and worker in **separate processes** — `DisableLocalWorker` + `NewAgentWorker`; **`Stream`**; events delivered via **Temporal Workflow Streams** | `infra:temporal:up`, `infra:temporal:wait` |
-| `durable_agent` | Split-process durability — **`Stream`** with Temporal Workflow Streams; kill worker/agent mid-run and restart to observe replay — **[README](durable_agent/README.md)** | `infra:temporal:up`, `infra:temporal:wait` |
-| `agent_with_reconnect` | **`GetAgentStream`** end to end — start a stream, simulate crash after first event, reconnect from saved `runID` + offset via `Events(..., WithOffset(...))`; prints per-event offsets so you can see what to persist — **[README](agent_with_reconnect/README.md)** | `infra:temporal:up`, `infra:temporal:wait` |
+| `durable_agent/temporal` | Split-process durability — **`Stream`** with Temporal Workflow Streams; kill worker/agent mid-run and restart — **[README](durable_agent/temporal/README.md)** | `infra:temporal:up`, `infra:temporal:wait` |
+
+### Restate only
+
+Set **`AGENT_RUNTIME=restate`**. Start **`task infra:restate:up`** and **`task infra:restate:wait`** before `go run`.
+
+| Example | What it demonstrates | Infra (Task, from `examples/`) |
+|---------|---------------------|--------------------------------|
+| `durable_agent/restate` | Single-process durability — embedded SDK endpoint; kill agent mid-run and reconnect — **[README](durable_agent/restate/README.md)** | `infra:restate:up`, `infra:restate:wait` |
+
+Index: **[durable_agent/README.md](durable_agent/README.md)**.
 
 ## Setup
 
 For **`.env`** and credentials, see [Configuration](#configuration) first. Add **`EMBEDDING_OPENAI_APIKEY`** there when running pgvector or embedding-backed memory/retriever examples.
 
-**Task** — not installed by default; install via **[Task installation](https://taskfile.dev/installation/)** (platform-specific). Not needed for **`go run ./<example>`** when the overview table has no infra. Compose infra also needs **Docker**. From **`examples/`**: **`task infra:status`**, **`infra:deps:up`** / **`down`**, **`infra:*:up`** / **`down`**. From **repo root**: **`task examples:local`**, **`task examples:temporal`**, **`task examples:all`**. Contributors: run **`task examples:all`** before any PR to catch regressions across local and Temporal runtimes. New examples that can run non-interactively (one-shot, no REPL, no separate worker) should be listed in **`taskfiles/examples.yml`** (`EXAMPLES`, `EXAMPLES_WITH_PROMPTS`, or `EXAMPLES_TEMPORAL` as appropriate). **`task --dry`** only prints commands (no report file). To preview the report layout without running examples or infra, use **`task examples:local:plan`**, **`task examples:temporal:plan`**, or **`task examples:all:plan`**.
+**Task** — not installed by default; install via **[Task installation](https://taskfile.dev/installation/)** (platform-specific). Not needed for **`go run ./<example>`** when the overview table has no infra. Compose infra also needs **Docker**. From **`examples/`**: **`task infra:status`**, **`infra:deps:up`** / **`down`**, **`infra:*:up`** / **`down`**. From **repo root**: **`task examples:local`**, **`task examples:temporal`**, **`task examples:restate`**, **`task examples:all`**. Contributors: run **`task examples:all`** before any PR to catch regressions across local, Temporal, and Restate runtimes. New examples that can run non-interactively (one-shot, no REPL) should be listed in **`taskfiles/examples.yml`** (`EXAMPLES`, `EXAMPLES_WITH_PROMPTS`, `EXAMPLES_TEMPORAL`, or `EXAMPLES_RESTATE` as appropriate). **`task --dry`** only prints commands (no report file). To preview the report layout without running examples or infra, use **`task examples:local:plan`**, **`task examples:temporal:plan`**, **`task examples:restate:plan`**, or **`task examples:all:plan`**.
 
 ## Run examples
 
@@ -188,7 +211,7 @@ go run ./agent_with_hooks
 go run ./agent_with_hooks "My email is alice@example.com. What is the return policy?"
 ```
 
-See **[agent_with_hooks/README.md](agent_with_hooks/README.md)**. When using **`AGENT_RUNTIME=temporal`**, register the same hook groups on both the agent starter and the worker.
+See **[agent_with_hooks/README.md](agent_with_hooks/README.md)**. When using **`AGENT_RUNTIME=temporal`**, register the same hook groups on both the agent starter and the worker. On Restate, hooks run in the process that serves the embedded endpoint.
 
 ### Streaming (partial content as tokens arrive)
 
@@ -342,32 +365,36 @@ AGENT_RUNTIME=temporal go run ./agent_with_worker/worker    # terminal 1: worker
 AGENT_RUNTIME=temporal go run ./agent_with_worker/agent "Hello from remote agent!"   # terminal 2: agent
 ```
 
-#### Durable agent — workflow replay and failure scenarios (`durable_agent`)
+#### Durable agent — Temporal (`durable_agent/temporal`)
 
 ```bash
-AGENT_RUNTIME=temporal go run ./durable_agent/worker       # terminal 1
-AGENT_RUNTIME=temporal go run ./durable_agent/agent "Hello from remote agent!"   # terminal 2
+AGENT_RUNTIME=temporal go run ./durable_agent/temporal/worker       # terminal 1
+AGENT_RUNTIME=temporal go run ./durable_agent/temporal/agent "Hello from remote agent!"   # terminal 2
 ```
 
-See **[durable_agent/README.md](durable_agent/README.md)** for durability and failure scenarios.
+See **[durable_agent/temporal/README.md](durable_agent/temporal/README.md)**.
+
+#### Durable agent — Restate (`durable_agent/restate`)
+
+```bash
+task infra:restate:up && task infra:restate:wait
+AGENT_RUNTIME=restate go run ./durable_agent/restate "Hello from Restate durable agent!"
+```
+
+See **[durable_agent/restate/README.md](durable_agent/restate/README.md)**.
 
 #### Reconnect — resume a stream from a saved offset (`agent_with_reconnect`)
 
-Demonstrates `GetAgentStream`: the agent starts a stream, deliberately cancels it after the first text chunk (simulating a crash), then reconnects with `GetAgentStream(ctx, savedRunID)` and `Events(ctx, WithOffset(savedOffset))`. Events display their offset so you can see what to persist.
-
-For stream runs that must survive process restarts, capture `runID` from `agentStream.ID()` immediately and store it before consuming events — that is the pattern this example shows. See **[agent_with_reconnect/README.md](agent_with_reconnect/README.md)**.
-
-Single-process mode — embedded worker, no separate terminal needed:
+Demonstrates `GetAgentStream`: the agent starts a stream, deliberately cancels it after the first text chunk (simulating a crash), then reconnects with `GetAgentStream(ctx, savedRunID)` and `Events(ctx, WithOffset(savedOffset))`. Works with **Temporal** and **Restate** (single process). See **[agent_with_reconnect/README.md](agent_with_reconnect/README.md)**.
 
 ```bash
-AGENT_RUNTIME=temporal go run ./agent_with_reconnect/agent "What time is it?"
-```
+# Temporal
+task infra:temporal:up && task infra:temporal:wait
+AGENT_RUNTIME=temporal go run ./agent_with_reconnect "What time is it?"
 
-Optional separate-worker mode (to demonstrate agent+worker split):
-
-```bash
-AGENT_RUNTIME=temporal go run ./agent_with_reconnect/worker       # terminal 1
-AGENT_RUNTIME=temporal go run ./agent_with_reconnect/agent "What time is it?"   # terminal 2
+# Restate
+task infra:restate:up && task infra:restate:wait
+AGENT_RUNTIME=restate go run ./agent_with_reconnect "What time is it?"
 ```
 
 ---
@@ -408,8 +435,9 @@ For memory examples, `SHOW_TELEMETRY=true` also prints `total_memory_recalls` an
 
 | Env var | Description |
 |---------|-------------|
-| `AGENT_RUNTIME` | `local` (default) or `temporal` — selects the execution backend |
+| `AGENT_RUNTIME` | `local` (default), `temporal`, or `restate` — selects the execution backend |
 | `TEMPORAL_HOST`, `TEMPORAL_PORT`, `TEMPORAL_NAMESPACE`, `TEMPORAL_TASKQUEUE` | Temporal connection (used when `AGENT_RUNTIME=temporal`) |
+| `RESTATE_INGRESS_URL`, `RESTATE_ADMIN_URL`, `RESTATE_ENDPOINT_LISTEN_ADDRESS`, `RESTATE_DEPLOYMENT_URL`, `RESTATE_AUTH_KEY` | Restate connection (used when `AGENT_RUNTIME=restate`) — see [restate-setup.md](../restate-setup.md) |
 | `REDIS_ADDR` | Redis address for `agent_with_conversation` (default: `localhost:6379`) |
 | `CONVERSATION_ID` | Optional session id override for conversation examples |
 | `LLM_PROVIDER` | `openai`, `anthropic`, or `gemini` (see `.env.defaults`) |

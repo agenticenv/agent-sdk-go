@@ -6,7 +6,7 @@ description: "Run agents as durable Temporal workflows that survive crashes, res
 
 The Temporal runtime executes agent runs as **durable workflows**. Tool calls, LLM rounds, and approvals survive process crashes and deploys — Temporal replays workflow history and resumes from the last recorded step.
 
-Enable it by passing [`WithTemporalConfig`](/getting-started/configuration) or [`WithTemporalClient`](/getting-started/configuration) to [`NewAgent`](/getting-started/quickstart). A running Temporal server or Temporal Cloud namespace is required.
+Enable it by importing [`pkg/agent/runtime/temporal`](https://pkg.go.dev/github.com/agenticenv/agent-sdk-go/pkg/agent/runtime/temporal) and passing [`temporal.WithTemporalConfig`](/getting-started/configuration) or [`temporal.WithTemporalClient`](/getting-started/configuration) to [`NewAgent`](/getting-started/quickstart). A running Temporal server or Temporal Cloud namespace is required. For the Restate durable backend instead, see [Restate runtime](/runtimes/restate).
 
 ## Prerequisites
 
@@ -28,8 +28,13 @@ Both expose gRPC at `localhost:7233` and a Web UI at http://localhost:8233.
 The SDK dials Temporal and manages the client lifecycle:
 
 ```go
+import (
+    "github.com/agenticenv/agent-sdk-go/pkg/agent"
+    "github.com/agenticenv/agent-sdk-go/pkg/agent/runtime/temporal"
+)
+
 a, err := agent.NewAgent(
-    agent.WithTemporalConfig(&agent.TemporalConfig{
+    temporal.WithTemporalConfig(&temporal.TemporalConfig{
         Host:      "localhost",
         Port:      7233,
         Namespace: "default",
@@ -58,7 +63,11 @@ By default, `NewAgent` also starts an **embedded local worker** that polls the t
 Use when you need mTLS, Temporal Cloud API keys, or connection options not covered by `TemporalConfig`. You create and own the Temporal client:
 
 ```go
-import "go.temporal.io/sdk/client"
+import (
+    "github.com/agenticenv/agent-sdk-go/pkg/agent"
+    "github.com/agenticenv/agent-sdk-go/pkg/agent/runtime/temporal"
+    "go.temporal.io/sdk/client"
+)
 
 tc, err := client.Dial(client.Options{
     HostPort:    "namespace-id.tmprl.cloud:7233",
@@ -71,7 +80,7 @@ if err != nil {
 defer tc.Close()
 
 a, err := agent.NewAgent(
-    agent.WithTemporalClient(tc, "my-app"),  // pass taskQueue as second arg
+    temporal.WithTemporalClient(tc, "my-app"),  // pass taskQueue as second arg
     agent.WithLLMClient(llmClient),
     agent.WithSystemPrompt("You are a helpful assistant."),
 )
@@ -122,7 +131,7 @@ Because every agent run is a Temporal workflow:
 - **Runs outlive the client process** — the workflow continues in Temporal even if your application exits
 - **`Close` does not terminate workflows** — stopping a worker or calling `Agent.Close()` only shuts down the local worker poll loop and owned client connections; in-flight workflows keep running and any restarted worker picks them up automatically
 
-See [Durable Agent example](/examples/durable-agent) for crash and retry scenarios.
+See [Durable Agent (Temporal)](/examples/durable-agent) for crash and retry scenarios.
 
 ## Split client and worker
 
@@ -132,7 +141,7 @@ For production, split the agent client and worker into separate processes.
 
 ```go
 w, err := agent.NewAgentWorker(
-    agent.WithTemporalConfig(&agent.TemporalConfig{
+    temporal.WithTemporalConfig(&temporal.TemporalConfig{
         Host: "localhost", Port: 7233,
         Namespace: "default", TaskQueue: "my-app",
     }),
@@ -145,7 +154,7 @@ go w.Start(ctx)
 
 ```go
 a, err := agent.NewAgent(
-    agent.WithTemporalConfig(&agent.TemporalConfig{
+    temporal.WithTemporalConfig(&temporal.TemporalConfig{
         Host: "localhost", Port: 7233,
         Namespace: "default", TaskQueue: "my-app",
     }),
@@ -229,13 +238,13 @@ See [Distributed execution](/advanced/distributed-execution) for the full list a
 
 ## Sub-agents on Temporal
 
-Sub-agent delegation runs as a **child workflow** on its own task queue. This is an execution model detail — the child workflow is independently durable and tracked by Temporal. See [Sub-agents](/features/sub-agents) for configuration and stream fan-in behaviour.
+Sub-agent delegation runs as a **child workflow**. The child workflow is independently durable and tracked by Temporal. See [Sub-agents](/features/sub-agents) for configuration and stream fan-in behaviour.
 
 ## Examples
 
 <CardGroup cols={2}>
 
-  <Card title="Durable Agent" icon="shield" href="/examples/durable-agent" horizontal>
+  <Card title="Durable Agent (Temporal)" icon="shield" href="/examples/durable-agent" horizontal>
     Crash recovery and split-process durability
   </Card>
 

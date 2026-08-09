@@ -24,7 +24,7 @@ func buildAgentBundle(cfg *setup.Config, llm *setup.MockLLMClient, lgr logger.Lo
 	if err != nil {
 		return nil, err
 	}
-	if cfg.UseTemporal() {
+	if cfg.UseDurableRuntime() {
 		time.Sleep(300 * time.Millisecond)
 	}
 

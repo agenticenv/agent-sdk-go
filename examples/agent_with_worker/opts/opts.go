@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/agenticenv/agent-sdk-go/pkg/agent"
+	agenttemporal "github.com/agenticenv/agent-sdk-go/pkg/agent/runtime/temporal"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
 )
@@ -21,10 +22,10 @@ func Common(
 ) []agent.Option {
 	return []agent.Option{
 		// Display name may include spaces; Temporal run/event workflow IDs sanitize it for ID-safe segments.
-		agent.WithName("Remote worker"),
+		agent.WithName("remote-worker"),
 		agent.WithDescription("Agent with remote worker - client and worker run in separate processes"),
 		agent.WithSystemPrompt("You are a helpful assistant."),
-		agent.WithTemporalConfig(&agent.TemporalConfig{
+		agenttemporal.WithTemporalConfig(&agenttemporal.TemporalConfig{
 			Host:      host,
 			Port:      port,
 			Namespace: namespace,

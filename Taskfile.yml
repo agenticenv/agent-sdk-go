@@ -137,7 +137,7 @@ tasks:
         fi
 
   eval-harness:
-    desc: Promptfoo + DeepEval (same as CI eval-harness job). Requires Node.js and Python 3.10+.
+    desc: Promptfoo + DeepEval (same as CI eval-harness job). Requires Node.js >=22.22.0 (24 LTS recommended) and Python 3.10+.
     cmds:
       - echo "==> Running eval-harness (Promptfoo + DeepEval)..."
       - cd eval-harness/promptfoo && npx --yes promptfoo@latest eval -c config.yaml

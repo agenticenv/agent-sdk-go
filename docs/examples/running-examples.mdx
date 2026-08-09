@@ -16,43 +16,48 @@ go run ./simple_agent "Hello, what can you do?"
 
 Examples use `LLM_APIKEY`, `LLM_PROVIDER`, and `LLM_MODEL` from `examples/.env` (loaded with `.env.defaults`). The [Quickstart](/getting-started/quickstart) uses provider-native names such as `OPENAI_API_KEY` in your own module. The [CLI](/getting-started/cli) uses `AGENT_LLM_*` prefixes. Same SDK — different env conventions per entry point.
 
-## Local vs Temporal
+## Local vs Temporal vs Restate
 
 | Mode | Setting | Before `go run` |
 |---|---|---|
 | **Local** (default) | `AGENT_RUNTIME=local` or unset | Nothing extra |
 | **Temporal** | `AGENT_RUNTIME=temporal` | `task infra:temporal:up` and `task infra:temporal:wait` |
+| **Restate** | `AGENT_RUNTIME=restate` | `task infra:restate:up` and `task infra:restate:wait` |
+
+Most examples accept all three via `config.RuntimeOption`. Temporal labs (`durable_agent/temporal`, `agent_with_worker`, `agent_with_temporal_client`) use Temporal-specific APIs (`WithTemporalClient`, `NewAgentWorker`). Durable reconnect (`agent_with_reconnect`) works on Temporal or Restate. Restate durability lab: `durable_agent/restate`. See [Restate runtime](/runtimes/restate) and [restate-setup.md](https://github.com/agenticenv/agent-sdk-go/blob/main/restate-setup.md).
 
 ## Example index
 
 | Example | Feature guide | Runtime | Infrastructure |
 |---|---|---|---|
-| [Simple Agent](/examples/simple-agent) | [Quickstart](/getting-started/quickstart) | Local, Temporal | — |
+| [Simple Agent](/examples/simple-agent) | [Quickstart](/getting-started/quickstart) | Local, Temporal, Restate | — |
 | [Temporal Client](/examples/temporal-client) | [Temporal](/runtimes/temporal) | Temporal | Temporal |
-| [Non-blocking Run](/examples/nonblocking-run) | [Run](/getting-started/run) | Local, Temporal | — |
-| [JSON Response](/examples/json-response) | [Response format](/features/response-format) | Local, Temporal | — |
-| [Reasoning](/examples/reasoning) | [Reasoning](/features/reasoning) | Local, Temporal | — |
-| [Tools](/examples/tools) | [Tools](/features/tools) | Local, Temporal | — |
-| [Workflows](/examples/workflows) | [Deterministic Execution](/advanced/deterministic-execution) | Local, Temporal | — (in-process default); Temporal (ORCHESTRATION_ENGINE=temporal) |
-| [Code Execution](/examples/code-execution) | [Code Execution in Agents](/advanced/code-execution) | Local, Temporal | — (local os/exec default); Docker (SANDBOX_ENV=docker) |
-| [MCP Config](/examples/mcp-config) | [MCP](/features/mcp) | Local, Temporal | MCP server |
-| [MCP Client](/examples/mcp-client) | [MCP](/features/mcp) | Local, Temporal | MCP server |
-| [Stream](/examples/stream) | [Streaming](/getting-started/streaming) | Local, Temporal | — |
-| [Conversation](/examples/conversation) | [Conversation](/features/conversation) | Local, Temporal | Redis |
-| [Stream + Conversation](/examples/stream-conversation) | [Conversation](/features/conversation) | Local, Temporal | Redis |
-| [AG-UI](/examples/agui) | [AG-UI](/features/ag-ui-protocol) | Local, Temporal | Node.js (UI) |
-| [Memory](/examples/memory) | [Memory](/features/memory) | Local, Temporal | Weaviate or pgvector |
-| [Retrieval](/examples/retrieval) | [Retrieval](/features/retrieval) | Local, Temporal | Weaviate or pgvector |
-| [Observability](/examples/observability) | [Tracing](/observability/tracing) | Local, Temporal | OTLP collector |
-| [Hooks](/examples/hooks) | [Hooks](/features/hooks) | Local, Temporal | — |
+| [Non-blocking Run](/examples/nonblocking-run) | [Run](/getting-started/run) | Local, Temporal, Restate | — |
+| [JSON Response](/examples/json-response) | [Response format](/features/response-format) | Local, Temporal, Restate | — |
+| [Reasoning](/examples/reasoning) | [Reasoning](/features/reasoning) | Local, Temporal, Restate | — |
+| [Tools](/examples/tools) | [Tools](/features/tools) | Local, Temporal, Restate | — |
+| [Workflows](/examples/workflows) | [Deterministic Execution](/advanced/deterministic-execution) | Local, Temporal, Restate | — (in-process default); Temporal (ORCHESTRATION_ENGINE=temporal) |
+| [Code Execution](/examples/code-execution) | [Code Execution in Agents](/advanced/code-execution) | Local, Temporal, Restate | — (local os/exec default); Docker (SANDBOX_ENV=docker) |
+| [MCP Config](/examples/mcp-config) | [MCP](/features/mcp) | Local, Temporal, Restate | MCP server |
+| [MCP Client](/examples/mcp-client) | [MCP](/features/mcp) | Local, Temporal, Restate | MCP server |
+| [Stream](/examples/stream) | [Streaming](/getting-started/streaming) | Local, Temporal, Restate | — |
+| [Conversation](/examples/conversation) | [Conversation](/features/conversation) | Local, Temporal, Restate | Redis |
+| [Stream + Conversation](/examples/stream-conversation) | [Conversation](/features/conversation) | Local, Temporal, Restate | Redis |
+| [AG-UI](/examples/agui) | [AG-UI](/features/ag-ui-protocol) | Local, Temporal, Restate | Node.js (UI) |
+| [Memory](/examples/memory) | [Memory](/features/memory) | Local, Temporal, Restate | Weaviate or pgvector |
+| [Retrieval](/examples/retrieval) | [Retrieval](/features/retrieval) | Local, Temporal, Restate | Weaviate or pgvector |
+| [Observability](/examples/observability) | [Tracing](/observability/tracing) | Local, Temporal, Restate | OTLP collector |
+| [Hooks](/examples/hooks) | [Hooks](/features/hooks) | Local, Temporal, Restate | — |
 | [Logs](/examples/logs) | [Logs](/observability/logs) | All examples | — |
-| [A2A Server](/examples/a2a-server) | [A2A](/features/a2a) | Local, Temporal | — |
-| [A2A Config](/examples/a2a-config) | [A2A](/features/a2a) | Local, Temporal | A2A server |
-| [A2A Client](/examples/a2a-client) | [A2A](/features/a2a) | Local, Temporal | A2A server |
-| [Sub-agents](/examples/subagents) | [Sub-agents](/features/sub-agents) | Local, Temporal | — |
+| [A2A Server](/examples/a2a-server) | [A2A](/features/a2a) | Local, Temporal, Restate | — |
+| [A2A Config](/examples/a2a-config) | [A2A](/features/a2a) | Local, Temporal, Restate | A2A server |
+| [A2A Client](/examples/a2a-client) | [A2A](/features/a2a) | Local, Temporal, Restate | A2A server |
+| [Sub-agents](/examples/subagents) | [Sub-agents](/features/sub-agents) | Local, Temporal, Restate | — |
 | [Multiple Agents](/examples/multiple-agents) | [Multiple agents](/advanced/multiple-agents) | Temporal | Temporal |
 | [Agent Worker](/examples/agent-worker) | [Distributed execution](/advanced/distributed-execution) | Temporal | Temporal |
-| [Durable Agent](/examples/durable-agent) | [Temporal](/runtimes/temporal) | Temporal | Temporal |
+| [Durable Agent (Temporal)](/examples/durable-agent) | [Temporal](/runtimes/temporal) | Temporal | Temporal |
+| [Durable Agent (Restate)](/examples/durable-agent-restate) | [Restate](/runtimes/restate) | Restate | Restate |
+| [Reconnect](/examples/reconnect) | [Durable Execution](/advanced/durable-execution) | Temporal | Temporal |
 
 ## Suggested order
 
@@ -62,7 +67,7 @@ Examples use `LLM_APIKEY`, `LLM_PROVIDER`, and `LLM_MODEL` from `examples/.env` 
 
 **Stateful agents** — [Conversation](/examples/conversation) → [Memory](/examples/memory) or [Retrieval](/examples/retrieval)
 
-**Production patterns** — [Temporal Client](/examples/temporal-client) → [Agent Worker](/examples/agent-worker) → [Durable Agent](/examples/durable-agent) → [Agent Chat](/reference-apps/agent-chat)
+**Production patterns** — [Temporal Client](/examples/temporal-client) → [Agent Worker](/examples/agent-worker) → [Durable Agent (Temporal)](/examples/durable-agent) → [Durable Agent (Restate)](/examples/durable-agent-restate) → [Agent Chat](/reference-apps/agent-chat)
 
 **Integrations** — [MCP Config](/examples/mcp-config) → [A2A Server](/examples/a2a-server) → [AG-UI](/examples/agui)
 
@@ -76,11 +81,12 @@ From `examples/`, use `Taskfile.yml` for Docker-backed dependencies:
 | `task infra:weaviate:up` | Weaviate |
 | `task infra:pgvector:up` | Postgres + pgvector |
 | `task infra:temporal:up` | Temporal dev server |
+| `task infra:restate:up` | Restate server |
 | `task infra:lgtm:up` | OTLP collector (Grafana LGTM) |
 | `task infra:a2a:up` | Sample A2A server |
 | `task infra:status` | Check running services |
 
-From the repository root: `task examples:local`, `task examples:temporal`, or `task examples:all`.
+From the repository root: `task examples:local`, `task examples:temporal`, `task examples:restate`, or `task examples:all`.
 
 ## Logging
 
@@ -100,7 +106,8 @@ See [Logs](/examples/logs).
 | Example | Terminal 1 | Terminal 2 |
 |---|---|---|
 | [Agent Worker](/examples/agent-worker) | `go run ./agent_with_worker/worker` | `go run ./agent_with_worker/agent "..."` |
-| [Durable Agent](/examples/durable-agent) | `go run ./durable_agent/worker` | `go run ./durable_agent/agent` |
+| [Durable Agent (Temporal)](/examples/durable-agent) | `go run ./durable_agent/temporal/worker` | `go run ./durable_agent/temporal/agent` |
+| [Durable Agent (Restate)](/examples/durable-agent-restate) | `go run ./durable_agent/restate` (single process) | — |
 | [AG-UI](/examples/agui) | `go run ./agent_with_agui/server` | `cd agent_with_agui/ui && npm run dev` |
 
 ## Related

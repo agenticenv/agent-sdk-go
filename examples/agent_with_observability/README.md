@@ -15,7 +15,9 @@ Do not combine **`WithObservabilityConfig`** with injected **`WithTracer` / `Wit
 
 1. **LLM** — `LLM_PROVIDER`, `LLM_APIKEY`, `LLM_MODEL`, optional `LLM_BASEURL` per [`../.env.defaults`](../.env.defaults). Add secrets in **`examples/.env`**.
 
-2. **Temporal** — only when **`AGENT_RUNTIME=temporal`** (`TEMPORAL_HOST`, `TEMPORAL_PORT`, `TEMPORAL_NAMESPACE`, task queue). See [`temporal-setup.md`](../../temporal-setup.md).
+2. **Durable runtime** (optional):
+   - **Temporal** — when **`AGENT_RUNTIME=temporal`** (`TEMPORAL_HOST`, `TEMPORAL_PORT`, `TEMPORAL_NAMESPACE`, task queue). See [`temporal-setup.md`](../../temporal-setup.md).
+   - **Restate** — when **`AGENT_RUNTIME=restate`** (`RESTATE_*`). See [`restate-setup.md`](../../restate-setup.md).
 
 3. **OTLP collector** — accepts OpenTelemetry Protocol on **gRPC** (default) or **HTTP/protobuf**. Use **host:port only** (no `http://` scheme). See the table below.
 
@@ -83,7 +85,7 @@ export OTLP_INSECURE=true
 
 ## Commands (from repository root)
 
-Configure Temporal + LLM + OTLP (see above), then:
+Configure LLM + OTLP (and Temporal/Restate if selected — see above), then:
 
 ```bash
 # WithObservabilityConfig
