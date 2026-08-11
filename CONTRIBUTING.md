@@ -2,6 +2,12 @@
 
 Thank you for your interest in contributing. **agent-sdk-go** is a community Go SDK for AI agents — durable execution via [Temporal](https://temporal.io) or [Restate](https://restate.dev), or running in-process with no external dependencies. This document explains how to set up your environment and what we expect from contributors.
 
+## Contributor License Agreement (CLA)
+
+By contributing to this project, you agree that your contributions will be governed by our [Contributor License Agreement](https://github.com/agenticenv/agent-sdk-go/blob/main/CLA.md).
+
+When you submit your first Pull Request, our CLA Assistant bot will automatically prompt you to review and digitally sign the agreement if you haven't already.
+
 ## Prerequisites
 
 Before contributing, ensure you have:
