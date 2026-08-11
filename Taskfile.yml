@@ -136,6 +136,18 @@ tasks:
           exit 1
         fi
 
+  govuln:
+    desc: Run govulncheck on SDK and agctl (cli) modules
+    cmds:
+      - |
+        echo "==> govulncheck (SDK + cli)"
+        if ! command -v govulncheck >/dev/null 2>&1; then
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+        fi
+        govulncheck ./...
+        (cd cli && govulncheck ./...)
+        echo "==> govulncheck complete"
+
   eval-harness:
     desc: Promptfoo + DeepEval (same as CI eval-harness job). Requires Node.js >=22.22.0 (24 LTS recommended) and Python 3.10+.
     cmds:
@@ -155,14 +167,15 @@ tasks:
       - go run ./benchmarks/ -config benchmarks/config.yaml
       - echo "==> Benchmarks complete"
 
-  # Run before push: SDK lint/test/build + secrets scan + agctl (cli) checks — all CI gates locally.
+  # Run before push: SDK lint/test/build + secrets + govuln + agctl (cli) — CI/security gates locally.
   # Coverage is CI-only (`task test-coverage` when you want the report). If fmt-check fails, run `task fmt`.
   check:
-    desc: All CI gates locally (SDK lint/test/build + secrets scan + agctl checks)
+    desc: All CI/security gates locally (SDK lint/test/build + secrets + govuln + agctl)
     cmds:
       - task: lint
       - task: test
       - task: build
       - task: secrets-scan
+      - task: govuln
       - task: cli:check
       - echo "==> All checks passed (ready to push)"

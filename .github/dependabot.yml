@@ -1,0 +1,21 @@
+# Dependabot: weekly PRs for Go modules (SDK + agctl) and GitHub Actions.
+# Not an Actions workflow — GitHub opens PRs; those PRs run ci.yml + security.yml.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: gomod
+    directory: /cli
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
