@@ -47,7 +47,7 @@ require (
 	go.temporal.io/sdk/contrib/opentelemetry v0.7.0
 	go.temporal.io/sdk/contrib/workflowstreams v0.1.1
 	golang.org/x/oauth2 v0.36.0
-	google.golang.org/genai v1.51.0
+	google.golang.org/genai v1.67.0
 	google.golang.org/grpc v1.82.1
 	gopkg.in/yaml.v3 v3.0.1
 )
