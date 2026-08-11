@@ -11,6 +11,13 @@ import (
 	sdkagent "github.com/agenticenv/agent-sdk-go/pkg/agent"
 )
 
+// VerboseChatEvents reports whether logger.level enables chat UI detail
+// (tool calls, args, results, thinking, steps). Errors and assistant text
+// always print regardless of level.
+func VerboseChatEvents(loggerLevel string) bool {
+	return strings.EqualFold(strings.TrimSpace(loggerLevel), "debug")
+}
+
 // MarksStreamDelta reports whether ev carries streamed text/reasoning content,
 // so callers can avoid double-printing the final result content.
 func MarksStreamDelta(ev sdkagent.AgentEvent) bool {
@@ -41,7 +48,11 @@ func RunResultFromFinishedEvent(ev sdkagent.AgentEvent) *sdkagent.AgentRunResult
 // PrintEvent writes a human-readable line for ev to stdout, skipping event
 // types that are either purely internal or already reflected by streamed
 // content (when streamedContent is true).
-func PrintEvent(ev sdkagent.AgentEvent, streamedContent bool) {
+//
+// When verbose is false (logger.level other than debug), tool/thinking/step
+// lines are omitted so chat stays You:/assistant:-focused. Errors and
+// non-streamed final content still print.
+func PrintEvent(ev sdkagent.AgentEvent, streamedContent, verbose bool) {
 	if ev == nil {
 		return
 	}
@@ -54,18 +65,30 @@ func PrintEvent(ev sdkagent.AgentEvent, streamedContent bool) {
 		sdkagent.AgentEventTypeToolCallEnd, sdkagent.AgentEventTypeRunStarted:
 		return
 	case sdkagent.AgentEventTypeReasoningMessageContent:
+		if !verbose {
+			return
+		}
 		if r, ok := ev.(*sdkagent.AgentReasoningMessageContentEvent); ok && r.Delta != "" {
 			fmt.Printf("[thinking] %s", r.Delta)
 		}
 	case sdkagent.AgentEventTypeToolCallStart:
+		if !verbose {
+			return
+		}
 		if t, ok := ev.(*sdkagent.AgentToolCallStartEvent); ok {
 			fmt.Printf("\n[tool_call] %s (%s)\n", t.ToolCallName, t.ToolCallID)
 		}
 	case sdkagent.AgentEventTypeToolCallArgs:
+		if !verbose {
+			return
+		}
 		if t, ok := ev.(*sdkagent.AgentToolCallArgsEvent); ok && t.Delta != "" {
 			fmt.Printf("[tool_args] %s %s\n", t.ToolCallID, t.Delta)
 		}
 	case sdkagent.AgentEventTypeToolCallResult:
+		if !verbose {
+			return
+		}
 		if t, ok := ev.(*sdkagent.AgentToolCallResultEvent); ok {
 			fmt.Printf("[tool_result] %s: %s\n", t.ToolCallID, t.Content)
 		}
@@ -82,12 +105,18 @@ func PrintEvent(ev sdkagent.AgentEvent, streamedContent bool) {
 			fmt.Printf("\n[%s complete] %s\n", who, res.Content)
 		}
 	case sdkagent.AgentEventTypeStepStarted:
+		if !verbose {
+			return
+		}
 		if t, ok := ev.(*sdkagent.AgentStepStartedEvent); ok && t.StepName != "" {
 			fmt.Printf("\n[step] %s (sub-agent: %s)\n", ev.Type(), t.StepName)
 		} else {
 			fmt.Printf("\n[step] %s\n", ev.Type())
 		}
 	case sdkagent.AgentEventTypeStepFinished:
+		if !verbose {
+			return
+		}
 		if t, ok := ev.(*sdkagent.AgentStepFinishedEvent); ok && t.StepName != "" {
 			fmt.Printf("[step] %s (sub-agent: %s)\n", ev.Type(), t.StepName)
 		} else {

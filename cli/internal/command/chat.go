@@ -84,6 +84,12 @@ func (c *ChatCmd) Run(cfg *config.Config) error {
 
 	fmt.Println("Conversation mode. " + exitPrompt)
 
+	loggerLevel := ""
+	if cfg.Logger != nil {
+		loggerLevel = cfg.Logger.Level
+	}
+	verboseEvents := output.VerboseChatEvents(loggerLevel)
+
 	var sessionUsage *sdkagent.LLMUsage
 	for {
 		fmt.Print("\nYou: ")
@@ -129,7 +135,7 @@ func (c *ChatCmd) Run(cfg *config.Config) error {
 			case sdkagent.AgentEventTypeCustom:
 				ce, ok := ev.(*sdkagent.AgentCustomEvent)
 				if !ok || ce == nil {
-					output.PrintEvent(ev, streamedContent)
+					output.PrintEvent(ev, streamedContent, verboseEvents)
 					continue
 				}
 				var approvalToken string
@@ -137,7 +143,7 @@ func (c *ChatCmd) Run(cfg *config.Config) error {
 				case string(sdkagent.AgentCustomEventNameToolApproval):
 					apv, err := sdkagent.ParseCustomEventApproval(ce)
 					if err != nil || apv.ApprovalToken == "" {
-						output.PrintEvent(ev, streamedContent)
+						output.PrintEvent(ev, streamedContent, verboseEvents)
 						continue
 					}
 					argsLine := ""
@@ -150,7 +156,7 @@ func (c *ChatCmd) Run(cfg *config.Config) error {
 				case string(sdkagent.AgentCustomEventNameSubAgentDelegation):
 					dv, err := sdkagent.ParseCustomEventDelegation(ce)
 					if err != nil || dv.ApprovalToken == "" {
-						output.PrintEvent(ev, streamedContent)
+						output.PrintEvent(ev, streamedContent, verboseEvents)
 						continue
 					}
 					argsLine := ""
@@ -161,7 +167,7 @@ func (c *ChatCmd) Run(cfg *config.Config) error {
 						dv.AgentName, dv.SubAgentName, argsLine)
 					approvalToken = dv.ApprovalToken
 				default:
-					output.PrintEvent(ev, streamedContent)
+					output.PrintEvent(ev, streamedContent, verboseEvents)
 					continue
 				}
 				line2, ok2 := <-lineCh
@@ -173,7 +179,7 @@ func (c *ChatCmd) Run(cfg *config.Config) error {
 					log.Printf("approval failed: %v", err)
 				}
 			default:
-				output.PrintEvent(ev, streamedContent)
+				output.PrintEvent(ev, streamedContent, verboseEvents)
 			}
 			if ev.Type() == sdkagent.AgentEventTypeTextMessageContent {
 				if t, ok := ev.(*sdkagent.AgentTextMessageContentEvent); ok && t.Delta != "" {

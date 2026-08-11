@@ -49,21 +49,41 @@ func TestToolArgsJSONIndented(t *testing.T) {
 	}
 }
 
+func TestVerboseChatEvents(t *testing.T) {
+	for _, tc := range []struct {
+		level string
+		want  bool
+	}{
+		{"debug", true},
+		{"DEBUG", true},
+		{" debug ", true},
+		{"info", false},
+		{"error", false},
+		{"", false},
+	} {
+		if got := VerboseChatEvents(tc.level); got != tc.want {
+			t.Errorf("VerboseChatEvents(%q) = %v, want %v", tc.level, got, tc.want)
+		}
+	}
+}
+
 func TestPrintEvent_smokeNoPanic(t *testing.T) {
 	// Smoke: fmt to stdout; asserts wiring and nil-safety for branches used in the chat loop.
-	PrintEvent(events.NewAgentTextMessageContentEvent("m1", "hi"), false)
-	PrintEvent(events.NewAgentReasoningMessageContentEvent("m2", "d"), false)
-	PrintEvent(events.NewAgentToolCallStartEvent("tid", "echo"), false)
-	PrintEvent(events.NewAgentToolCallArgsEvent("tid", `{"q":"1"}`), false)
-	PrintEvent(events.NewAgentToolCallResultEvent("m1", "tid", "ok"), false)
-	PrintEvent(events.NewAgentRunErrorEvent("e"), false)
-	PrintEvent(events.NewAgentRunFinishedEvent("", "", &types.AgentRunResult{Content: "done", AgentName: "A"}), false)
-	PrintEvent(events.NewAgentRunFinishedEvent("", "", &types.AgentRunResult{Content: "done", AgentName: ""}), false)
-	PrintEvent(events.NewAgentCustomEvent(string(events.AgentCustomEventNameToolApproval), events.AgentCustomEventApprovalValue{
-		ToolName: "echo", ApprovalToken: "tok",
-	}), false)
-	PrintEvent(events.NewAgentRunStartedEvent("t", "r"), false)
-	PrintEvent(events.NewAgentTextMessageStartEvent("m", "assistant"), false)
-	PrintEvent(events.NewAgentTextMessageEndEvent("m"), false)
-	PrintEvent(events.NewBaseEvent(events.AgentEventType("UNKNOWN")), false)
+	for _, verbose := range []bool{false, true} {
+		PrintEvent(events.NewAgentTextMessageContentEvent("m1", "hi"), false, verbose)
+		PrintEvent(events.NewAgentReasoningMessageContentEvent("m2", "d"), false, verbose)
+		PrintEvent(events.NewAgentToolCallStartEvent("tid", "echo"), false, verbose)
+		PrintEvent(events.NewAgentToolCallArgsEvent("tid", `{"q":"1"}`), false, verbose)
+		PrintEvent(events.NewAgentToolCallResultEvent("m1", "tid", "ok"), false, verbose)
+		PrintEvent(events.NewAgentRunErrorEvent("e"), false, verbose)
+		PrintEvent(events.NewAgentRunFinishedEvent("", "", &types.AgentRunResult{Content: "done", AgentName: "A"}), false, verbose)
+		PrintEvent(events.NewAgentRunFinishedEvent("", "", &types.AgentRunResult{Content: "done", AgentName: ""}), false, verbose)
+		PrintEvent(events.NewAgentCustomEvent(string(events.AgentCustomEventNameToolApproval), events.AgentCustomEventApprovalValue{
+			ToolName: "echo", ApprovalToken: "tok",
+		}), false, verbose)
+		PrintEvent(events.NewAgentRunStartedEvent("t", "r"), false, verbose)
+		PrintEvent(events.NewAgentTextMessageStartEvent("m", "assistant"), false, verbose)
+		PrintEvent(events.NewAgentTextMessageEndEvent("m"), false, verbose)
+		PrintEvent(events.NewBaseEvent(events.AgentEventType("UNKNOWN")), false, verbose)
+	}
 }

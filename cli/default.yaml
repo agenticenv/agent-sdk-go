@@ -71,6 +71,7 @@ llm:
   baseURL: https://api.openai.com/v1   # AGCTL_LLM_BASEURL; optional for proxies
 
 # Logger: file by default. Prompts/responses use fmt, not this logger.
+# Chat UI: logger.level=debug also shows [tool_call]/[tool_args]/[tool_result]/[thinking]/[step].
 logger:
   level: info              # AGCTL_LOGGER_LEVEL — error | warn | info | debug
   output: logs/agctl.log   # AGCTL_LOGGER_OUTPUT — file path | stdout | stderr
