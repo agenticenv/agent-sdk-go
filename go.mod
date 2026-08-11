@@ -14,7 +14,7 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.26.0
 	github.com/golang/mock v1.6.0
 	github.com/google/uuid v1.6.0
-	github.com/jackc/pgx/v5 v5.9.2
+	github.com/jackc/pgx/v5 v5.10.0
 	github.com/joho/godotenv v1.5.1
 	github.com/modelcontextprotocol/go-sdk v1.4.1
 	github.com/nexus-rpc/sdk-go v0.6.0
