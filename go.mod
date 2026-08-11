@@ -10,7 +10,7 @@ replace github.com/agenticenv/agent-sdk-go/pkg/llm => ./pkg/llm
 
 require (
 	github.com/a2aproject/a2a-go/v2 v2.2.1
-	github.com/alicebob/miniredis/v2 v2.37.0
+	github.com/alicebob/miniredis/v2 v2.38.0
 	github.com/anthropics/anthropic-sdk-go v1.26.0
 	github.com/golang/mock v1.6.0
 	github.com/google/uuid v1.6.0
