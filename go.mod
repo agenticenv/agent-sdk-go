@@ -42,8 +42,8 @@ require (
 	go.opentelemetry.io/otel/sdk/log v0.19.0
 	go.opentelemetry.io/otel/sdk/metric v1.43.0
 	go.opentelemetry.io/otel/trace v1.44.0
-	go.temporal.io/api v1.63.0
-	go.temporal.io/sdk v1.46.0
+	go.temporal.io/api v1.63.4
+	go.temporal.io/sdk v1.47.0
 	go.temporal.io/sdk/contrib/opentelemetry v0.7.0
 	go.temporal.io/sdk/contrib/workflowstreams v0.1.1
 	golang.org/x/oauth2 v0.36.0
