@@ -74,7 +74,7 @@ Keep your branch short and descriptive. Sync with `main` before opening a PR: `g
 task check
 ```
 
-Runs `fmt-check`, spell check, `task lint`, `task test`, `task build`, `task secrets-scan`, and `task cli:check` (agctl lint/test/build) — same gates as the `sdk` and `agctl` CI jobs (coverage is CI-only; use `task test-coverage` locally if you want a report). `task test` includes eval-harness Go tests; the full Promptfoo/DeepEval suite runs in CI and via `task eval-harness` (see below).
+Runs `fmt-check`, spell check, `task lint`, `task test`, `task build`, `task secrets-scan`, `task govuln`, and `task cli:check` (agctl lint/test/build) — local parity with the `sdk` / `agctl` CI jobs plus gitleaks/govulncheck from the **Security** workflow (coverage is CI-only; use `task test-coverage` locally if you want a report). `task test` includes eval-harness Go tests; the full Promptfoo/DeepEval suite runs in CI and via `task eval-harness` (see below).
 
 If you only changed files under `cli/` (the `agctl` CLI, its own Go module), you can run just its checks: `task cli:check` (or `cd cli && task check`).
 
@@ -94,7 +94,7 @@ task eval-harness
 
 Behavioral regression tests use mock LLM/tools and assert on run output — SDK changes can break them even when eval-harness files are untouched. Requires Node.js `>=22.22.0` (24 LTS recommended) and Python 3.10+ — see [eval-harness/README.md](eval-harness/README.md). CI runs this automatically on PRs (`eval-harness` job).
 
-**CI runs automatically** on pull requests to `main` (open a PR or push updates to an existing PR to re-run checks). Pushes or merges to `main` do not trigger CI; use **workflow_dispatch** in GitHub Actions for an on-demand run. Run `task check` locally before opening a PR; CI must pass on the PR before merge.
+**CI and Security run automatically** on pull requests to `main` (open a PR or push updates to an existing PR to re-run checks). Quality is **CI**; secrets/vulns/CodeQL are **Security**. Pushes or merges to `main` do not trigger CI; use **workflow_dispatch** in GitHub Actions for an on-demand CI or Security run. Run `task check` locally before opening a PR; CI and Security must pass on the PR before merge.
 
 To run only tests (e.g. while iterating):
 

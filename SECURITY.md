@@ -48,7 +48,8 @@ Implement `interfaces.ToolAuthorizer` (`Authorize`) to enforce access control be
 
 ### Third-party Dependencies
 
-Key dependencies — monitor their security advisories:
+Key dependencies — monitor via **Dependabot** (`.github/dependabot.yml`, weekly PRs for `/` and `/cli`) and **`govulncheck`** (`task govuln`, Security workflow, and Release hard-fail before GoReleaser):
+
 - go.temporal.io/sdk
 - github.com/restatedev/sdk-go
 - github.com/modelcontextprotocol/go-sdk

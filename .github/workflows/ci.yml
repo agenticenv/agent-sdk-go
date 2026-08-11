@@ -1,8 +1,8 @@
-# CI: lint, test, coverage, build
+# CI: lint, test, coverage, build (quality only)
 # - PR to main: full checks + Codecov upload
 # - workflow_dispatch: same + Codecov upload (on-demand coverage report)
 # - Push / merge to main: no workflow (already validated on the PR)
-# (Secret scanning: run `task secrets-scan` locally.)
+# Security (gitleaks, govulncheck, CodeQL): see .github/workflows/security.yml
 name: CI
 
 on:
