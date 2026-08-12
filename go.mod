@@ -2,7 +2,7 @@ module github.com/agenticenv/agent-sdk-go
 
 go 1.26
 
-toolchain go1.26.1
+toolchain go1.26.5
 
 replace github.com/agenticenv/agent-sdk-go/pkg/tools => ./pkg/tools
 
