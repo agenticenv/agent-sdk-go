@@ -1,4 +1,5 @@
 # Dependabot: weekly PRs for Go modules (SDK + agctl) and GitHub Actions.
+# Groups keep updates to ~1 PR per ecosystem/directory (avoids Actions burn from many PRs).
 # Not an Actions workflow — GitHub opens PRs; those PRs run ci.yml + security.yml.
 version: 2
 updates:
@@ -6,16 +7,28 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 2
+    groups:
+      go-modules:
+        patterns:
+          - "*"
 
   - package-ecosystem: gomod
     directory: /cli
     schedule:
       interval: weekly
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 2
+    groups:
+      go-modules:
+        patterns:
+          - "*"
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 1
+    groups:
+      github-actions:
+        patterns:
+          - "*"
