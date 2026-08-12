@@ -74,7 +74,7 @@ Keep your branch short and descriptive. Sync with `main` before opening a PR: `g
 task check
 ```
 
-Runs `fmt-check`, spell check, `task lint`, `task test`, `task build`, `task secrets-scan`, `task govuln`, and `task cli:check` (agctl lint/test/build) — local parity with the `sdk` / `agctl` CI jobs plus gitleaks/govulncheck from the **Security** workflow (coverage is CI-only; use `task test-coverage` locally if you want a report). `task test` includes eval-harness Go tests; the full Promptfoo/DeepEval suite runs in CI and via `task eval-harness` (see below).
+Runs `fmt-check`, spell check, `task lint`, `task test`, `task build`, `task secrets-scan`, `task govuln`, and `task cli:check` (agctl lint/test/build) — local parity with the `sdk` / `agctl` CI jobs plus gitleaks/govulncheck from the **Security** workflow (coverage is CI-only; use `task test-coverage` locally if you want a report). `task govuln` sets `GOTOOLCHAIN` from each module's `go.mod` `toolchain` line so stdlib findings match CI. `task test` includes eval-harness Go tests; the full Promptfoo/DeepEval suite runs in CI and via `task eval-harness` (see below).
 
 If you only changed files under `cli/` (the `agctl` CLI, its own Go module), you can run just its checks: `task cli:check` (or `cd cli && task check`).
 

@@ -137,15 +137,26 @@ tasks:
         fi
 
   govuln:
-    desc: Run govulncheck on SDK and agctl (cli) modules
+    desc: Run govulncheck on SDK and agctl using each module's go.mod toolchain (CI parity)
     cmds:
       - |
-        echo "==> govulncheck (SDK + cli)"
+        echo "==> govulncheck (SDK + cli; GOTOOLCHAIN from go.mod)"
         if ! command -v govulncheck >/dev/null 2>&1; then
           go install golang.org/x/vuln/cmd/govulncheck@latest
         fi
-        govulncheck ./...
-        (cd cli && govulncheck ./...)
+        # Prefer explicit "toolchain goX.Y.Z"; fall back to "go X.Y" line.
+        sdk_tc=$(awk '/^toolchain / { print $2; exit }' go.mod)
+        if [ -z "$sdk_tc" ]; then
+          sdk_tc=$(awk '/^go / { print "go" $2; exit }' go.mod)
+        fi
+        cli_tc=$(awk '/^toolchain / { print $2; exit }' cli/go.mod)
+        if [ -z "$cli_tc" ]; then
+          cli_tc=$(awk '/^go / { print "go" $2; exit }' cli/go.mod)
+        fi
+        echo "==> SDK GOTOOLCHAIN=$sdk_tc"
+        GOTOOLCHAIN="$sdk_tc" govulncheck ./...
+        echo "==> cli GOTOOLCHAIN=$cli_tc"
+        (cd cli && GOTOOLCHAIN="$cli_tc" govulncheck ./...)
         echo "==> govulncheck complete"
 
   eval-harness:
