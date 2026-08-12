@@ -2,7 +2,7 @@ module github.com/agenticenv/agent-sdk-go/cli
 
 go 1.26
 
-toolchain go1.26.0
+toolchain go1.26.5
 
 replace github.com/agenticenv/agent-sdk-go => ../
 
