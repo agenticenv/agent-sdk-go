@@ -187,6 +187,8 @@ See the [CLI docs](https://docs.agenticenv.ai/getting-started/cli) for commands,
 
 - **[Agent Chat](https://github.com/agenticenv/agent-chat)** — web chat demo with durable conversations; reference for wiring the SDK into an HTTP-backed app.
 
+![Agent Chat Demo](https://raw.githubusercontent.com/agenticenv/agent-chat/main/demo.gif)
+
 ## Examples
 
 Runnable examples in `[examples/](examples/)` — see `[examples/README.md](examples/README.md)` for setup and run instructions.
