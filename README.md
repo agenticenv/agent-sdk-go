@@ -191,7 +191,7 @@ See the [CLI docs](https://docs.agenticenv.ai/getting-started/cli) for commands,
 
 ## Examples
 
-Runnable examples in `[examples/](examples/)` — see `[examples/README.md](examples/README.md)` for setup and run instructions.
+Runnable examples in [examples/](examples/) — see [examples/README.md](examples/README.md) for setup and run instructions.
 
 ## Benchmarks
 
