@@ -11,20 +11,20 @@ replace github.com/agenticenv/agent-sdk-go/pkg/llm => ./pkg/llm
 require (
 	github.com/a2aproject/a2a-go/v2 v2.4.0
 	github.com/alicebob/miniredis/v2 v2.38.0
-	github.com/anthropics/anthropic-sdk-go v1.63.0
+	github.com/anthropics/anthropic-sdk-go v1.63.1
 	github.com/golang/mock v1.6.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/joho/godotenv v1.5.1
 	github.com/modelcontextprotocol/go-sdk v1.7.0
-	github.com/nexus-rpc/sdk-go v0.6.0
-	github.com/openai/openai-go/v3 v3.50.0
+	github.com/nexus-rpc/sdk-go v0.7.0
+	github.com/openai/openai-go/v3 v3.51.0
 	github.com/pgvector/pgvector-go v0.4.1
 	github.com/pgvector/pgvector-go/pgx v0.4.1
 	github.com/redis/go-redis/v9 v9.22.0
-	github.com/restatedev/sdk-go v1.0.2
+	github.com/restatedev/sdk-go v1.0.3
 	github.com/restatedev/sdk-go/x/mocks v0.26.0
-	github.com/stretchr/testify v1.11.1
+	github.com/stretchr/testify v1.12.0
 	github.com/weaviate/weaviate v1.39.0
 	github.com/weaviate/weaviate-go-client/v5 v5.7.3
 	go.opentelemetry.io/contrib/bridges/otelslog v0.20.0
@@ -47,7 +47,7 @@ require (
 	go.temporal.io/sdk/contrib/opentelemetry v0.8.1
 	go.temporal.io/sdk/contrib/workflowstreams v0.1.1
 	golang.org/x/oauth2 v0.36.0
-	google.golang.org/genai v1.67.0
+	google.golang.org/genai v1.68.0
 	google.golang.org/grpc v1.83.0
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -60,7 +60,6 @@ require (
 	github.com/buger/jsonparser v1.6.1 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/facebookgo/clock v0.0.0-20150410010913-600d898af40a // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
@@ -107,7 +106,6 @@ require (
 	github.com/oklog/ulid/v2 v2.1.2 // indirect
 	github.com/pb33f/ordered-map/v2 v2.3.1 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
-	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/robfig/cron v1.2.0 // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect
