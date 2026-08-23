@@ -3,6 +3,7 @@ package restate
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -223,7 +224,10 @@ func (s AgentLoop) handle(ctx restatesdk.Context, req AgentLoopRequest) (*AgentL
 		Tools:            tools,
 	})
 	if err != nil {
-		return nil, err
+		if isApplicationLoopError(err) {
+			s.rt.tools.stash.Delete(req.RunID)
+		}
+		return nil, terminalLoopError(err)
 	}
 
 	// Release the stash entry after success.
@@ -266,6 +270,27 @@ func (rt *RestateRuntime) validateAgentName(agentName string) error {
 		return nil
 	}
 	return fmt.Errorf("restate: agent name %q does not match this AgentLoop (%q)", agentName, rt.AgentSpec.Name)
+}
+
+// isApplicationLoopError reports errors that finish the run (do not retry).
+func isApplicationLoopError(err error) bool {
+	return errors.Is(err, types.ErrBudgetExceeded) || errors.Is(err, types.ErrBudgetApprovalUnavailable)
+}
+
+// terminalLoopError marks application-complete failures as Restate terminal so
+// the invocation is not retried (BudgetStopRun would otherwise loop forever).
+// ToTerminalError copies the message only, so the sentinel is re-wrapped for errors.Is.
+func terminalLoopError(err error) error {
+	if err == nil || restatesdk.IsTerminalError(err) {
+		return err
+	}
+	switch {
+	case errors.Is(err, types.ErrBudgetExceeded):
+		return fmt.Errorf("%w: %w", types.ErrBudgetExceeded, restatesdk.ToTerminalError(err))
+	case errors.Is(err, types.ErrBudgetApprovalUnavailable):
+		return fmt.Errorf("%w: %w", types.ErrBudgetApprovalUnavailable, restatesdk.ToTerminalError(err))
+	}
+	return err
 }
 
 // isMemoryScopeSet reports whether any field of a MemoryScope is populated.

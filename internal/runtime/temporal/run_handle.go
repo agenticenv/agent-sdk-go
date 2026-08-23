@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	sdkruntime "github.com/agenticenv/agent-sdk-go/internal/runtime"
@@ -171,6 +172,8 @@ func (h *runHandle) awaitCompletion() {
 			err = context.DeadlineExceeded
 		case errors.Is(h.stopCause, context.Canceled):
 			err = context.Canceled
+		default:
+			err = mapWorkflowError(err)
 		}
 	}
 	h.err = err
@@ -183,4 +186,26 @@ func (h *runHandle) awaitCompletion() {
 			h.cleanup = nil
 		}
 	})
+}
+
+// isApplicationWorkflowError reports run-complete failures that Temporal
+// serializes as ApplicationError (Go error chain dropped).
+func isApplicationWorkflowError(err error) bool {
+	return errors.Is(err, types.ErrBudgetExceeded) || errors.Is(err, types.ErrBudgetApprovalUnavailable)
+}
+
+// mapWorkflowError restores SDK sentinels lost when Temporal serializes workflow
+// failures as ApplicationError (message preserved, Go error chain dropped).
+func mapWorkflowError(err error) error {
+	if err == nil || isApplicationWorkflowError(err) {
+		return err
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, types.ErrBudgetExceeded.Error()):
+		return fmt.Errorf("%w: %v", types.ErrBudgetExceeded, err)
+	case strings.Contains(msg, types.ErrBudgetApprovalUnavailable.Error()):
+		return fmt.Errorf("%w: %v", types.ErrBudgetApprovalUnavailable, err)
+	}
+	return err
 }

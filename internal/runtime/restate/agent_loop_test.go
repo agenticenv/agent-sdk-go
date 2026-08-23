@@ -3,6 +3,7 @@ package restate
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"testing"
 	"time"
@@ -402,4 +403,43 @@ func TestHandle_StreamAndUnknownDelegate(t *testing.T) {
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "does not match this AgentLoop")
+}
+
+func TestHandle_BudgetStopRun_IsTerminal(t *testing.T) {
+	rt := testRestateRuntime("budget-stop")
+	rt.AgentConfig.Limits.MaxIterations = 3
+	rt.AgentConfig.Limits.Budget = &types.BudgetConfig{
+		MaxTokens:  100,
+		OnExceeded: types.BudgetStopRun,
+	}
+	rt.AgentConfig.LLM.Client = &seqLLM{responses: []*interfaces.LLMResponse{{
+		Content: "too much",
+		Usage:   &interfaces.LLMUsage{PromptTokens: 60, CompletionTokens: 50, TotalTokens: 110},
+	}}}
+	rt.tools.stash.Store("run-1", stagedRun{})
+
+	ctx := mocks.NewMockContext(t)
+	ctx.EXPECT().Wrap(mock.Anything).Return(ctx).Maybe()
+	expectRunExecutes(ctx, 2).Once()
+	expectRunExecutes(ctx, 6).Once()
+
+	_, err := (AgentLoop{rt: rt}).Run(restatesdk.WithMockContext(ctx), AgentLoopRequest{
+		agentLoopCore: agentLoopCore{RunID: "run-1", UserPrompt: "hi"},
+	})
+	require.Error(t, err)
+	require.True(t, restatesdk.IsTerminalError(err), "got: %v", err)
+	require.ErrorIs(t, err, types.ErrBudgetExceeded)
+	_, still := rt.tools.stash.Load("run-1")
+	require.False(t, still)
+}
+
+func TestTerminalLoopError(t *testing.T) {
+	require.Nil(t, terminalLoopError(nil))
+	require.ErrorIs(t, terminalLoopError(types.ErrBudgetExceeded), types.ErrBudgetExceeded)
+	require.True(t, restatesdk.IsTerminalError(terminalLoopError(types.ErrBudgetExceeded)))
+	require.True(t, restatesdk.IsTerminalError(terminalLoopError(types.ErrBudgetApprovalUnavailable)))
+	other := errors.New("llm timeout")
+	require.Equal(t, other, terminalLoopError(other))
+	already := restatesdk.ToTerminalError(types.ErrBudgetExceeded)
+	require.Equal(t, already, terminalLoopError(already))
 }
