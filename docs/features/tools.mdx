@@ -137,7 +137,32 @@ func (t *SearchTool) Authorize(ctx context.Context, args map[string]any) (interf
 
 See [Approvals](/features/approvals) for the full approval and authorization flow.
 
-## Tool execution mode
+## Tool execution context
+
+The agent runtime sets a [`ToolExecMeta`](https://pkg.go.dev/github.com/agenticenv/agent-sdk-go/pkg/interfaces#ToolExecMeta) value on the `context.Context` passed to `Execute`. Use it to access a stable idempotency key, the run ID, and other per-invocation metadata:
+
+```go
+func (t *PaymentTool) Execute(ctx context.Context, args map[string]any) (any, error) {
+    meta, ok := interfaces.ToolExecMetaFromContext(ctx)
+    if ok && meta.IdempotencyKey != "" {
+        // Safe to forward to a non-idempotent external API — the key is stable
+        // across Temporal activity retries and ContinueAsNew boundaries.
+        return t.client.Charge(ctx, amount, meta.IdempotencyKey)
+    }
+    return t.client.Charge(ctx, amount, "")
+}
+```
+
+| Field | Description |
+|---|---|
+| `IdempotencyKey` | Stable 32-char hex key derived from `RunID`, `Iteration`, and `ToolCallID` — safe to forward to external APIs |
+| `RunID` | Agent run identifier |
+| `ToolCallID` | Identifier the LLM assigned to this tool call |
+| `Iteration` | LLM round (zero-based) in which the call was made |
+
+`ToolExecMetaFromContext` returns `false` only when `Execute` is called outside the agent runtime (e.g. in unit tests that invoke it directly).
+
+
 
 When the model returns **multiple tool calls in one turn**, the SDK runs them in parallel by default:
 

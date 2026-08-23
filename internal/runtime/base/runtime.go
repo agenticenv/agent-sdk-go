@@ -463,7 +463,13 @@ func (rt *Runtime) executeTool(ctx context.Context, input ExecuteToolInput) (str
 		content, execErr = rt.executeRetrieverTool(ctx, input, tool, args)
 	default:
 		var result any
-		result, execErr = tool.Execute(ctx, args)
+		execCtx := interfaces.WithToolExecMeta(ctx, interfaces.ToolExecMeta{
+			IdempotencyKey: input.IdempotencyKey(),
+			RunID:          input.RunID,
+			ToolCallID:     input.ToolCallID,
+			Iteration:      input.Iteration,
+		})
+		result, execErr = tool.Execute(execCtx, args)
 		if execErr == nil {
 			content = fmt.Sprintf("%v", result)
 		}

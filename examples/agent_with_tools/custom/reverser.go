@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/tools"
@@ -33,6 +34,10 @@ func (*Reverser) Parameters() interfaces.JSONSchema {
 }
 
 func (*Reverser) Execute(ctx context.Context, args map[string]any) (any, error) {
+	if meta, ok := interfaces.ToolExecMetaFromContext(ctx); ok {
+		fmt.Printf("[tool meta] idempotency_key=%s run_id=%s iteration=%d tool_call_id=%s\n",
+			meta.IdempotencyKey, meta.RunID, meta.Iteration, meta.ToolCallID)
+	}
 	text, _ := args["text"].(string)
 	runes := []rune(text)
 	for i, j := 0, len(runes)-1; i < j; i, j = i+1, j-1 {

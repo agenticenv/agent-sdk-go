@@ -1,6 +1,9 @@
 package base
 
 import (
+	"crypto/sha256"
+	"fmt"
+
 	"github.com/agenticenv/agent-sdk-go/internal/types"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
@@ -99,4 +102,13 @@ type ExecuteToolInput struct {
 	ToolCallID string
 	RunID      string
 	Iteration  int
+}
+
+// IdempotencyKey returns a stable 32-char hex key for a tool invocation,
+// derived from runID, iteration, and toolCallID via SHA-256.
+// Fixed-length output is safe for all external API idempotency key fields.
+func (i ExecuteToolInput) IdempotencyKey() string {
+	raw := fmt.Sprintf("%s:%d:%s", i.RunID, i.Iteration, i.ToolCallID)
+	hash := sha256.Sum256([]byte(raw))
+	return fmt.Sprintf("%x", hash)[:32]
 }
