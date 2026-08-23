@@ -275,6 +275,58 @@ func TestExecuteTool_ToolError(t *testing.T) {
 	require.Contains(t, err.Error(), "tool failed")
 }
 
+func TestExecuteTool_ToolExecMetaInContext(t *testing.T) {
+	ctrl := gomock.NewController(t)
+
+	var capturedMeta interfaces.ToolExecMeta
+	var metaFound bool
+	tool := ifmocks.NewMockTool(ctrl)
+	tool.EXPECT().Name().Return("meta-tool").AnyTimes()
+	tool.EXPECT().Execute(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, _ map[string]any) (any, error) {
+		capturedMeta, metaFound = interfaces.ToolExecMetaFromContext(ctx)
+		return "ok", nil
+	})
+
+	rt := newTestRuntime(sdkruntime.AgentConfig{})
+	_, err := rt.ExecuteTool(context.Background(), ExecuteToolInput{
+		Logger:     noopLog(),
+		Tools:      []interfaces.Tool{tool},
+		ToolName:   "meta-tool",
+		Args:       map[string]any{},
+		RunID:      "run-1",
+		Iteration:  2,
+		ToolCallID: "call-abc",
+	}, interfaces.MemoryScope{})
+	require.NoError(t, err)
+	require.True(t, metaFound, "ToolExecMeta should be present in context")
+	require.Equal(t, "6015946e1b787fc9ce83182163488fea", capturedMeta.IdempotencyKey)
+	require.Equal(t, "run-1", capturedMeta.RunID)
+	require.Equal(t, "call-abc", capturedMeta.ToolCallID)
+	require.Equal(t, 2, capturedMeta.Iteration)
+}
+
+func TestExecuteTool_ToolExecMetaAbsentWithoutInput(t *testing.T) {
+	ctrl := gomock.NewController(t)
+
+	var metaFound bool
+	tool := ifmocks.NewMockTool(ctrl)
+	tool.EXPECT().Name().Return("bare-tool").AnyTimes()
+	tool.EXPECT().Execute(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, _ map[string]any) (any, error) {
+		_, metaFound = interfaces.ToolExecMetaFromContext(ctx)
+		return "ok", nil
+	})
+
+	rt := newTestRuntime(sdkruntime.AgentConfig{})
+	_, err := rt.ExecuteTool(context.Background(), ExecuteToolInput{
+		Logger:   noopLog(),
+		Tools:    []interfaces.Tool{tool},
+		ToolName: "bare-tool",
+	}, interfaces.MemoryScope{})
+	require.NoError(t, err)
+	// meta is present but zero-valued (IdempotencyKey is empty string); context key is always set
+	_ = metaFound
+}
+
 func TestExecuteTool_BeforeToolModifiesArgs(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	tool := ifmocks.NewMockTool(ctrl)

@@ -43,6 +43,7 @@ See [Timeouts & Modes](/advanced/timeouts-and-modes) for the full failure behavi
 - **Human review** — Require approval for dangerous tools, MCP-exposed capabilities, and sub-agent delegation where policy demands it.
 - **Tool authorization** — Implement [`ToolAuthorizer`](/features/tools) for programmatic gates (scopes, tenancy, feature flags) before approval or execution.
 - **Parallel vs sequential tools** — Use [`WithAgentToolExecutionMode`](/features/tools) consistently across `NewAgent`, `NewAgentWorker`, and sub-agents when order or shared state matters.
+- **Tool idempotency** — Tools with side effects (payments, provisioning, writes) can be retried by Temporal on activity failure. Use [`interfaces.ToolExecMetaFromContext`](/features/tools#tool-execution-context) inside `Execute` to read the stable `IdempotencyKey` and forward it to non-idempotent external APIs. The key is a 32-char hex hash of `RunID:Iteration:ToolCallID` — fixed length, safe for all providers, and survives activity retries and `ContinueAsNew` boundaries.
 
 ## MCP and external tools
 

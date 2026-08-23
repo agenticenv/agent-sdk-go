@@ -73,3 +73,37 @@ func ToolsToSpecs(tools []Tool) []ToolSpec {
 	}
 	return specs
 }
+
+// ToolExecMeta carries per-invocation metadata the agent sets on the context before calling
+// [Tool.Execute]. Tool authors can read it via [ToolExecMetaFromContext] to forward idempotency
+// keys to external APIs, enrich logs, or correlate traces.
+//
+// Fields may be extended in future SDK versions; always use named access rather than position.
+type ToolExecMeta struct {
+	// IdempotencyKey is a stable, unique key for this tool invocation suitable for forwarding
+	// to non-idempotent external APIs. It is derived from RunID, Iteration, and ToolCallID and
+	// survives Temporal ContinueAsNew boundaries for the same logical tool call.
+	IdempotencyKey string
+	// RunID is the agent run identifier.
+	RunID string
+	// ToolCallID is the identifier the LLM assigned to this tool call.
+	ToolCallID string
+	// Iteration is the LLM round (zero-based) in which this tool call was made.
+	Iteration int
+}
+
+type toolExecMetaKey struct{}
+
+// WithToolExecMeta returns a copy of ctx carrying meta. Called by the agent runtime before
+// invoking [Tool.Execute]; not intended for direct use by tool authors.
+func WithToolExecMeta(ctx context.Context, meta ToolExecMeta) context.Context {
+	return context.WithValue(ctx, toolExecMetaKey{}, meta)
+}
+
+// ToolExecMetaFromContext returns the [ToolExecMeta] set by the agent runtime, and whether it
+// was present. Returns a zero-value ToolExecMeta and false when called outside an agent tool
+// execution (e.g. in unit tests that call Execute directly).
+func ToolExecMetaFromContext(ctx context.Context) (ToolExecMeta, bool) {
+	meta, ok := ctx.Value(toolExecMetaKey{}).(ToolExecMeta)
+	return meta, ok
+}
