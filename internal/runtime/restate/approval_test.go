@@ -89,6 +89,34 @@ func TestPrepareApprovalFromCustomEvent_Delegation(t *testing.T) {
 	}
 }
 
+func TestPrepareApprovalFromCustomEvent_Budget(t *testing.T) {
+	ev := events.NewAgentCustomEvent(string(events.AgentCustomEventNameBudget), map[string]any{
+		"agentName":     "budget-agent",
+		"detail":        "tokens over",
+		"totalTokens":   float64(150),
+		"costUsd":       0.02,
+		"approvalToken": "tok-budget",
+	})
+
+	req, token, err := prepareApprovalFromCustomEvent(ev)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if token != "tok-budget" {
+		t.Fatalf("token: got %q want tok-budget", token)
+	}
+	if req == nil || req.Name != types.ApprovalRequestNameBudget {
+		t.Fatalf("unexpected req: %#v", req)
+	}
+	parsed, err := types.ParseBudgetApproval(req)
+	if err != nil {
+		t.Fatalf("ParseBudgetApproval: %v", err)
+	}
+	if parsed.AgentName != "budget-agent" || parsed.TotalTokens != 150 || parsed.ApprovalToken != "tok-budget" {
+		t.Fatalf("unexpected parsed budget: %#v", parsed)
+	}
+}
+
 func TestPrepareApprovalFromCustomEvent_ClonesArgs(t *testing.T) {
 	args := map[string]any{"k": "v"}
 	ev := events.NewAgentCustomEvent(string(events.AgentCustomEventNameToolApproval), &events.AgentCustomEventApprovalValue{

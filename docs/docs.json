@@ -67,6 +67,7 @@
               "features/retrieval",
               "features/response-format",
               "features/token-usage",
+              "features/budget",
               "features/reasoning",
               "features/hooks",
               "features/ag-ui-protocol"
@@ -138,7 +139,8 @@
           {
             "group": "Configuration",
             "pages": [
-              "examples/execution-config"
+              "examples/execution-config",
+              "examples/agent-with-budget"
             ]
           },
           {

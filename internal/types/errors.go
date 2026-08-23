@@ -41,3 +41,14 @@ var ErrStreamAlreadyConsumed = errors.New("runtime: stream events already consum
 // store instead of reconnecting. Also returned by [RunHandle.Cancel] / [StreamHandle.Cancel]
 // when the run is already terminal (nothing left to cancel).
 var ErrRunAlreadyCompleted = errors.New("runtime: run already completed, stream unavailable")
+
+// ErrBudgetExceeded is returned when a per-run budget limit (MaxTokens or MaxCostUSD) is
+// reached and the configured action is BudgetStopRun, or when BudgetWaitForApproval is
+// configured and the caller denies continuation, or when MaxApprovals is exhausted.
+var ErrBudgetExceeded = errors.New("agent: per-run budget exceeded")
+
+// ErrBudgetApprovalUnavailable is returned when a BudgetWaitForApproval pause cannot
+// deliver the approval request to the caller because the event stream is unavailable
+// (e.g. no subscriber connected). This is a transient infrastructure failure, not a
+// budget denial. Callers may retry the run; the budget limit remains in effect.
+var ErrBudgetApprovalUnavailable = errors.New("agent: budget approval unavailable (stream not connected)")

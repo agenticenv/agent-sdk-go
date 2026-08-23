@@ -164,6 +164,7 @@ defer a.Close()
 - **Streaming & AG-UI** — partial token streaming; AG-UI protocol for frontend integration
 - **Reasoning** — extended thinking on Anthropic, Gemini, DeepSeek, and OpenAI reasoning models
 - **Token usage** — aggregate prompt, completion, and reasoning token counts per run
+- **Budget control** — cap token spend per run; stop execution or require human-in-the-loop approval when the limits are reached
 - **Hooks & guardrails** — middleware at LLM, tool, retrieval, and memory lifecycle points
 - **Execution config** — per-operation timeouts and max attempts via `With*ExecutionConfig`
 - **Durable execution** — crash-resilient runs via Temporal or Restate; reconnect to active runs and resume event streams after a restart

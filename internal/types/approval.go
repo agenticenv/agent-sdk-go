@@ -39,10 +39,11 @@ type ApprovalRequestName string
 const (
 	ApprovalRequestNameTool     ApprovalRequestName = "tool_approval"
 	ApprovalRequestNameSubAgent ApprovalRequestName = "sub_agent_delegation"
+	ApprovalRequestNameBudget   ApprovalRequestName = "budget_approval"
 )
 
 // ApprovalRequest is one pending approval callback. Name + Value match CUSTOM semantics;
-// Value is a [ToolApprovalRequestValue] or [SubAgentDelegationApprovalRequestValue].
+// Value is a [ToolApprovalRequestValue], [SubAgentDelegationApprovalRequestValue], or [BudgetApprovalRequestValue].
 // Set Respond before invoking the handler.
 type ApprovalRequest struct {
 	Name    ApprovalRequestName `json:"name,omitempty"`
@@ -66,6 +67,15 @@ type SubAgentDelegationApprovalRequestValue struct {
 	SubAgentName  string         `json:"subAgentName,omitempty"`
 	Args          map[string]any `json:"args,omitempty"`
 	ApprovalToken string         `json:"approvalToken,omitempty"`
+}
+
+// BudgetApprovalRequestValue is the JSON payload for a per-run budget approval.
+type BudgetApprovalRequestValue struct {
+	AgentName     string  `json:"agentName,omitempty"`
+	Detail        string  `json:"detail,omitempty"`
+	TotalTokens   int64   `json:"totalTokens,omitempty"`
+	CostUSD       float64 `json:"costUsd,omitempty"`
+	ApprovalToken string  `json:"approvalToken,omitempty"`
 }
 
 func parseApprovalPayload[V any](v any) (out V, err error) {
@@ -118,4 +128,18 @@ func ParseDelegationApproval(req *ApprovalRequest) (SubAgentDelegationApprovalRe
 		return SubAgentDelegationApprovalRequestValue{}, errors.New("types: delegation approval request has empty value")
 	}
 	return parseApprovalPayload[SubAgentDelegationApprovalRequestValue](req.Value)
+}
+
+// ParseBudgetApproval decodes Value for ApprovalRequestNameBudget.
+func ParseBudgetApproval(req *ApprovalRequest) (BudgetApprovalRequestValue, error) {
+	if req == nil {
+		return BudgetApprovalRequestValue{}, errors.New("types: nil approval request")
+	}
+	if req.Name != ApprovalRequestNameBudget {
+		return BudgetApprovalRequestValue{}, errors.New("types: not a budget approval request")
+	}
+	if req.Value == nil {
+		return BudgetApprovalRequestValue{}, errors.New("types: budget approval request has empty value")
+	}
+	return parseApprovalPayload[BudgetApprovalRequestValue](req.Value)
 }

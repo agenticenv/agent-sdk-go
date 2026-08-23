@@ -53,6 +53,11 @@ type AgentHooks struct {
 	AfterMemoryLoad   []AfterMemoryLoadHook
 	BeforeMemoryStore []BeforeMemoryStoreHook
 	AfterMemoryStore  []AfterMemoryStoreHook
+
+	// OnBudgetExceeded fires each time a per-run budget limit is breached, before the
+	// configured action (stop or approval pause) is taken. Fire-and-forget — use it for
+	// metrics, alerts, and audit logging. Errors are not propagated.
+	OnBudgetExceeded []OnBudgetExceededHook
 }
 
 // HookGroup is a named set of middleware hooks registered via
@@ -97,5 +102,7 @@ func (h AgentHooks) Merge(other AgentHooks) AgentHooks {
 		AfterMemoryLoad:   append(h.AfterMemoryLoad, other.AfterMemoryLoad...),
 		BeforeMemoryStore: append(h.BeforeMemoryStore, other.BeforeMemoryStore...),
 		AfterMemoryStore:  append(h.AfterMemoryStore, other.AfterMemoryStore...),
+
+		OnBudgetExceeded: append(h.OnBudgetExceeded, other.OnBudgetExceeded...),
 	}
 }

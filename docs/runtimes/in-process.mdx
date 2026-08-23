@@ -50,6 +50,7 @@ All SDK capabilities are available on the in-process runtime:
 - Conversation (in-memory), memory, retrieval (RAG)
 - Streaming, AG-UI events, hooks
 - Human-in-the-loop approvals
+- Budget (`WithBudget`)
 - OpenTelemetry observability
 
 Durable execution (crash recovery) and durable reconnect (`GetAgentRun` / `GetAgentStream` + `WithOffset`) require the [Temporal](/runtimes/temporal) or [Restate](/runtimes/restate) runtime. Temporal also offers horizontal worker scaling via `NewAgentWorker`; Restate scales via multiple registered endpoint deployments.

@@ -117,7 +117,7 @@ agent.WithHooks("pii", agent.AgentHooks{
 
 ### Token budget and cost tracking
 
-Enforce a per-run or per-user token budget across LLM calls:
+For a **per-run** token or cost cap, use [`WithBudget`](/features/budget) — the SDK stops or pauses the run without hook code. Use `AfterLLM` for custom accounting that spans users, tenants, or multiple runs:
 
 ```go
 agent.WithHooks("cost", agent.AgentHooks{
@@ -125,8 +125,8 @@ agent.WithHooks("cost", agent.AgentHooks{
         func(ctx context.Context, in agent.AfterLLMHookInput) (agent.AfterLLMHookOutput, error) {
             if in.Response.Usage != nil {
                 trackTokens(in.RunMeta.RunID, in.Response.Usage.TotalTokens)
-                if budgetExceeded(in.RunMeta.RunID) {
-                    return agent.AfterLLMHookOutput{}, errors.New("token budget exceeded")
+                if userQuotaExceeded(in.RunMeta.RunID) {
+                    return agent.AfterLLMHookOutput{}, errors.New("user token quota exceeded")
                 }
             }
             return agent.AfterLLMHookOutput{Response: in.Response}, nil
@@ -135,7 +135,7 @@ agent.WithHooks("cost", agent.AgentHooks{
 })
 ```
 
-**Hooks:** `BeforeLLM` (cache read / short-circuit), `AfterLLM` (token tracking, cache write, model fallback)
+**Hooks:** `BeforeLLM` (cache read / short-circuit), `AfterLLM` (per-call tracking, cache write, model fallback)
 
 ### Tenant isolation for memory
 
@@ -228,7 +228,8 @@ agent.WithHooks("retrieval", agent.AgentHooks{
 | PII scrubbing from tool args / results | `BeforeTool`, `AfterTool` |
 | PII scrubbing from retrieval | `BeforeRetrieve`, `AfterRetrieve` |
 | PII scrubbing from memory | `BeforeMemoryStore`, `AfterMemoryLoad` |
-| Token tracking and budget enforcement | `AfterLLM` |
+| Per-run token/cost cap | [`WithBudget`](/features/budget) (not a hook) |
+| Custom token accounting (per-user / multi-run) | `AfterLLM` |
 | LLM response caching | `BeforeLLM` (read), `AfterLLM` (write) |
 | Model fallback on error | `AfterLLM` |
 | Tool rate limiting | `BeforeTool` |
@@ -260,5 +261,9 @@ agent.WithHooks("retrieval", agent.AgentHooks{
 
   <Card title="Retrieval" icon="book-open" href="/features/retrieval" horizontal>
     BeforeRetrieve and AfterRetrieve hooks
+  </Card>
+
+  <Card title="Budget" icon="gauge" href="/features/budget" horizontal>
+    Built-in token and cost limits without AfterLLM
   </Card>
 </CardGroup>

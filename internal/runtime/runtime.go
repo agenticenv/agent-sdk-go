@@ -217,11 +217,13 @@ type AgentSession struct {
 	ConversationSaveOnIteration bool
 }
 
-// AgentLimits caps iteration and wall-clock behavior for this run.
+// AgentLimits caps iteration, wall-clock, and per-run budget behavior.
 type AgentLimits struct {
 	MaxIterations   int
 	Timeout         time.Duration
 	ApprovalTimeout time.Duration
+	// Budget is the optional per-run token and cost budget. Nil means no budget enforcement.
+	Budget *types.BudgetConfig
 }
 
 // RunRequest carries one run request from Agent to Runtime.

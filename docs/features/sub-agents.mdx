@@ -73,7 +73,7 @@ Each delegation is a tool round on the **main agent** — it consumes one iterat
 ## Behavior
 
 - **Conversation isolation** — sub-agents do not inherit the main agent's conversation ID. They run without session history from the parent.
-- **Independent approval policies** — parent and child policies are independent (see [Approvals](/features/approvals)).
+- **Budget** — when a parent agent has [`WithBudget`](/features/budget), nested sub-agent token and cost usage counts toward the **parent** run. A child's own `WithBudget` applies only when that agent is run on its own.
 - **Worker pairing** — with `DisableLocalWorker`, pair each `NewAgentWorker` with the same options as the `NewAgent` it runs.
 - **Validation at build** — sub-agent graphs are validated for cycles and depth violations at `NewAgent`. Errors fail fast.
 
@@ -117,5 +117,9 @@ _ = a.SubAgentRegistry().Unregister("Math")
 
   <Card title="Approvals" icon="shield-check" href="/features/approvals" horizontal>
     Parent vs specialist approval policies
+  </Card>
+
+  <Card title="Budget" icon="gauge" href="/features/budget" horizontal>
+    Parent budget covers nested sub-agent usage
   </Card>
 </CardGroup>

@@ -3,6 +3,7 @@ package local
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/agenticenv/agent-sdk-go/internal/events"
+	"github.com/agenticenv/agent-sdk-go/internal/hooks"
 	sdkruntime "github.com/agenticenv/agent-sdk-go/internal/runtime"
 	"github.com/agenticenv/agent-sdk-go/internal/runtime/base"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
@@ -52,6 +54,14 @@ type AgentLoopInput struct {
 	MemoryScope interfaces.MemoryScope
 	// RunID is the stable identifier for this agent run; passed to LLM hooks via [RunMeta].
 	RunID string
+	// BudgetTracker tracks per-run token and cost usage against the configured limits.
+	// Nil when no budget is configured. Shared with nested subagent calls; subagent calls
+	// set EnforceBudget=false so only the root run triggers OnExceeded.
+	BudgetTracker *base.BudgetTracker
+	// EnforceBudget controls whether the budget check runs after each LLM call.
+	// True on root runs when WithBudget is configured; false on nested subagent calls
+	// so the parent run's tracker accumulates child usage and enforces the limit.
+	EnforceBudget bool
 }
 
 // AgentLoopResult is the outcome of a completed local agent run.
@@ -114,6 +124,15 @@ func (rt *LocalRuntime) executeAgentLoop(ctx context.Context, input AgentLoopInp
 	toolExecMode := rt.ToolExecutionMode
 	if toolExecMode == "" {
 		toolExecMode = types.AgentToolExecutionModeParallel
+	}
+
+	// Warn when a budget is configured on a sub-agent run — the parent's budget applies and
+	// this agent's budget will not be enforced for this invocation.
+	if input.BudgetTracker != nil && !input.EnforceBudget && input.SubAgentDepth > 0 {
+		log.Warn(ctx, "local: agent has WithBudget but is running as a sub-agent; "+
+			"budget enforcement is disabled for this invocation — the parent run's budget applies",
+			slog.String("scope", "loop"),
+			slog.Int("sub_agent_depth", input.SubAgentDepth))
 	}
 
 	// Internal emit: publish events to the eventbus channel for this run.
@@ -248,6 +267,9 @@ func (rt *LocalRuntime) executeAgentLoop(ctx context.Context, input AgentLoopInp
 
 		telemetry.Run.TotalLLMCalls++
 		llmUsage = base.MergeLLMUsage(llmUsage, llmResult.Usage)
+		if budgetErr := rt.checkBudget(ctx, input, telemetry, llmResult.Usage); budgetErr != nil {
+			return &AgentLoopResult{Content: lastContent, LLMUsage: llmUsage, Telemetry: telemetry}, budgetErr
+		}
 
 		// Final response: no tool calls → done.
 		if len(llmResult.ToolCalls) == 0 {
@@ -291,6 +313,9 @@ func (rt *LocalRuntime) executeAgentLoop(ctx context.Context, input AgentLoopInp
 				return nil, fmt.Errorf("llm final call (iter %d): %w", iter, err)
 			}
 			llmUsage = base.MergeLLMUsage(llmUsage, llmResult.Usage)
+			if budgetErr := rt.checkBudget(ctx, input, telemetry, llmResult.Usage); budgetErr != nil {
+				return &AgentLoopResult{Content: lastContent, LLMUsage: llmUsage, Telemetry: telemetry}, budgetErr
+			}
 			messages = append(messages, interfaces.Message{
 				Role:    interfaces.MessageRoleAssistant,
 				Content: llmResult.Content,
@@ -353,6 +378,12 @@ func (rt *LocalRuntime) executeAgentLoop(ctx context.Context, input AgentLoopInp
 					telemetry.Storage.TotalMemoryStores++
 				}
 			}
+		}
+
+		// Nested sub-agents accumulate into the shared tracker during their run.
+		// Enforce here (like Temporal/Restate after tools), not only on the next parent LLM call.
+		if budgetErr := rt.enforceBudgetIfExceeded(ctx, input, telemetry); budgetErr != nil {
+			return &AgentLoopResult{Content: lastContent, LLMUsage: llmUsage, Telemetry: telemetry}, budgetErr
 		}
 
 		if rt.conversationMemoryEnabled(input) && rt.AgentConfig.Session.ConversationSaveOnIteration && len(messages) > persistedMessageCount {
@@ -679,11 +710,22 @@ func (rt *LocalRuntime) executeSingleTool(
 						SubAgentDepth:    input.SubAgentDepth + 1,
 						MaxSubAgentDepth: input.MaxSubAgentDepth,
 						Tools:            subAgentRoute.tools,
+						BudgetTracker:    input.BudgetTracker,
+						EnforceBudget:    false,
 					})
 				})
 				emit(events.NewAgentStepFinishedEvent(delegationName))
 				if execErr != nil {
-					content = "Sub-agent execution failed: " + execErr.Error()
+					if errors.Is(execErr, types.ErrBudgetExceeded) {
+						// Nested child stopped after shared budget Add; parent enforces after tools.
+						if subResult != nil && strings.TrimSpace(subResult.Content) != "" {
+							content = subResult.Content
+						} else {
+							content = "Sub-agent stopped: per-run budget exceeded."
+						}
+					} else {
+						content = "Sub-agent execution failed: " + execErr.Error()
+					}
 				} else {
 					content = subResult.Content
 				}
@@ -875,4 +917,192 @@ func (rt *LocalRuntime) subAgentExecutionPolicy() sdkruntime.ExecutionPolicy {
 		policy.Timeout = rt.AgentConfig.Limits.Timeout
 	}
 	return policy
+}
+
+// checkBudget runs after each LLM call. Parent runs (EnforceBudget) add usage and apply
+// OnExceeded. Nested sub-agents only accumulate into the shared tracker; on breach they
+// return ErrBudgetExceeded so the child stops and the parent can enforce after tools.
+func (rt *LocalRuntime) checkBudget(
+	ctx context.Context,
+	input AgentLoopInput,
+	telemetry *types.AgentTelemetry,
+	usage *interfaces.LLMUsage,
+) error {
+	if input.BudgetTracker == nil {
+		return nil
+	}
+	if !input.EnforceBudget {
+		if err := input.BudgetTracker.Add(usage); err != nil {
+			return fmt.Errorf("%w: %s", types.ErrBudgetExceeded, err.Error())
+		}
+		return nil
+	}
+	budgetErr := input.BudgetTracker.Add(usage)
+	if budgetErr == nil {
+		return nil
+	}
+	return rt.applyBudgetExceeded(ctx, input, telemetry, budgetErr)
+}
+
+// enforceBudgetIfExceeded applies OnExceeded when the shared tracker is already over limits
+// (e.g. after a nested sub-agent accumulated past the parent budget).
+func (rt *LocalRuntime) enforceBudgetIfExceeded(
+	ctx context.Context,
+	input AgentLoopInput,
+	telemetry *types.AgentTelemetry,
+) error {
+	if !input.EnforceBudget || input.BudgetTracker == nil {
+		return nil
+	}
+	budgetErr := input.BudgetTracker.Check()
+	if budgetErr == nil {
+		return nil
+	}
+	return rt.applyBudgetExceeded(ctx, input, telemetry, budgetErr)
+}
+
+func (rt *LocalRuntime) applyBudgetExceeded(
+	ctx context.Context,
+	input AgentLoopInput,
+	telemetry *types.AgentTelemetry,
+	budgetErr error,
+) error {
+	cfg := rt.AgentConfig.Limits.Budget
+	action := types.BudgetStopRun
+	if cfg != nil && cfg.OnExceeded != "" {
+		action = cfg.OnExceeded
+	}
+
+	var budgetExcErr *base.BudgetExceededError
+	errors.As(budgetErr, &budgetExcErr)
+
+	kind := types.BudgetExceededKindTokens
+	var totalTokens int64
+	var totalCostUSD float64
+	if budgetExcErr != nil {
+		kind = budgetExcErr.Kind
+		totalTokens = budgetExcErr.TotalTokens
+		totalCostUSD = budgetExcErr.TotalCostUSD
+	} else {
+		totalTokens, totalCostUSD = input.BudgetTracker.Totals()
+	}
+
+	approvalsExhausted := action == types.BudgetWaitForApproval && input.BudgetTracker.ApprovalsExhausted()
+	approvalCount := input.BudgetTracker.ApprovalCount()
+
+	kindAttr := interfaces.Attribute{Key: types.MetricAttrBudgetKind, Value: string(kind)}
+	actionAttr := interfaces.Attribute{Key: types.MetricAttrBudgetAction, Value: string(action)}
+
+	rt.Metrics.IncrementCounter(ctx, types.MetricBudgetExceeded, kindAttr, actionAttr)
+
+	rt.logger.Warn(ctx, "local: per-run budget exceeded",
+		slog.String("scope", "loop"),
+		slog.String("action", string(action)),
+		slog.String("budget.kind", string(kind)),
+		slog.Int64("budget.total_tokens", int64(totalTokens)),
+		slog.Float64("budget.total_cost_usd", totalCostUSD),
+		slog.Int("budget.approval_count", approvalCount),
+		slog.Bool("budget.approvals_exhausted", approvalsExhausted),
+		slog.String("detail", budgetErr.Error()))
+
+	hooks.RunOnBudgetExceeded(ctx, rt.AgentConfig.Hooks, hooks.OnBudgetExceededHookInput{
+		RunMeta:            hooks.RunMeta{RunID: input.RunID},
+		Kind:               kind,
+		TotalTokens:        totalTokens,
+		TotalCostUSD:       totalCostUSD,
+		Action:             action,
+		ApprovalCount:      approvalCount,
+		ApprovalsExhausted: approvalsExhausted,
+	})
+
+	if action == types.BudgetWaitForApproval && !approvalsExhausted {
+		rt.Metrics.IncrementCounter(ctx, types.MetricBudgetApprovalRequested, kindAttr)
+		status := rt.awaitBudgetApprovalStatus(ctx, input, budgetErr.Error())
+		switch status {
+		case types.ApprovalStatusApproved:
+			rt.Metrics.IncrementCounter(ctx, types.MetricBudgetApprovalApproved, kindAttr)
+			input.BudgetTracker.AdvanceWatermark()
+			return nil
+		case types.ApprovalStatusTimedOut:
+			rt.Metrics.IncrementCounter(ctx, types.MetricBudgetApprovalTimedOut, kindAttr)
+		case types.ApprovalStatusUnavailable:
+			rt.Metrics.IncrementCounter(ctx, types.MetricBudgetApprovalUnavailable, kindAttr)
+			rt.logger.Warn(ctx, "local: budget approval unavailable (no subscriber); stopping run",
+				slog.String("scope", "loop"))
+			telemetry.Run.FinishReason = types.FinishReasonBudgetExceeded
+			return fmt.Errorf("%w: %s", types.ErrBudgetApprovalUnavailable, budgetErr.Error())
+		default:
+			rt.Metrics.IncrementCounter(ctx, types.MetricBudgetApprovalRejected, kindAttr)
+		}
+	} else if action == types.BudgetWaitForApproval && approvalsExhausted {
+		rt.Metrics.IncrementCounter(ctx, types.MetricBudgetApprovalExhausted, kindAttr)
+		rt.logger.Warn(ctx, "local: budget approval limit exhausted; stopping run",
+			slog.String("scope", "loop"),
+			slog.Int("budget.max_approvals", cfg.MaxApprovals))
+	}
+
+	telemetry.Run.FinishReason = types.FinishReasonBudgetExceeded
+	return fmt.Errorf("%w: %w", types.ErrBudgetExceeded, budgetErr)
+}
+
+// awaitBudgetApprovalStatus sends a CUSTOM budget_approval event and invokes the approval
+// handler. Returns the resolved ApprovalStatus. Returns ApprovalStatusUnavailable when
+// there is no subscriber connected (channel empty and no handler configured).
+func (rt *LocalRuntime) awaitBudgetApprovalStatus(ctx context.Context, input AgentLoopInput, detail string) types.ApprovalStatus {
+	token := uuid.New().String()
+	resultCh := make(chan types.ApprovalStatus, 1)
+	respond := func(status types.ApprovalStatus) error {
+		select {
+		case resultCh <- status:
+		default:
+		}
+		return nil
+	}
+
+	tokens, costUSD := input.BudgetTracker.Totals()
+	value := types.BudgetApprovalRequestValue{
+		AgentName:     rt.AgentSpec.Name,
+		Detail:        detail,
+		TotalTokens:   tokens,
+		CostUSD:       costUSD,
+		ApprovalToken: token,
+	}
+	approvalReq := &types.ApprovalRequest{
+		Name:    types.ApprovalRequestNameBudget,
+		Value:   value,
+		Respond: respond,
+	}
+
+	// Register the token so streaming callers can call Stream.Approve(token, status) to unblock.
+	rt.pendingApprovals.Store(token, resultCh)
+	defer rt.pendingApprovals.Delete(token)
+
+	// Emit CUSTOM event for streaming callers so they can call Stream.Approve(token, status).
+	hasChannel := strings.TrimSpace(input.ChannelName) != ""
+	rt.publishEventToChannel(ctx, input.ChannelName, events.NewAgentCustomEvent(string(events.AgentCustomEventNameBudget),
+		events.AgentCustomEventBudgetValue{
+			AgentName:     value.AgentName,
+			Detail:        value.Detail,
+			TotalTokens:   value.TotalTokens,
+			CostUSD:       value.CostUSD,
+			ApprovalToken: value.ApprovalToken,
+		}))
+
+	// Non-streaming: call the approval handler synchronously.
+	if input.ApprovalHandler != nil {
+		approvalTimeout := rt.approvalTaskTimeout()
+		approvalCtx, cancel := context.WithTimeout(ctx, approvalTimeout)
+		input.ApprovalHandler(approvalCtx, approvalReq)
+		cancel()
+	} else if !hasChannel {
+		// No handler and no stream channel — cannot deliver the approval request.
+		return types.ApprovalStatusUnavailable
+	}
+
+	select {
+	case status := <-resultCh:
+		return status
+	case <-ctx.Done():
+		return types.ApprovalStatusRejected
+	}
 }

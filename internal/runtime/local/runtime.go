@@ -168,6 +168,7 @@ func (rt *LocalRuntime) driveRun(runCtx context.Context, req *sdkruntime.RunRequ
 		eventTypes = []events.AgentEventType{events.AgentEventTypeCustom}
 	}
 
+	budgetTracker := base.NewBudgetTracker(rt.AgentConfig.Limits.Budget)
 	loopResult, err := rt.executeAgentLoop(runCtx, AgentLoopInput{
 		UserPrompt:       req.UserPrompt,
 		RunID:            handle.id,
@@ -181,6 +182,8 @@ func (rt *LocalRuntime) driveRun(runCtx context.Context, req *sdkruntime.RunRequ
 		SubAgentDepth:    0,
 		MaxSubAgentDepth: req.MaxSubAgentDepth,
 		Tools:            req.Tools,
+		BudgetTracker:    budgetTracker,
+		EnforceBudget:    budgetTracker != nil,
 	})
 	if err != nil {
 		rt.logger.Error(runCtx, "runtime run failed",
@@ -309,6 +312,7 @@ func (rt *LocalRuntime) driveStream(
 		streamEventTypes = req.EventTypes
 	}
 
+	streamBudgetTracker := base.NewBudgetTracker(rt.AgentConfig.Limits.Budget)
 	result, loopErr := rt.executeAgentLoop(runCtx, AgentLoopInput{
 		UserPrompt:       req.UserPrompt,
 		RunID:            handle.id,
@@ -322,6 +326,8 @@ func (rt *LocalRuntime) driveStream(
 		SubAgentDepth:    0,
 		MaxSubAgentDepth: req.MaxSubAgentDepth,
 		Tools:            req.Tools,
+		BudgetTracker:    streamBudgetTracker,
+		EnforceBudget:    streamBudgetTracker != nil,
 	})
 	if loopErr != nil {
 		rt.logger.Error(runCtx, "runtime stream run failed",

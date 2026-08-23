@@ -50,6 +50,39 @@ type AgentTelemetry = types.AgentTelemetry
 // LLMUsage is the token usage for a single LLM call.
 type LLMUsage = types.LLMUsage
 
+// BudgetConfig configures per-run token and cost limits for an agent.
+// Use [WithBudget] to apply it. At least one of MaxTokens or MaxCostUSD must be set.
+// Limits apply to the current run only and reset when a new run starts.
+type BudgetConfig = types.BudgetConfig
+
+// BudgetExceededAction is the action taken when a per-run budget limit is reached.
+type BudgetExceededAction = types.BudgetExceededAction
+
+const (
+	// BudgetStopRun stops the run immediately and returns an error to the caller.
+	BudgetStopRun = types.BudgetStopRun
+	// BudgetWaitForApproval pauses the run and waits for the caller to approve or deny continuation.
+	// For Run: WithApprovalHandler must be provided at the Run() call site, not at NewAgent.
+	// For Stream: no ApprovalHandler is needed; handle via AgentStream.Approve.
+	// Approving continues the run; the next pause fires after another limit window from current usage.
+	// After MaxApprovals approvals the run stops with ErrBudgetExceeded (default limit: 5).
+	BudgetWaitForApproval = types.BudgetWaitForApproval
+)
+
+// ErrBudgetApprovalUnavailable is returned when a BudgetWaitForApproval pause cannot deliver
+// the approval request because the event stream has no connected subscriber. This is a
+// transient infrastructure failure, not a budget denial. Retry the run to recover.
+var ErrBudgetApprovalUnavailable = types.ErrBudgetApprovalUnavailable
+
+// ErrBudgetExceeded is returned when a per-run budget limit (MaxTokens or MaxCostUSD) is
+// reached and the configured action is BudgetStopRun, or when the caller denies continuation
+// after BudgetWaitForApproval.
+var ErrBudgetExceeded = types.ErrBudgetExceeded
+
+// FinishReasonBudgetExceeded is the finish reason set on AgentTelemetry when a run stops
+// because a per-run budget limit was reached.
+const FinishReasonBudgetExceeded = types.FinishReasonBudgetExceeded
+
 // RunTelemetry captures the orchestration lifecycle metrics for a single agent run.
 type RunTelemetry = types.RunTelemetry
 
@@ -150,6 +183,11 @@ func (a *Agent) Run(ctx context.Context, input string, opts *AgentRunOptions) (A
 	}
 	if a.hasApprovalTools(tools) && a.approvalHandler == nil {
 		return nil, fmt.Errorf("tools require approval but WithApprovalHandler was not set (required for Run)")
+	}
+	if a.budgetConfig != nil &&
+		a.budgetConfig.OnExceeded == types.BudgetWaitForApproval &&
+		a.approvalHandler == nil {
+		return nil, fmt.Errorf("WithBudget: OnExceeded %q requires WithApprovalHandler when calling Run; for stream-only use no handler is needed", a.budgetConfig.OnExceeded)
 	}
 	subAgents, err := a.resolveSubAgentSpecs(ctx)
 	if err != nil {

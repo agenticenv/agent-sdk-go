@@ -182,6 +182,7 @@ func (rt *TemporalRuntime) Start(ctx context.Context) error {
 	w.RegisterActivityWithOptions(rt.AgentMemoryStoreActivity, activity.RegisterOptions{Name: "AgentMemoryStoreActivity"})
 	w.RegisterActivityWithOptions(rt.AgentToolAuthorizeActivity, activity.RegisterOptions{Name: "AgentToolAuthorizeActivity"})
 	w.RegisterActivityWithOptions(rt.AgentToolApprovalActivity, activity.RegisterOptions{Name: "AgentToolApprovalActivity"})
+	w.RegisterActivityWithOptions(rt.AgentBudgetApprovalActivity, activity.RegisterOptions{Name: "AgentBudgetApprovalActivity"})
 	w.RegisterActivityWithOptions(rt.AgentToolExecuteActivity, activity.RegisterOptions{Name: "AgentToolExecuteActivity"})
 	w.RegisterActivityWithOptions(rt.AgentWorkflowCleanupActivity, activity.RegisterOptions{Name: "AgentWorkflowCleanupActivity"})
 	// PublishStreamEventActivity: used by sub-agent workflows to forward events to the root WorkflowStream.

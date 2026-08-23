@@ -22,6 +22,10 @@ const (
 	FinishReasonComplete FinishReason = "complete"
 	// FinishReasonMaxIterations indicates that the agent run completed because the maximum number of iterations was reached.
 	FinishReasonMaxIterations FinishReason = "max_iterations"
+	// FinishReasonBudgetExceeded indicates that the agent run stopped because a per-run budget
+	// limit (MaxTokens or MaxCostUSD) was reached and the configured action was BudgetStopRun,
+	// or because the caller denied continuation after BudgetWaitForApproval.
+	FinishReasonBudgetExceeded FinishReason = "budget_exceeded"
 )
 
 // RunTelemetry captures the orchestration lifecycle metrics for a single agent run.

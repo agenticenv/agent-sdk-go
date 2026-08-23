@@ -1,9 +1,9 @@
 ---
 title: "Approvals"
-description: "Configure human-in-the-loop approval for tool calls, MCP invocations, and sub-agent delegation"
+description: "Configure human-in-the-loop approval for tool calls, MCP invocations, sub-agent delegation, and per-run budget limits"
 ---
 
-Before registry tools, MCP tools, or sub-agent delegation execute, the SDK can pause and wait for **human approval**. One agent-level policy governs all three paths.
+Before registry tools, MCP tools, or sub-agent delegation execute, the SDK can pause and wait for **human approval**. One agent-level policy governs all three paths. Budget pauses use the same handler and stream `Approve` path, but they are not gated by the tool approval policy — see [Budget approval](#budget-approval).
 
 When an approval is required, the run **pauses at that tool call** and delivers an `ApprovalRequest` to your handler (or a `CUSTOM` event on the stream). The run resumes only after `req.Respond()` or `AgentStream.Approve()` is called with `Approved` or `Rejected`. If rejected, the tool call is skipped and the LLM receives a clear refusal message, then continues generating a response without that tool result. The overall run does not fail on rejection — only on timeout.
 
@@ -71,6 +71,7 @@ For a **non-blocking** wait, use the same handler and select on `agentRun.Done()
 |---|---|---|
 | Tool approval | `ParseToolApproval(req)` | `ToolName`, `AgentName` |
 | Sub-agent delegation | `ParseDelegationApproval(req)` | `SubAgentName`, `AgentName` |
+| Budget | `ParseBudgetApproval(req)` | `TotalTokens`, `CostUSD`, `AgentName`, `ApprovalToken` |
 
 ### Error handling
 
@@ -131,6 +132,14 @@ for ev := range eventCh {
         if err != nil {
             log.WithError(err).Error("Approve failed")
         }
+    } else if b, err := agent.ParseCustomEventBudget(ce); err == nil {
+        err := stream.Approve(ctx, b.ApprovalToken, agent.ApprovalStatusApproved)
+        if errors.Is(err, agent.ErrApprovalAlreadyResolved) {
+            continue
+        }
+        if err != nil {
+            log.WithError(err).Error("Approve failed")
+        }
     }
 }
 ```
@@ -138,6 +147,14 @@ for ev := range eventCh {
 <Warning>
 `Run` uses `req.Respond()` in `WithApprovalHandler`. `Stream` uses `AgentStream.Approve` with the token from the CUSTOM event. Do not mix the two paths.
 </Warning>
+
+## Budget approval
+
+[`WithBudget`](/features/budget) can pause the run when the token or cost cap is reached. That pause is **not** a tool-approval policy decision: the agent still needs `WithApprovalHandler` on `Run` (or `AgentStream.Approve` on `Stream`), and nested sub-agent budget pauses are delivered to the **parent** caller.
+
+Rejecting a budget approval stops the run with `ErrBudgetExceeded`. Approving continues from the current usage; the next pause fires only after another full limit from that point.
+
+Full API, payload fields, and Stream example: [Budget](/features/budget).
 
 ## Sub-agent approval
 
@@ -222,5 +239,9 @@ The CUSTOM approval event is delivered once. If you already responded before the
 
   <Card title="Sub-agents" icon="sitemap" href="/features/sub-agents" horizontal>
     Delegation approval flow
+  </Card>
+
+  <Card title="Budget" icon="gauge" href="/features/budget" horizontal>
+    Pause a run when the token or cost cap is reached
   </Card>
 </CardGroup>

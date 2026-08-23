@@ -90,6 +90,12 @@ type AgentWorkflowState struct {
 	Messages  []interfaces.Message  `json:"messages"`
 	LLMUsage  *interfaces.LLMUsage  `json:"llm_usage,omitempty"`
 	Telemetry *types.AgentTelemetry `json:"telemetry,omitempty"`
+	// BudgetTokens and BudgetCostUSD carry accumulated budget totals across ContinueAsNew boundaries.
+	BudgetTokens  int64   `json:"budget_tokens,omitempty"`
+	BudgetCostUSD float64 `json:"budget_cost_usd,omitempty"`
+	// BudgetWatermarkTokens and BudgetWatermarkCostUSD carry the approval watermark.
+	BudgetWatermarkTokens  int64   `json:"budget_watermark_tokens,omitempty"`
+	BudgetWatermarkCostUSD float64 `json:"budget_watermark_cost_usd,omitempty"`
 }
 
 // AgentRetrieverInput is the input to AgentRetrieverActivity.
@@ -229,14 +235,16 @@ type agentToolCallInput struct {
 
 // agentToolCallOutput is the output of executeAgentToolCall.
 type agentToolCallOutput struct {
-	msg    interfaces.Message
-	failed bool // true: hard err or ExecuteTool err
+	msg      interfaces.Message
+	failed   bool // true: hard err or ExecuteTool err
+	llmUsage *interfaces.LLMUsage
 }
 
 // agentToolResult is one tool outcome collected for the conversation and telemetry.
 type agentToolResult struct {
-	message interfaces.Message
-	failed  bool
+	message  interfaces.Message
+	failed   bool
+	llmUsage *interfaces.LLMUsage
 }
 
 // AgentToolExecuteInput is the input to AgentToolExecuteActivity.
@@ -290,6 +298,17 @@ type AddConversationMessagesInput struct {
 type PublishStreamEventInput struct {
 	StreamWorkflowID string          `json:"stream_workflow_id"`
 	EventJSON        json.RawMessage `json:"event_json"`
+}
+
+// AgentBudgetApprovalInput is the input to AgentBudgetApprovalActivity.
+// StreamWorkflowID is the workflow whose WorkflowStream receives the budget approval event.
+type AgentBudgetApprovalInput struct {
+	AgentName        string  `json:"agent_name"`
+	Detail           string  `json:"detail"`
+	TotalTokens      int64   `json:"total_tokens"`
+	TotalCostUSD     float64 `json:"total_cost_usd"`
+	StreamWorkflowID string  `json:"stream_workflow_id"`
+	AgentFingerprint string  `json:"agent_fingerprint,omitempty"`
 }
 
 // AgentWorkflow runs the agent loop: LLM → tool calls → approval/execute → feed results back to LLM → repeat.
@@ -454,6 +473,24 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 
 	messages := input.State.Messages
 
+	// Budget tracker: restored from ContinueAsNew state; nil when no budget is configured.
+	budgetTracker := base.NewBudgetTracker(rt.AgentConfig.Limits.Budget)
+	if budgetTracker != nil && input.State != nil {
+		budgetTracker.RestoreState(input.State.BudgetTokens, input.State.BudgetCostUSD,
+			input.State.BudgetWatermarkTokens, input.State.BudgetWatermarkCostUSD)
+	}
+	// enforceBudget is true on root runs; false on sub-agent child workflows where the parent
+	// owns the shared budget (sub-agent usage is rolled up at the parent level via activity results).
+	// A budget configured on a sub-agent (budgetTracker != nil) is intentionally not enforced here;
+	// the parent run's budget governs the full tree. Log a warning so developers are not surprised.
+	enforceBudget := budgetTracker != nil && input.RootWorkflowID == ""
+	if budgetTracker != nil && input.RootWorkflowID != "" {
+		logger.Warn("workflow: agent has WithBudget but is running as a sub-agent; "+
+			"budget enforcement is disabled for this invocation — the parent run's budget applies",
+			"scope", "workflow",
+			"root_workflow_id", input.RootWorkflowID)
+	}
+
 	memoryContext := ""
 	if rt.MemoryConfigured() && rt.RecallEnabled() {
 		logger.Debug("workflow: memory recall started", "scope", "workflow")
@@ -536,6 +573,13 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 		telemetry.Run.TotalLLMCalls++
 		telemetry.Run.LLMRetryCount += int64(llmResult.RetryCount)
 		llmUsage = base.MergeLLMUsage(llmUsage, llmResult.Usage)
+		if enforceBudget {
+			if budgetErr := budgetTracker.Add(llmResult.Usage); budgetErr != nil {
+				if stopErr := rt.handleBudgetExceeded(ctx, input, budgetTracker, telemetry, budgetErr.Error(), activityIDSuffix, streamWorkflowID, emitAgentEvent); stopErr != nil {
+					return &types.AgentRunResult{LLMUsage: llmUsage, Telemetry: telemetry}, stopErr
+				}
+			}
+		}
 
 		if len(llmResult.ToolCalls) == 0 {
 			// Final response: accumulate assistant message for conversation
@@ -562,6 +606,13 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 				return nil, err
 			}
 			llmUsage = base.MergeLLMUsage(llmUsage, llmResult.Usage)
+			if enforceBudget {
+				if budgetErr := budgetTracker.Add(llmResult.Usage); budgetErr != nil {
+					if stopErr := rt.handleBudgetExceeded(ctx, input, budgetTracker, telemetry, budgetErr.Error(), activityIDSuffix, streamWorkflowID, emitAgentEvent); stopErr != nil {
+						return &types.AgentRunResult{LLMUsage: llmUsage, Telemetry: telemetry}, stopErr
+					}
+				}
+			}
 			messages = append(messages, interfaces.Message{Role: interfaces.MessageRoleAssistant, Content: llmResult.Content})
 			lastContent = llmResult.Content
 			telemetry.Run.TotalLLMCalls++
@@ -669,8 +720,9 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 							"toolName", tc.ToolName,
 							"toolCallID", tc.ToolCallID)
 						toolResults[i] = agentToolResult{
-							message: v.msg,
-							failed:  v.failed,
+							message:  v.msg,
+							failed:   v.failed,
+							llmUsage: v.llmUsage,
 						}
 					}
 				}
@@ -716,8 +768,9 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 						"toolName", tc.ToolName,
 						"toolCallID", tc.ToolCallID)
 					toolResults[i] = agentToolResult{
-						message: toolOutput.msg,
-						failed:  toolOutput.failed,
+						message:  toolOutput.msg,
+						failed:   toolOutput.failed,
+						llmUsage: toolOutput.llmUsage,
 					}
 				}
 			}
@@ -745,6 +798,18 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 				}
 			}
 			messages = append(messages, result.message)
+			if result.llmUsage != nil {
+				llmUsage = base.MergeLLMUsage(llmUsage, result.llmUsage)
+				if enforceBudget {
+					if budgetErr := budgetTracker.Add(result.llmUsage); budgetErr != nil {
+						if stopErr := rt.handleBudgetExceeded(ctx, input, budgetTracker, telemetry, budgetErr.Error(), activityIDSuffix, streamWorkflowID, emitAgentEvent); stopErr != nil {
+							return &types.AgentRunResult{LLMUsage: llmUsage, Telemetry: telemetry}, stopErr
+						}
+					}
+				} else if budgetTracker != nil {
+					_ = budgetTracker.Add(result.llmUsage)
+				}
+			}
 		}
 
 		if rt.conversationMemoryEnabled(input.ConversationID) && rt.AgentConfig.Session.ConversationSaveOnIteration && len(messages) > 0 {
@@ -788,11 +853,21 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 				input.StreamState = streamState
 			}
 
+			bt, bc := int64(0), float64(0)
+			bwt, bwc := int64(0), float64(0)
+			if budgetTracker != nil {
+				bt, bc = budgetTracker.Totals()
+				bwt, bwc = budgetTracker.WatermarkTotals()
+			}
 			input.State = &AgentWorkflowState{
-				Iteration: iter + 1,
-				Messages:  messages,
-				LLMUsage:  llmUsage,
-				Telemetry: telemetry,
+				Iteration:              iter + 1,
+				Messages:               messages,
+				LLMUsage:               llmUsage,
+				Telemetry:              telemetry,
+				BudgetTokens:           bt,
+				BudgetCostUSD:          bc,
+				BudgetWatermarkTokens:  bwt,
+				BudgetWatermarkCostUSD: bwc,
 			}
 			return nil, workflow.NewContinueAsNewError(ctx, rt.AgentWorkflow, input)
 		}
@@ -1000,6 +1075,7 @@ func (rt *TemporalRuntime) executeAgentToolCall(input agentToolCallInput, tc Too
 	}
 
 	var content string
+	var llmUsage *interfaces.LLMUsage
 	failed := false
 	switch approvalStatus {
 	case types.ApprovalStatusApproved:
@@ -1011,7 +1087,7 @@ func (rt *TemporalRuntime) executeAgentToolCall(input agentToolCallInput, tc Too
 				"childTaskQueue", strings.TrimSpace(route.TaskQueue),
 				"subAgentDepth", input.input.SubAgentDepth)
 			var subErr error
-			content, subErr = rt.delegateToSubAgent(input.wfCtx, input.input, tc, route, input.emitEvent)
+			content, llmUsage, subErr = rt.delegateToSubAgent(input.wfCtx, input.input, tc, route, input.emitEvent)
 			if subErr != nil {
 				return nil, subErr
 			}
@@ -1061,7 +1137,8 @@ func (rt *TemporalRuntime) executeAgentToolCall(input agentToolCallInput, tc Too
 			ToolName:   tc.ToolName,
 			ToolCallID: tc.ToolCallID,
 		},
-		failed: failed,
+		failed:   failed,
+		llmUsage: llmUsage,
 	}, nil
 }
 
@@ -1539,14 +1616,14 @@ func (rt *TemporalRuntime) PublishStreamEventActivity(ctx context.Context, in Pu
 
 // delegateToSubAgent runs a child AgentWorkflow for one sub-agent tool call and returns its text content.
 // RootWorkflowID is propagated so the child workflow's events reach the root's WorkflowStream.
-func (rt *TemporalRuntime) delegateToSubAgent(ctx workflow.Context, input AgentWorkflowInput, tc ToolCallRequest, route SubAgentRoute, emitEvent func(events.AgentEvent) error) (string, error) {
+func (rt *TemporalRuntime) delegateToSubAgent(ctx workflow.Context, input AgentWorkflowInput, tc ToolCallRequest, route SubAgentRoute, emitEvent func(events.AgentEvent) error) (string, *interfaces.LLMUsage, error) {
 	logger := workflow.GetLogger(ctx)
 	if strings.TrimSpace(route.TaskQueue) == "" {
 		logger.Warn("workflow: sub-agent delegation skipped (empty task queue)",
 			"scope", "workflow",
 			"tool", tc.ToolName,
 			"toolCallID", tc.ToolCallID)
-		return "Sub-agent delegation failed: sub-agent task queue is not configured.", nil
+		return "Sub-agent delegation failed: sub-agent task queue is not configured.", nil, nil
 	}
 	maxDepth := input.MaxSubAgentDepth
 	if input.SubAgentDepth >= maxDepth {
@@ -1556,7 +1633,7 @@ func (rt *TemporalRuntime) delegateToSubAgent(ctx workflow.Context, input AgentW
 			"maxDepth", maxDepth,
 			"tool", tc.ToolName,
 			"toolCallID", tc.ToolCallID)
-		return fmt.Sprintf("Sub-agent delegation refused: maximum nesting depth (%d) reached for this agent.", maxDepth), nil
+		return fmt.Sprintf("Sub-agent delegation refused: maximum nesting depth (%d) reached for this agent.", maxDepth), nil, nil
 	}
 
 	query := base.SubAgentQuery(tc.Args)
@@ -1570,7 +1647,7 @@ func (rt *TemporalRuntime) delegateToSubAgent(ctx workflow.Context, input AgentW
 		return uuid.New().String()
 	}).Get(&childSuffix); err != nil {
 		logger.Warn("workflow: sub-agent child run id failed", "scope", "workflow", "error", err)
-		return "", err
+		return "", nil, err
 	}
 
 	// rootWorkflowIDForChild is the stream owner for the child's events.
@@ -1625,7 +1702,7 @@ func (rt *TemporalRuntime) delegateToSubAgent(ctx workflow.Context, input AgentW
 	}
 
 	if emitErr := emitEvent(events.NewAgentStepStartedEvent(delegationName)); emitErr != nil {
-		return "", emitErr
+		return "", nil, emitErr
 	}
 
 	var childResult *types.AgentRunResult
@@ -1635,11 +1712,15 @@ func (rt *TemporalRuntime) delegateToSubAgent(ctx workflow.Context, input AgentW
 			"childWorkflowID", childWfID,
 			"tool", tc.ToolName,
 			"error", err)
-		return "Sub-agent workflow failed: " + err.Error(), nil
+		return "Sub-agent workflow failed: " + err.Error(), nil, nil
 	}
 
 	if emitErr := emitEvent(events.NewAgentStepFinishedEvent(delegationName)); emitErr != nil {
-		return "", emitErr
+		return "", nil, emitErr
+	}
+
+	if childResult == nil {
+		return "", nil, nil
 	}
 
 	logger.Debug("workflow: sub-agent child run completed",
@@ -1648,7 +1729,7 @@ func (rt *TemporalRuntime) delegateToSubAgent(ctx workflow.Context, input AgentW
 		"tool", tc.ToolName,
 		"resultContentLen", len(childResult.Content))
 
-	return childResult.Content, nil
+	return childResult.Content, childResult.LLMUsage, nil
 }
 
 // subAgentChildWorkflowTimeout caps how long the main agent waits on a delegated sub-agent run.
@@ -1718,6 +1799,136 @@ func pendingApprovalActivityIDs(pendingApprovals map[string]*pendingApproval) []
 		ids = append(ids, p.ActivityID)
 	}
 	return ids
+}
+
+// handleBudgetExceeded is called when a budget limit is breached inside AgentWorkflow.
+// For BudgetStopRun it sets the finish reason and returns ErrBudgetExceeded.
+// For BudgetWaitForApproval it executes AgentBudgetApprovalActivity and, if approved,
+// advances the watermark so the next trigger fires only on further growth. When MaxApprovals
+// is exhausted it falls through to BudgetStopRun. When the stream is unavailable it returns
+// ErrBudgetApprovalUnavailable so the caller can distinguish infrastructure failures from denials.
+func (rt *TemporalRuntime) handleBudgetExceeded(
+	wfCtx workflow.Context,
+	input AgentWorkflowInput,
+	tracker *base.BudgetTracker,
+	telemetry *types.AgentTelemetry,
+	detail string,
+	activityIDSuffix string,
+	streamWorkflowID string,
+	emitAgentEvent func(workflow.Context, events.AgentEvent) error,
+) error {
+	cfg := rt.AgentConfig.Limits.Budget
+	action := cfg.OnExceeded
+	if action == "" {
+		action = types.BudgetStopRun
+	}
+
+	approvalsExhausted := action == types.BudgetWaitForApproval && tracker.ApprovalsExhausted()
+
+	workflow.GetLogger(wfCtx).Warn("workflow: per-run budget exceeded",
+		"scope", "workflow",
+		"action", string(action),
+		"approvals_exhausted", approvalsExhausted,
+		"approval_count", tracker.ApprovalCount(),
+		"detail", detail)
+
+	if action == types.BudgetWaitForApproval && !approvalsExhausted {
+		// Unique per pause so a second budget approval in the same workflow does not
+		// collide on Temporal's ActivityID (must be unique for the workflow execution).
+		var pauseID string
+		if err := workflow.SideEffect(wfCtx, func(workflow.Context) interface{} {
+			return uuid.New().String()
+		}).Get(&pauseID); err != nil {
+			telemetry.Run.FinishReason = types.FinishReasonBudgetExceeded
+			return fmt.Errorf("%w: %s", types.ErrBudgetExceeded, detail)
+		}
+		tokens, costUSD := tracker.Totals()
+		approvalActCtx := workflow.WithActivityOptions(wfCtx, workflow.ActivityOptions{
+			ActivityID:          "AgentBudgetApprovalActivity_" + activityIDSuffix + "_" + pauseID,
+			StartToCloseTimeout: rt.AgentConfig.Limits.ApprovalTimeout,
+			RetryPolicy:         retryPolicy(agentToolApprovalActivityMaxAttempts),
+		})
+		var status types.ApprovalStatus
+		if err := workflow.ExecuteActivity(approvalActCtx, rt.AgentBudgetApprovalActivity, AgentBudgetApprovalInput{
+			AgentName:        rt.AgentSpec.Name,
+			Detail:           detail,
+			TotalTokens:      tokens,
+			TotalCostUSD:     costUSD,
+			StreamWorkflowID: streamWorkflowID,
+			AgentFingerprint: input.AgentFingerprint,
+		}).Get(approvalActCtx, &status); err != nil {
+			telemetry.Run.FinishReason = types.FinishReasonBudgetExceeded
+			return fmt.Errorf("%w: %s", types.ErrBudgetExceeded, detail)
+		}
+		switch status {
+		case types.ApprovalStatusApproved:
+			tracker.AdvanceWatermark()
+			return nil
+		case types.ApprovalStatusUnavailable:
+			// Stream had no subscriber when the approval event was published. This is a
+			// transient infrastructure failure, not a budget denial. Return a distinct error
+			// so callers can distinguish it from a genuine ErrBudgetExceeded.
+			workflow.GetLogger(wfCtx).Warn("workflow: budget approval unavailable (no stream subscriber)",
+				"scope", "workflow", "detail", detail)
+			telemetry.Run.FinishReason = types.FinishReasonBudgetExceeded
+			return fmt.Errorf("%w: %s", types.ErrBudgetApprovalUnavailable, detail)
+		case types.ApprovalStatusTimedOut:
+			workflow.GetLogger(wfCtx).Warn("workflow: budget approval timed out",
+				"scope", "workflow", "detail", detail)
+		}
+	} else if approvalsExhausted {
+		workflow.GetLogger(wfCtx).Warn("workflow: budget approval limit exhausted; stopping run",
+			"scope", "workflow",
+			"max_approvals", cfg.MaxApprovals,
+			"approval_count", tracker.ApprovalCount())
+	}
+
+	telemetry.Run.FinishReason = types.FinishReasonBudgetExceeded
+	return fmt.Errorf("%w: %s", types.ErrBudgetExceeded, detail)
+}
+
+// AgentBudgetApprovalActivity blocks until the driver completes it via CompleteActivity.
+// Publishes a CUSTOM (budget_approval) event to the WorkflowStream so the client can display
+// the budget breach and call StreamHandle.Approve with the task token.
+func (rt *TemporalRuntime) AgentBudgetApprovalActivity(ctx context.Context, input AgentBudgetApprovalInput) (types.ApprovalStatus, error) {
+	if err := rt.verifyAgentFingerprint(ctx, input.AgentFingerprint, nil); err != nil {
+		return types.ApprovalStatusNone, err
+	}
+	logger := activity.GetLogger(ctx)
+	logger.Debug("activity: budget approval started", "scope", "activity", "agent", input.AgentName)
+
+	info := activity.GetInfo(ctx)
+	taskTokenB64 := base64.StdEncoding.EncodeToString(info.TaskToken)
+
+	ev := events.NewAgentCustomEvent(string(events.AgentCustomEventNameBudget), events.AgentCustomEventBudgetValue{
+		AgentName:     input.AgentName,
+		Detail:        input.Detail,
+		TotalTokens:   input.TotalTokens,
+		CostUSD:       input.TotalCostUSD,
+		ApprovalToken: taskTokenB64,
+	})
+
+	eventBytes, err := ev.ToJSON()
+	if err != nil {
+		return types.ApprovalStatusNone, fmt.Errorf("activity: marshal budget approval event: %w", err)
+	}
+
+	sc := rt.newActivityStreamClient(ctx, input.StreamWorkflowID)
+	if sc == nil {
+		return types.ApprovalStatusUnavailable, nil
+	}
+	sc.Topic(streamTopicEvents).Publish(json.RawMessage(eventBytes), true)
+	if closeErr := sc.Close(ctx); closeErr != nil {
+		logger.Warn("activity: budget approval event flush failed, returning unavailable",
+			"scope", "activity", "agent", input.AgentName, "error", closeErr)
+		return types.ApprovalStatusUnavailable, nil
+	}
+
+	logger.Debug("activity: budget approval event published, pending driver completion",
+		"scope", "activity", "agent", input.AgentName)
+	// Return ErrResultPending: Temporal parks the activity until CompleteActivity is called
+	// (via StreamHandle.Approve) with the task token.
+	return types.ApprovalStatusPending, activity.ErrResultPending
 }
 
 // retryPolicy builds a Temporal *RetryPolicy with SDK default backoff.

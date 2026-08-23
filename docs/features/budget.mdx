@@ -1,0 +1,216 @@
+---
+title: "Budget"
+description: "Cap token and cost usage on each agent run with WithBudget"
+---
+
+`WithBudget` sets token and cost limits on an agent for each run. When a limit is reached, the SDK either stops the run and returns `ErrBudgetExceeded`, or pauses and waits for human approval to continue. Limits reset when a new run starts.
+
+When an agent delegates to sub-agents, **all sub-agent token and cost usage is included** in the parent run's total. The parent budget governs the entire run tree. **A `WithBudget` configured directly on a sub-agent is silently ignored** when that sub-agent is invoked from a parent — a warning is logged at runtime to flag this.
+
+## Configuration
+
+```go
+a, err := agent.NewAgent(
+    agent.WithLLMClient(llmClient),
+    agent.WithBudget(agent.BudgetConfig{
+        MaxTokens:          100_000,          // stop at 100k total tokens
+        MaxCostUSD:         2.00,             // or $2 USD, whichever comes first
+        PromptUSDPer1M:     3.00,             // required when MaxCostUSD is set
+        CompletionUSDPer1M: 15.00,            // required when MaxCostUSD is set
+        OnExceeded:         agent.BudgetStopRun,
+    }),
+)
+```
+
+### BudgetConfig fields
+
+| Field | Required | Description |
+|---|---|---|
+| `MaxTokens` | At least one of MaxTokens or MaxCostUSD | Maximum total tokens (prompt + completion) for a single run. Must be ≥ 0; zero means no token limit. |
+| `MaxCostUSD` | At least one of MaxTokens or MaxCostUSD | Maximum estimated cost in US dollars for a single run. Must be ≥ 0; zero means no cost limit. |
+| `PromptUSDPer1M` | When `MaxCostUSD > 0` | Cost per one million prompt tokens (e.g. `3.0` for $3/1M). Must be ≥ 0. |
+| `CompletionUSDPer1M` | When `MaxCostUSD > 0` | Cost per one million completion tokens (e.g. `15.0` for $15/1M). Must be ≥ 0. |
+| `OnExceeded` | No (defaults to `BudgetStopRun`) | Action to take when a limit is reached. |
+| `ApprovalExtraTokens` | No | Tokens allowed between pauses when `OnExceeded` is `BudgetWaitForApproval`. Zero defaults to `MaxTokens`. **Only valid with `BudgetWaitForApproval`** — setting this with `BudgetStopRun` returns a validation error. |
+| `ApprovalExtraCostUSD` | No | Cost allowed between pauses for `BudgetWaitForApproval`. Zero defaults to `MaxCostUSD`. **Only valid with `BudgetWaitForApproval`**. |
+| `MaxApprovals` | No | Maximum number of `BudgetWaitForApproval` pauses allowed per run. Once reached the next breach stops the run with `ErrBudgetExceeded`. Zero defaults to `5`. **Only valid with `BudgetWaitForApproval`**. |
+
+### Limit precedence
+
+When both `MaxTokens` and `MaxCostUSD` are set, the **token limit is checked first** on every LLM call. If tokens are exceeded, a token breach error is returned even if the cost limit is also exceeded. Set only one limit if you need to distinguish which triggered.
+
+### OnExceeded actions
+
+| Value | Description |
+|---|---|
+| `BudgetStopRun` | Stop the run immediately and return `ErrBudgetExceeded` to the caller. |
+| `BudgetWaitForApproval` | Pause the run and wait for the caller to approve or deny continuation. For `Run`: `WithApprovalHandler` must be provided at call time (not at `NewAgent`). For `Stream`: emits a `CUSTOM` budget approval event (`AgentCustomEventNameBudget`); no handler needed. |
+
+## BudgetStopRun
+
+When the limit is reached, `agentRun.Get` (or `agentStream.Events`) returns `ErrBudgetExceeded`. Check with `errors.Is`:
+
+```go
+a, err := agent.NewAgent(
+    agent.WithLLMClient(llmClient),
+    agent.WithBudget(agent.BudgetConfig{
+        MaxTokens:  100_000,
+        OnExceeded: agent.BudgetStopRun,
+    }),
+)
+
+agentRun, err := a.Run(ctx, prompt, nil)
+if err != nil {
+    log.Fatal(err)
+}
+result, err := agentRun.Get(ctx)
+if errors.Is(err, agent.ErrBudgetExceeded) {
+    log.Println("run stopped: token limit reached")
+    // result is non-nil: result.Content may contain a partial response from the last
+    // completed LLM call before the limit was hit. result.Telemetry is always populated.
+    return
+}
+```
+
+`result.Telemetry.Run.FinishReason` is set to `"budget_exceeded"` when the run is stopped by the budget. `result` is always non-nil on budget stop; `result.Content` holds any partial response from the last completed LLM call.
+
+## BudgetWaitForApproval
+
+When the limit is reached, the run pauses and delivers an `ApprovalRequest` with name `ApprovalRequestNameBudget`. Decode with `ParseBudgetApproval` for `TotalTokens` / `CostUSD` / `ApprovalToken`.
+
+Call `req.Respond(agent.ApprovalStatusApproved)` to continue, or `req.Respond(agent.ApprovalStatusRejected)` to stop with `ErrBudgetExceeded`.
+
+Approving does not reset run totals. The next pause fires when usage grows by another `ApprovalExtraTokens` / `ApprovalExtraCostUSD` measured from the totals at the time of approval. After `MaxApprovals` approvals (default 5) the next breach stops the run.
+
+If the approval cannot be delivered because no stream subscriber is connected, the run stops with `ErrBudgetApprovalUnavailable` (a separate sentinel from `ErrBudgetExceeded`). Check with `errors.Is(err, agent.ErrBudgetApprovalUnavailable)` and retry.
+
+### Run
+
+`WithApprovalHandler` must be provided at the `Run()` call site. It is **not** required at `NewAgent`, so stream-only agents are not forced to register a no-op handler:
+
+
+```go
+approvalHandler := func(ctx context.Context, req *agent.ApprovalRequest) {
+    v, err := agent.ParseBudgetApproval(req)
+    if err != nil {
+        // ... handle tool approvals
+        return
+    }
+    log.Printf("budget reached: tokens=%d cost=$%.4f — approving",
+        v.TotalTokens, v.CostUSD)
+    _ = req.Respond(agent.ApprovalStatusApproved)
+}
+
+a, err := agent.NewAgent(
+    agent.WithLLMClient(llmClient),
+    agent.WithApprovalHandler(approvalHandler),
+    agent.WithBudget(agent.BudgetConfig{
+        MaxTokens:          100_000,
+        PromptUSDPer1M:     3.00,
+        CompletionUSDPer1M: 15.00,
+        MaxCostUSD:         2.00,
+        OnExceeded:         agent.BudgetWaitForApproval,
+    }),
+)
+```
+
+### Stream
+
+When the limit is reached during a stream run, a `CUSTOM` event with name `AgentCustomEventNameBudget` is emitted. Parse with `ParseCustomEventBudget`, then call `AgentStream.Approve`:
+
+```go
+agentStream, err := a.Stream(ctx, prompt, nil)
+// ...
+for ev := range eventCh {
+    ce, ok := ev.(*agent.AgentCustomEvent)
+    if !ok {
+        continue
+    }
+    v, err := agent.ParseCustomEventBudget(ce)
+    if err != nil {
+        continue
+    }
+    log.Printf("budget approval requested (token=%s) — approving", v.ApprovalToken)
+    if err := agentStream.Approve(ctx, v.ApprovalToken, agent.ApprovalStatusApproved); err != nil {
+        log.Printf("approve error: %v", err)
+    }
+}
+```
+
+## Cost calculation
+
+`MaxCostUSD` is estimated from accumulated token counts using the rates you supply:
+
+```
+cost = (prompt_tokens / 1_000_000 × PromptUSDPer1M) + (completion_tokens / 1_000_000 × CompletionUSDPer1M)
+```
+
+The SDK does **not** include built-in provider price tables. Set the rates to match the model you are using. If a provider does not report token counts, `MaxCostUSD` will not trigger (use `MaxTokens` instead).
+
+## Validation
+
+`NewAgent` returns an error if `WithBudget` is misconfigured:
+
+- Neither `MaxTokens` nor `MaxCostUSD` is non-zero.
+- `MaxCostUSD > 0` but `PromptUSDPer1M` or `CompletionUSDPer1M` is zero.
+- `OnExceeded` is `BudgetWaitForApproval` but no `WithApprovalHandler` is set.
+- `OnExceeded` is an unrecognised value.
+
+## Example
+
+<CardGroup cols={2}>
+  <Card title="Budget Config" icon="gauge" href="/examples/agent-with-budget" horizontal>
+    Stop run and wait-for-approval scenarios
+  </Card>
+</CardGroup>
+
+## Observability
+
+### Metrics
+
+Budget events emit the following counters (see `MetricBudget*` constants in the SDK):
+
+| Metric | When |
+|---|---|
+| `agent.budget.exceeded` | Every breach, before action is taken. Attributes: `budget.kind` (`tokens`/`cost_usd`), `budget.action` |
+| `agent.budget.approval.requested` | Each `BudgetWaitForApproval` pause is initiated |
+| `agent.budget.approval.approved` | Caller approved continuation |
+| `agent.budget.approval.rejected` | Caller denied continuation |
+| `agent.budget.approval.timed_out` | Approval request timed out |
+| `agent.budget.approval.unavailable` | No stream subscriber to receive the approval event |
+| `agent.budget.approval.exhausted` | `MaxApprovals` reached; run stops |
+
+### OnBudgetExceeded hook
+
+Register an `OnBudgetExceeded` hook for custom alerting, audit logging, or metrics:
+
+```go
+agent.WithHooks(agent.HookGroup{
+    Name: "budget-alerts",
+    Hooks: agent.AgentHooks{
+        OnBudgetExceeded: []agent.OnBudgetExceededHook{
+            func(ctx context.Context, in agent.OnBudgetExceededHookInput) {
+                log.Printf("budget breach: kind=%s tokens=%d cost=$%.4f action=%s approvals=%d/%t",
+                    in.Kind, in.TotalTokens, in.TotalCostUSD,
+                    in.Action, in.ApprovalCount, in.ApprovalsExhausted)
+            },
+        },
+    },
+})
+```
+
+The hook fires before the action (stop or pause) is taken and is fire-and-forget.
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Token Usage" icon="chart-bar" href="/features/token-usage" horizontal>
+    Aggregate token counts per run
+  </Card>
+  <Card title="Approvals" icon="hand" href="/features/approvals" horizontal>
+    Same Run handler and Stream Approve path for BudgetWaitForApproval
+  </Card>
+  <Card title="Hooks" icon="webhook" href="/features/hooks" horizontal>
+    OnBudgetExceeded and per-LLM-call hooks for cost observability
+  </Card>
+</CardGroup>

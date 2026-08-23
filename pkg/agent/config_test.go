@@ -11,6 +11,7 @@ import (
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
+	"github.com/agenticenv/agent-sdk-go/internal/events"
 	"github.com/agenticenv/agent-sdk-go/internal/runtime"
 	"github.com/agenticenv/agent-sdk-go/internal/runtime/temporal"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
@@ -46,6 +47,7 @@ func agentConfigFingerprintTools(c *agentConfig, tools []interfaces.Tool) string
 			MaxIterations:   c.maxIterations,
 			Timeout:         c.timeout,
 			ApprovalTimeout: c.approvalTimeout,
+			Budget:          c.budgetConfig,
 		},
 		mcpConfigFingerprint(c.mcpServers, mcpExtraClientNames(c.mcpClients)),
 		a2aConfigFingerprint(c.a2aServers, a2aExtraClientNames(c.a2aClients)),
@@ -2170,5 +2172,238 @@ func TestBuildAgentConfig_WithExplicitRegistryOptions(t *testing.T) {
 	}
 	if len(tools) < 2 {
 		t.Fatalf("resolveTools len = %d, want at least native + sub-agent tools", len(tools))
+	}
+}
+
+func TestWithBudget_Validation(t *testing.T) {
+	approvalHandler := func(context.Context, *types.ApprovalRequest) {}
+	cases := []struct {
+		name    string
+		opts    []Option
+		wantErr string
+	}{
+		{
+			name: "valid MaxTokens only",
+			opts: []Option{
+				WithName("budget-agent"), WithLLMClient(testLLM(t)),
+				WithBudget(BudgetConfig{MaxTokens: 500, OnExceeded: BudgetStopRun}),
+			},
+		},
+		{
+			name: "valid MaxCostUSD with rates",
+			opts: []Option{
+				WithName("budget-agent"), WithLLMClient(testLLM(t)),
+				WithBudget(BudgetConfig{
+					MaxCostUSD:         1.0,
+					PromptUSDPer1M:     3.0,
+					CompletionUSDPer1M: 15.0,
+					OnExceeded:         BudgetStopRun,
+				}),
+			},
+		},
+		{
+			name: "valid WaitForApproval with handler",
+			opts: []Option{
+				WithName("budget-agent"), WithLLMClient(testLLM(t)),
+				WithApprovalHandler(approvalHandler),
+				WithBudget(BudgetConfig{MaxTokens: 500, OnExceeded: BudgetWaitForApproval}),
+			},
+		},
+		{
+			name: "no limits set",
+			opts: []Option{
+				WithName("budget-agent"), WithLLMClient(testLLM(t)),
+				WithBudget(BudgetConfig{OnExceeded: BudgetStopRun}),
+			},
+			wantErr: "at least one of MaxTokens or MaxCostUSD",
+		},
+		{
+			name: "MaxCostUSD without rates",
+			opts: []Option{
+				WithName("budget-agent"), WithLLMClient(testLLM(t)),
+				WithBudget(BudgetConfig{MaxCostUSD: 1.0}),
+			},
+			wantErr: "PromptUSDPer1M and CompletionUSDPer1M",
+		},
+		{
+			// ApprovalHandler is no longer required at NewAgent for BudgetWaitForApproval;
+			// it is validated at Run() call time so stream-only callers need no handler.
+			name: "WaitForApproval without handler is valid at NewAgent",
+			opts: []Option{
+				WithName("budget-agent"), WithLLMClient(testLLM(t)),
+				WithBudget(BudgetConfig{MaxTokens: 500, OnExceeded: BudgetWaitForApproval}),
+			},
+			wantErr: "", // no error expected — handler check deferred to Run()
+		},
+		{
+			name: "unknown action",
+			opts: []Option{
+				WithName("budget-agent"), WithLLMClient(testLLM(t)),
+				WithBudget(BudgetConfig{MaxTokens: 500, OnExceeded: BudgetExceededAction("explode")}),
+			},
+			wantErr: "unknown OnExceeded action",
+		},
+		{
+			name: "negative ApprovalExtraTokens",
+			opts: []Option{
+				WithName("budget-agent"), WithLLMClient(testLLM(t)),
+				WithBudget(BudgetConfig{MaxTokens: 500, ApprovalExtraTokens: -1}),
+			},
+			wantErr: "ApprovalExtraTokens must be >= 0",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := buildAgentConfig(tc.opts)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("expected no error, got: %v", err)
+				}
+			} else {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tc.wantErr)
+				}
+				if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("expected error %q to contain %q", err.Error(), tc.wantErr)
+				}
+			}
+		})
+	}
+}
+
+func TestWithBudget_DefaultsApprovalExtraFromMax(t *testing.T) {
+	approvalHandler := func(context.Context, *types.ApprovalRequest) {}
+	cfg, err := buildAgentConfig([]Option{
+		WithName("budget-agent"),
+		WithLLMClient(testLLM(t)),
+		WithApprovalHandler(approvalHandler),
+		WithBudget(BudgetConfig{
+			MaxTokens:          500,
+			MaxCostUSD:         1.0,
+			PromptUSDPer1M:     3.0,
+			CompletionUSDPer1M: 15.0,
+			OnExceeded:         BudgetWaitForApproval,
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.budgetConfig.ApprovalExtraTokens != 500 {
+		t.Fatalf("ApprovalExtraTokens: got %d want 500", cfg.budgetConfig.ApprovalExtraTokens)
+	}
+	if cfg.budgetConfig.ApprovalExtraCostUSD != 1.0 {
+		t.Fatalf("ApprovalExtraCostUSD: got %v want 1.0", cfg.budgetConfig.ApprovalExtraCostUSD)
+	}
+}
+
+func TestWithBudget_PreservesExplicitApprovalExtra(t *testing.T) {
+	approvalHandler := func(context.Context, *types.ApprovalRequest) {}
+	cfg, err := buildAgentConfig([]Option{
+		WithName("budget-agent"),
+		WithLLMClient(testLLM(t)),
+		WithApprovalHandler(approvalHandler),
+		WithBudget(BudgetConfig{
+			MaxTokens:           500,
+			ApprovalExtraTokens: 100,
+			OnExceeded:          BudgetWaitForApproval,
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.budgetConfig.ApprovalExtraTokens != 100 {
+		t.Fatalf("ApprovalExtraTokens: got %d want 100", cfg.budgetConfig.ApprovalExtraTokens)
+	}
+}
+
+func TestWithBudget_StopRunRejectsApprovalExtra(t *testing.T) {
+	// Setting ApprovalExtraTokens with BudgetStopRun is now an explicit validation error
+	// rather than silent clearing, so callers are not surprised.
+	_, err := buildAgentConfig([]Option{
+		WithName("budget-agent"),
+		WithLLMClient(testLLM(t)),
+		WithBudget(BudgetConfig{
+			MaxTokens:           500,
+			ApprovalExtraTokens: 100,
+			OnExceeded:          BudgetStopRun,
+		}),
+	})
+	if err == nil {
+		t.Fatal("expected validation error for ApprovalExtraTokens with BudgetStopRun, got nil")
+	}
+	if !strings.Contains(err.Error(), "BudgetWaitForApproval") {
+		t.Fatalf("expected error to mention BudgetWaitForApproval, got: %v", err)
+	}
+}
+
+func TestWithBudget_FingerprintIncludesBudget(t *testing.T) {
+	baseOpts := []Option{
+		WithName("fp-agent"), WithLLMClient(testLLM(t)),
+	}
+	cfg0, err := buildAgentConfig(baseOpts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp0 := agentConfigFingerprint(cfg0)
+
+	cfg1, err := buildAgentConfig(append(baseOpts, WithBudget(BudgetConfig{
+		MaxTokens:  1000,
+		OnExceeded: BudgetStopRun,
+	})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp1 := agentConfigFingerprint(cfg1)
+
+	if fp0 == fp1 {
+		t.Fatal("fingerprint should differ when budget is added")
+	}
+}
+
+func TestWithBudget_DefaultsOnExceededToStopRun(t *testing.T) {
+	cfg, err := buildAgentConfig([]Option{
+		WithName("budget-agent"),
+		WithLLMClient(testLLM(t)),
+		WithBudget(BudgetConfig{MaxTokens: 500}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.budgetConfig.OnExceeded != BudgetStopRun {
+		t.Fatalf("expected OnExceeded to default to BudgetStopRun, got %q", cfg.budgetConfig.OnExceeded)
+	}
+}
+
+func TestParseBudgetApproval_PublicAPI(t *testing.T) {
+	req := &ApprovalRequest{
+		Name: ApprovalRequestNameBudget,
+		Value: map[string]any{
+			"agentName":     "pub",
+			"totalTokens":   float64(99),
+			"approvalToken": "tok",
+		},
+	}
+	got, err := ParseBudgetApproval(req)
+	if err != nil {
+		t.Fatalf("ParseBudgetApproval: %v", err)
+	}
+	if got.AgentName != "pub" || got.TotalTokens != 99 {
+		t.Fatalf("unexpected: %#v", got)
+	}
+}
+
+func TestParseCustomEventBudget_PublicAPI(t *testing.T) {
+	ev := events.NewAgentCustomEvent(string(AgentCustomEventNameBudget), map[string]any{
+		"agentName":     "pub",
+		"totalTokens":   float64(42),
+		"costUsd":       0.002,
+		"approvalToken": "tok-ce",
+	})
+	got, err := ParseCustomEventBudget(ev)
+	if err != nil {
+		t.Fatalf("ParseCustomEventBudget: %v", err)
+	}
+	if got.AgentName != "pub" || got.TotalTokens != 42 || got.ApprovalToken != "tok-ce" {
+		t.Fatalf("unexpected: %#v", got)
 	}
 }

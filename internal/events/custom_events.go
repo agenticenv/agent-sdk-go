@@ -48,6 +48,7 @@ type AgentCustomEventName string
 const (
 	AgentCustomEventNameToolApproval       AgentCustomEventName = "tool_approval"
 	AgentCustomEventNameSubAgentDelegation AgentCustomEventName = "sub_agent_delegation"
+	AgentCustomEventNameBudget             AgentCustomEventName = "budget_approval"
 )
 
 // AgentCustomEventApprovalValue is the JSON shape for CUSTOM name=approval (tool or delegation; use Kind).
@@ -87,6 +88,17 @@ func NewAgentCustomEventDelegationValue(subAgentName, approvalToken string) *Age
 
 func (v *AgentCustomEventDelegationValue) ToJSON() ([]byte, error) { return json.Marshal(v) }
 
+// AgentCustomEventBudgetValue is the JSON shape for CUSTOM name=budget_approval.
+type AgentCustomEventBudgetValue struct {
+	AgentName     string  `json:"agentName,omitempty"`
+	Detail        string  `json:"detail,omitempty"`
+	TotalTokens   int64   `json:"totalTokens,omitempty"`
+	CostUSD       float64 `json:"costUsd,omitempty"`
+	ApprovalToken string  `json:"approvalToken,omitempty"`
+}
+
+func (v *AgentCustomEventBudgetValue) ToJSON() ([]byte, error) { return json.Marshal(v) }
+
 func parseCustomPayload[V any](ev *AgentCustomEvent) (v V, err error) {
 	if ev == nil {
 		return v, fmt.Errorf("events: nil custom event")
@@ -111,13 +123,36 @@ func parseCustomPayload[V any](ev *AgentCustomEvent) (v V, err error) {
 	}
 }
 
-// ParseCustomEventApproval returns the typed value field for CUSTOM events with name "approval"
+// ParseCustomEventApproval returns the typed value field for CUSTOM events with name "tool_approval"
 // (after EventFromJSON or bus decode, Value is often map[string]any).
 func ParseCustomEventApproval(ev *AgentCustomEvent) (AgentCustomEventApprovalValue, error) {
+	if ev == nil {
+		return AgentCustomEventApprovalValue{}, fmt.Errorf("events: nil custom event")
+	}
+	if ev.Name != string(AgentCustomEventNameToolApproval) {
+		return AgentCustomEventApprovalValue{}, fmt.Errorf("events: not a tool approval custom event")
+	}
 	return parseCustomPayload[AgentCustomEventApprovalValue](ev)
 }
 
-// ParseCustomEventDelegation returns the typed value field for CUSTOM events with name "delegation".
+// ParseCustomEventDelegation returns the typed value field for CUSTOM events with name "sub_agent_delegation".
 func ParseCustomEventDelegation(ev *AgentCustomEvent) (AgentCustomEventDelegationValue, error) {
+	if ev == nil {
+		return AgentCustomEventDelegationValue{}, fmt.Errorf("events: nil custom event")
+	}
+	if ev.Name != string(AgentCustomEventNameSubAgentDelegation) {
+		return AgentCustomEventDelegationValue{}, fmt.Errorf("events: not a sub-agent delegation custom event")
+	}
 	return parseCustomPayload[AgentCustomEventDelegationValue](ev)
+}
+
+// ParseCustomEventBudget returns the typed value field for CUSTOM events with name "budget_approval".
+func ParseCustomEventBudget(ev *AgentCustomEvent) (AgentCustomEventBudgetValue, error) {
+	if ev == nil {
+		return AgentCustomEventBudgetValue{}, fmt.Errorf("events: nil custom event")
+	}
+	if ev.Name != string(AgentCustomEventNameBudget) {
+		return AgentCustomEventBudgetValue{}, fmt.Errorf("events: not a budget approval custom event")
+	}
+	return parseCustomPayload[AgentCustomEventBudgetValue](ev)
 }

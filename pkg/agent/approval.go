@@ -41,10 +41,11 @@ type ApprovalRequestName = types.ApprovalRequestName
 const (
 	ApprovalRequestNameTool     = types.ApprovalRequestNameTool
 	ApprovalRequestNameSubAgent = types.ApprovalRequestNameSubAgent
+	ApprovalRequestNameBudget   = types.ApprovalRequestNameBudget
 )
 
-// ApprovalRequest describes a pending tool approval for [Agent.Run].
-// Name + Value mirror CUSTOM stream events; use [ParseToolApproval] / [ParseDelegationApproval].
+// ApprovalRequest describes a pending approval for [Agent.Run].
+// Name + Value mirror CUSTOM stream events; use [ParseToolApproval] / [ParseDelegationApproval] / [ParseBudgetApproval].
 // Respond is always set; call it once with ApprovalStatusApproved or ApprovalStatusRejected.
 // For streaming approvals, use [AgentStream.Approve] with the approval token from the CUSTOM event Value.
 type ApprovalRequest = types.ApprovalRequest
@@ -55,6 +56,9 @@ type ToolApprovalRequestValue = types.ToolApprovalRequestValue
 // SubAgentDelegationApprovalRequestValue is the decoded Value for delegation approvals.
 type SubAgentDelegationApprovalRequestValue = types.SubAgentDelegationApprovalRequestValue
 
+// BudgetApprovalRequestValue is the decoded Value for budget approvals.
+type BudgetApprovalRequestValue = types.BudgetApprovalRequestValue
+
 // ParseToolApproval decodes Value when Name is [ApprovalRequestNameTool] (handles map[string]any from JSON).
 func ParseToolApproval(req *ApprovalRequest) (ToolApprovalRequestValue, error) {
 	return types.ParseToolApproval(req)
@@ -63,6 +67,11 @@ func ParseToolApproval(req *ApprovalRequest) (ToolApprovalRequestValue, error) {
 // ParseDelegationApproval decodes Value when Name is [ApprovalRequestNameSubAgent].
 func ParseDelegationApproval(req *ApprovalRequest) (SubAgentDelegationApprovalRequestValue, error) {
 	return types.ParseDelegationApproval(req)
+}
+
+// ParseBudgetApproval decodes Value when Name is [ApprovalRequestNameBudget].
+func ParseBudgetApproval(req *ApprovalRequest) (BudgetApprovalRequestValue, error) {
+	return types.ParseBudgetApproval(req)
 }
 
 // OnApproval completes a pending tool or delegation approval when using [Agent.Stream].
