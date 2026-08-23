@@ -96,6 +96,17 @@ const (
 	MetricMemoryExtractFailed    = "agent.memory.extract.failed"
 	MetricMemoryExtractLatencyMs = "agent.memory.extract.latency_ms"
 
+	// Runtime — budget enforcement events, emitted when a limit is breached.
+	// agent.budget.exceeded fires on every breach (before stop or approval).
+	// agent.budget.approval.* fire only when OnExceeded is BudgetWaitForApproval.
+	MetricBudgetExceeded            = "agent.budget.exceeded"
+	MetricBudgetApprovalRequested   = "agent.budget.approval.requested"
+	MetricBudgetApprovalApproved    = "agent.budget.approval.approved"
+	MetricBudgetApprovalRejected    = "agent.budget.approval.rejected"
+	MetricBudgetApprovalTimedOut    = "agent.budget.approval.timed_out"
+	MetricBudgetApprovalUnavailable = "agent.budget.approval.unavailable"
+	MetricBudgetApprovalExhausted   = "agent.budget.approval.exhausted"
+
 	// Attribute keys used on both metrics and spans.
 	MetricAttrModel      = "model"
 	MetricAttrProvider   = "provider"
@@ -103,5 +114,7 @@ const (
 	MetricAttrRetriever  = "retriever"
 	MetricAttrMemoryKind = "memory.kind"
 	// MetricAttrMemoryDedup is "upsert" when an existing record is updated, else "append".
-	MetricAttrMemoryDedup = "memory.dedup"
+	MetricAttrMemoryDedup  = "memory.dedup"
+	MetricAttrBudgetKind   = "budget.kind"   // "tokens" or "cost_usd"
+	MetricAttrBudgetAction = "budget.action" // "stop_run" or "wait_for_approval"
 )

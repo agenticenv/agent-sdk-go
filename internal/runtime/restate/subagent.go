@@ -8,6 +8,7 @@ import (
 	"github.com/agenticenv/agent-sdk-go/internal/events"
 	sdkruntime "github.com/agenticenv/agent-sdk-go/internal/runtime"
 	"github.com/agenticenv/agent-sdk-go/internal/runtime/base"
+	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/google/uuid"
 	restatesdk "github.com/restatedev/sdk-go"
 )
@@ -64,17 +65,17 @@ func (rt *RestateRuntime) delegateToSubAgent(
 	tc base.ToolCallRequest,
 	route SubAgentRoute,
 	emit func(events.AgentEvent),
-) (string, error) {
+) (string, *interfaces.LLMUsage, error) {
 	childName := strings.TrimSpace(route.Name)
 	if childName == "" {
 		childName = tc.ToolName
 	}
 	serviceName := strings.TrimSpace(route.ServiceName)
 	if serviceName == "" {
-		return "Sub-agent delegation failed: sub-agent AgentLoop service is not configured.", nil
+		return "Sub-agent delegation failed: sub-agent AgentLoop service is not configured.", nil, nil
 	}
 	if input.SubAgentDepth >= input.MaxSubAgentDepth {
-		return fmt.Sprintf("Sub-agent delegation refused: maximum nesting depth (%d) reached.", input.MaxSubAgentDepth), nil
+		return fmt.Sprintf("Sub-agent delegation refused: maximum nesting depth (%d) reached.", input.MaxSubAgentDepth), nil, nil
 	}
 
 	query := base.SubAgentQuery(tc.Args)
@@ -85,7 +86,6 @@ func (rt *RestateRuntime) delegateToSubAgent(
 	if eventTopic == "" {
 		eventTopic = input.RunID
 	}
-	// Root of this stream: use own event log. Nested: keep the root's EventLogService.
 	eventLogService := strings.TrimSpace(input.EventLogService)
 	if eventLogService == "" {
 		eventLogService = strings.TrimSpace(rt.eventLogServiceName)
@@ -109,7 +109,7 @@ func (rt *RestateRuntime) delegateToSubAgent(
 			sdkruntime.ExecutionPolicy{MaxAttempts: 1},
 			func(restatesdk.RunContext) (string, error) { return uuid.New().String(), nil })
 		if idErr != nil {
-			return "", idErr
+			return "", nil, idErr
 		}
 
 		childReq := AgentLoopRequest{
@@ -132,9 +132,9 @@ func (rt *RestateRuntime) delegateToSubAgent(
 		resp, err := rt.invokeSubAgentHandler(ctx, serviceName, handler, childReq, policy.Timeout)
 		if err == nil {
 			if resp == nil || resp.Result == nil {
-				return "", nil
+				return "", nil, nil
 			}
-			return resp.Result.Content, nil
+			return resp.Result.Content, resp.Result.LLMUsage, nil
 		}
 		lastErr = err
 		if attempt >= attempts {
@@ -142,7 +142,7 @@ func (rt *RestateRuntime) delegateToSubAgent(
 		}
 		if backoff > 0 {
 			if sleepErr := restatesdk.Sleep(ctx, backoff); sleepErr != nil {
-				return "Sub-agent execution failed: " + sleepErr.Error(), nil
+				return "Sub-agent execution failed: " + sleepErr.Error(), nil, nil
 			}
 			next := time.Duration(float64(backoff) * policy.Retry.BackoffCoefficient)
 			if policy.Retry.MaximumInterval > 0 && next > policy.Retry.MaximumInterval {
@@ -153,9 +153,9 @@ func (rt *RestateRuntime) delegateToSubAgent(
 		}
 	}
 	if lastErr == nil {
-		return "", nil
+		return "", nil, nil
 	}
-	return "Sub-agent execution failed: " + lastErr.Error(), nil
+	return "Sub-agent execution failed: " + lastErr.Error(), nil, nil
 }
 
 // invokeSubAgentHandler calls the child's AgentLoop service synchronously, optionally

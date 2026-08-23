@@ -86,7 +86,8 @@ Restate embeds the SDK endpoint in `NewAgent`. When Restate runs in Docker and t
 | `WithMaxIterations(n)` | Max LLM rounds per run (default: **5**). Each round is one LLM call; tool execution doesn't count separately. Increase for complex agents, multi-tool sequences, or runs with sub-agent delegation. See [Timeouts & Modes](/advanced/timeouts-and-modes) |
 | `WithTimeout(d)` | Default run timeout when the context has no deadline |
 | `WithApprovalTimeout(d)` | Max wait per approval — defaults to timeout minus 30s |
-| `WithApprovalHandler(fn)` | Callback for tool and delegation approvals on `Run` |
+| `WithApprovalHandler(fn)` | Callback for tool, delegation, and budget approvals on `Run` |
+| `WithBudget(cfg)` | Token and cost cap for each run. See [Budget](/features/budget) |
 | `WithAgentToolExecutionMode(mode)` | `Parallel` (default) or `Sequential` per LLM turn |
 
 Context deadlines always take precedence over `WithTimeout`. See [Timeouts & Modes](/advanced/timeouts-and-modes).
@@ -164,3 +165,5 @@ When splitting client and worker across processes, `NewAgent` and `NewAgentWorke
 ## Token usage
 
 There is no separate token usage option. Read [`LLMUsage`](/features/token-usage) from `AgentRunResult` after `Run`, or from `AgentRunFinishedEvent.Result.LLMUsage` after `Stream`.
+
+To **cap** tokens or estimated cost for each run, use [`WithBudget`](/features/budget).

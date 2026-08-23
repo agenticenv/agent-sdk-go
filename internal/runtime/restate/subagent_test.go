@@ -115,7 +115,7 @@ func TestValidateAgentName(t *testing.T) {
 func TestDelegateToSubAgent_MaxDepth(t *testing.T) {
 	rt := testRestateRuntime("root")
 	ctx := mocks.NewMockContext(t)
-	content, err := rt.delegateToSubAgent(restatesdk.WithMockContext(ctx), AgentLoopInput{
+	content, _, err := rt.delegateToSubAgent(restatesdk.WithMockContext(ctx), AgentLoopInput{
 		agentLoopCore: agentLoopCore{SubAgentDepth: 2, MaxSubAgentDepth: 2, RunID: "r"},
 	}, base.ToolCallRequest{ToolName: "child", ToolDisplayName: "Child"},
 		SubAgentRoute{Name: "Child", ServiceName: "AgentLoop_Child"}, func(events.AgentEvent) {})
@@ -126,7 +126,7 @@ func TestDelegateToSubAgent_MaxDepth(t *testing.T) {
 func TestDelegateToSubAgent_EmptyServiceName(t *testing.T) {
 	rt := testRestateRuntime("root")
 	ctx := mocks.NewMockContext(t)
-	content, err := rt.delegateToSubAgent(restatesdk.WithMockContext(ctx), AgentLoopInput{
+	content, _, err := rt.delegateToSubAgent(restatesdk.WithMockContext(ctx), AgentLoopInput{
 		agentLoopCore: agentLoopCore{MaxSubAgentDepth: 2, RunID: "r"},
 	}, base.ToolCallRequest{ToolName: "child", ToolDisplayName: "Child"},
 		SubAgentRoute{Name: "Child"}, func(events.AgentEvent) {})

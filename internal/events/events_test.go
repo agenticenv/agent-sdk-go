@@ -379,6 +379,20 @@ func TestCustomEventTypedValueHelpers(t *testing.T) {
 	if parsedDelegation.SubAgentName != "child" || parsedDelegation.ApprovalToken != "tok-2" {
 		t.Fatalf("unexpected parsed delegation: %#v", parsedDelegation)
 	}
+
+	ev3 := NewAgentCustomEvent(string(AgentCustomEventNameBudget), map[string]any{
+		"agentName":     "budget-agent",
+		"totalTokens":   int64(120),
+		"costUsd":       0.01,
+		"approvalToken": "tok-3",
+	})
+	parsedBudget, err := ParseCustomEventBudget(ev3)
+	if err != nil {
+		t.Fatalf("ParseCustomEventBudget error: %v", err)
+	}
+	if parsedBudget.AgentName != "budget-agent" || parsedBudget.TotalTokens != 120 || parsedBudget.ApprovalToken != "tok-3" {
+		t.Fatalf("unexpected parsed budget: %#v", parsedBudget)
+	}
 }
 
 func TestCustomEventParseErrors(t *testing.T) {

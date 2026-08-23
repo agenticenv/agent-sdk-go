@@ -177,13 +177,13 @@ Stream events are typed [`AgentEvent`](https://pkg.go.dev/github.com/agenticenv/
 |---|---|
 | `AgentEventTypeReasoningMessageContent` | Partial reasoning/thinking delta (Anthropic when extended thinking is enabled) |
 
-### Custom (approvals and delegation)
+### Custom (approvals, delegation, and budget)
 
 | Event | When |
 |---|---|
-| `AgentEventTypeCustom` | Approval or delegation requests during `Stream` |
+| `AgentEventTypeCustom` | Tool approval, sub-agent delegation, or `budget_approval` during `Stream` |
 
-Parse approval events with `ParseCustomEventApproval` / `ParseCustomEventDelegation`, then call [`AgentStream.Approve`](/features/approvals) with the `ApprovalToken`. See [Approvals](/features/approvals) for the full flow.
+Parse approval events with `ParseCustomEventApproval` / `ParseCustomEventDelegation` / `ParseCustomEventBudget`, then call [`AgentStream.Approve`](/features/approvals) with the `ApprovalToken`. See [Approvals](/features/approvals) and [Budget](/features/budget).
 
 ## Displaying streamed text
 

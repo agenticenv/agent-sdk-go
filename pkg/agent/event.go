@@ -109,6 +109,8 @@ const (
 	AgentCustomEventNameToolApproval AgentCustomEventName = events.AgentCustomEventNameToolApproval
 	// AgentCustomEventNameSubAgentDelegation is approval to run a registered sub-agent (delegate).
 	AgentCustomEventNameSubAgentDelegation AgentCustomEventName = events.AgentCustomEventNameSubAgentDelegation
+	// AgentCustomEventNameBudget is a per-run budget limit pause.
+	AgentCustomEventNameBudget AgentCustomEventName = events.AgentCustomEventNameBudget
 )
 
 // AgentCustomEventApprovalValue is the value of the custom event for tool approval.
@@ -116,6 +118,9 @@ type AgentCustomEventApprovalValue = events.AgentCustomEventApprovalValue
 
 // AgentCustomEventDelegationValue is the value of the custom event for sub-agent delegation.
 type AgentCustomEventDelegationValue = events.AgentCustomEventDelegationValue
+
+// AgentCustomEventBudgetValue is the value of the custom event for budget approval.
+type AgentCustomEventBudgetValue = events.AgentCustomEventBudgetValue
 
 // ParseCustomEventApproval returns the typed value for CUSTOM events with name [AgentCustomEventNameToolApproval].
 // Use this when handling stream events: JSON decode leaves Value as map[string]any.
@@ -126,4 +131,9 @@ func ParseCustomEventApproval(ev *AgentCustomEvent) (AgentCustomEventApprovalVal
 // ParseCustomEventDelegation returns the typed value for CUSTOM events with name [AgentCustomEventNameSubAgentDelegation].
 func ParseCustomEventDelegation(ev *AgentCustomEvent) (AgentCustomEventDelegationValue, error) {
 	return events.ParseCustomEventDelegation(ev)
+}
+
+// ParseCustomEventBudget returns the typed value for CUSTOM events with name [AgentCustomEventNameBudget].
+func ParseCustomEventBudget(ev *AgentCustomEvent) (AgentCustomEventBudgetValue, error) {
+	return events.ParseCustomEventBudget(ev)
 }

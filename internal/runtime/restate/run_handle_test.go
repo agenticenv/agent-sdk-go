@@ -152,3 +152,24 @@ func TestRunHandle_AwaitCompletion(t *testing.T) {
 		t.Fatalf("got %#v err=%v", res, err)
 	}
 }
+
+func TestMapInvocationError_BudgetExceeded(t *testing.T) {
+	raw := errors.New("invocation failed: agent: per-run budget exceeded: total tokens 76 exceeds limit 50")
+	if !errors.Is(mapInvocationError(raw), types.ErrBudgetExceeded) {
+		t.Fatalf("got %v", mapInvocationError(raw))
+	}
+	if !errors.Is(mapInvocationError(types.ErrBudgetExceeded), types.ErrBudgetExceeded) {
+		t.Fatal("sentinel not preserved")
+	}
+	unavail := errors.New("agent: budget approval unavailable (stream not connected): no subscriber")
+	if !errors.Is(mapInvocationError(unavail), types.ErrBudgetApprovalUnavailable) {
+		t.Fatalf("got %v", mapInvocationError(unavail))
+	}
+	other := errors.New("connection refused")
+	if mapInvocationError(other) != other {
+		t.Fatalf("got %v", mapInvocationError(other))
+	}
+	if mapInvocationError(nil) != nil {
+		t.Fatal("nil should stay nil")
+	}
+}

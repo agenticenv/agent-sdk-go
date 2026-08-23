@@ -326,3 +326,30 @@ func TestRunHandle_Status_MapsCompleted(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, types.StatusCompleted, st)
 }
+
+func TestMapWorkflowError_BudgetExceeded(t *testing.T) {
+	raw := errors.New("workflow execution error: agent: per-run budget exceeded: total tokens 76 exceeds limit 50 (type: wrapError, retryable: true)")
+	require.ErrorIs(t, mapWorkflowError(raw), types.ErrBudgetExceeded)
+	require.ErrorIs(t, mapWorkflowError(types.ErrBudgetExceeded), types.ErrBudgetExceeded)
+
+	unavail := errors.New("workflow execution error: agent: budget approval unavailable (stream not connected): no subscriber")
+	require.ErrorIs(t, mapWorkflowError(unavail), types.ErrBudgetApprovalUnavailable)
+	require.ErrorIs(t, mapWorkflowError(types.ErrBudgetApprovalUnavailable), types.ErrBudgetApprovalUnavailable)
+
+	require.Equal(t, context.Canceled, mapWorkflowError(context.Canceled))
+	require.Nil(t, mapWorkflowError(nil))
+}
+
+func TestRunHandle_Get_RemapsBudgetExceeded(t *testing.T) {
+	release := make(chan struct{})
+	tc := temporalmocks.NewClient(t)
+	wfErr := errors.New("workflow execution error (type: , workflowID: wf-1): agent: per-run budget exceeded: total tokens 76 exceeds limit 50 (type: wrapError, retryable: true): agent: per-run budget exceeded")
+	wfRun := blockingWorkflowRun(release, nil, wfErr)
+	h := newTestRunHandle("run-budget", "wf-1", tc, wfRun, nil)
+
+	close(release)
+	waitHandleDone(t, h.Done())
+
+	_, err := h.Get(context.Background())
+	require.ErrorIs(t, err, types.ErrBudgetExceeded)
+}

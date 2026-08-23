@@ -221,6 +221,7 @@ tasks:
         - NAME: agent_with_json_response
         - NAME: agent_with_stream
         - NAME: agent_with_reasoning
+        - NAME: agent_with_budget
         - NAME: multiple_agents
         - NAME: agent_with_mcp_config
         - NAME: agent_with_mcp_client

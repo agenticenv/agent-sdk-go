@@ -179,7 +179,7 @@ type ObservabilityConfig struct {
 //     pkg/agent/runtime/temporal or pkg/agent/runtime/restate,
 //     WithInstanceId, WithLLMClient, WithToolApprovalPolicy, WithTools, WithToolRegistry,
 //     WithMCPRegistry, WithA2ARegistry, WithSubAgentRegistry,
-//     WithMaxIterations, WithLogger, WithLogLevel, WithConversation, WithMemory,
+//     WithMaxIterations, WithBudget, WithLogger, WithLogLevel, WithConversation, WithMemory,
 //     WithResponseFormat, WithLLMSampling, WithSubAgents, WithMaxSubAgentDepth,
 //     WithMCPConfig, WithMCPClients, WithA2AConfig, WithA2AClients, WithRetrievers, WithRetrieverMode, WithAgentMode, WithDisableFingerprintCheck, WithAgentToolExecutionMode,
 //     WithLLMExecutionConfig, WithToolAuthExecutionConfig, WithToolExecutionConfig, WithMCPExecutionConfig, WithA2AExecutionConfig,
@@ -248,6 +248,9 @@ type agentConfig struct {
 
 	agentMode              AgentMode
 	agentToolExecutionMode AgentToolExecutionMode
+
+	// budgetConfig is the optional per-run token/cost budget. Nil means no budget enforcement.
+	budgetConfig *types.BudgetConfig
 
 	// Observability: optional OTLP config and/or injected clients. When [observabilityConfig] is
 	// non-nil, [buildAgentConfig] may construct [tracer], [metrics], and [logs] via
@@ -362,6 +365,21 @@ func WithSubAgentRegistry(reg SubAgentRegistry) Option {
 // WithMaxIterations sets the max number of LLM rounds. Applies to Agent and AgentWorker.
 func WithMaxIterations(n int) Option {
 	return func(c *agentConfig) { c.maxIterations = n }
+}
+
+// WithBudget sets a per-run token and cost budget for the agent.
+// Limits apply to the current run only and reset when a new run starts.
+// When the agent runs nested subagents, their usage is included in the parent run totals.
+//
+// At least one of cfg.MaxTokens or cfg.MaxCostUSD must be non-zero.
+// When cfg.MaxCostUSD is non-zero, cfg.PromptUSDPer1M and cfg.CompletionUSDPer1M must be set.
+// When cfg.OnExceeded is BudgetWaitForApproval, WithApprovalHandler must also be set;
+// zero ApprovalExtraTokens / ApprovalExtraCostUSD default to MaxTokens / MaxCostUSD.
+// cfg.OnExceeded defaults to BudgetStopRun when not set (ApprovalExtra* are ignored).
+//
+// Applies to Agent and AgentWorker.
+func WithBudget(cfg types.BudgetConfig) Option {
+	return func(c *agentConfig) { c.budgetConfig = &cfg }
 }
 
 // WithLogger sets the SDK logger (structured logging with log/slog-style attributes).
@@ -846,6 +864,10 @@ func buildAgentConfig(opts []Option) (*agentConfig, error) {
 
 	if c.maxIterations <= 0 {
 		c.maxIterations = defaultMaxIterations
+	}
+
+	if err := c.validateBudget(); err != nil {
+		return nil, err
 	}
 
 	// Snapshot injected OTLP clients before observability may replace them (WithTracer / WithMetrics / WithLogs).
@@ -1362,6 +1384,7 @@ func (c *agentConfig) runtimeAgentConfig() runtime.AgentConfig {
 			MaxIterations:   c.maxIterations,
 			Timeout:         c.timeout,
 			ApprovalTimeout: c.approvalTimeout,
+			Budget:          c.budgetConfig,
 		},
 		ExecutionConfigs: c.executionConfigs,
 		Hooks:            c.runtimeHookGroups(),
@@ -1386,6 +1409,70 @@ func (c *agentConfig) runtimeHookGroups() []hooks.HookGroup {
 	out := make([]hooks.HookGroup, len(c.hooks))
 	copy(out, c.hooks)
 	return out
+}
+
+// validateBudget checks that the BudgetConfig (if set) is internally consistent.
+// When OnExceeded is BudgetWaitForApproval, zero ApprovalExtraTokens / ApprovalExtraCostUSD
+// are filled from MaxTokens / MaxCostUSD so the tracker always uses the Extra fields for
+// the watermark window. ApprovalHandler presence is NOT checked here; it is validated at
+// Run() call time so that stream-only callers never need to provide a handler.
+func (c *agentConfig) validateBudget() error {
+	b := c.budgetConfig
+	if b == nil {
+		return nil
+	}
+	if b.MaxTokens < 0 {
+		return fmt.Errorf("WithBudget: MaxTokens must be >= 0")
+	}
+	if b.MaxCostUSD < 0 {
+		return fmt.Errorf("WithBudget: MaxCostUSD must be >= 0")
+	}
+	if b.PromptUSDPer1M < 0 {
+		return fmt.Errorf("WithBudget: PromptUSDPer1M must be >= 0")
+	}
+	if b.CompletionUSDPer1M < 0 {
+		return fmt.Errorf("WithBudget: CompletionUSDPer1M must be >= 0")
+	}
+	if b.MaxTokens == 0 && b.MaxCostUSD == 0 {
+		return fmt.Errorf("WithBudget: at least one of MaxTokens or MaxCostUSD must be non-zero")
+	}
+	if b.MaxCostUSD > 0 && (b.PromptUSDPer1M <= 0 || b.CompletionUSDPer1M <= 0) {
+		return fmt.Errorf("WithBudget: MaxCostUSD requires PromptUSDPer1M and CompletionUSDPer1M to be set")
+	}
+	if b.ApprovalExtraTokens < 0 {
+		return fmt.Errorf("WithBudget: ApprovalExtraTokens must be >= 0")
+	}
+	if b.ApprovalExtraCostUSD < 0 {
+		return fmt.Errorf("WithBudget: ApprovalExtraCostUSD must be >= 0")
+	}
+	if b.MaxApprovals < 0 {
+		return fmt.Errorf("WithBudget: MaxApprovals must be >= 0")
+	}
+	if b.OnExceeded == "" {
+		b.OnExceeded = types.BudgetStopRun
+	}
+	switch b.OnExceeded {
+	case types.BudgetStopRun:
+		if b.ApprovalExtraTokens != 0 || b.ApprovalExtraCostUSD != 0 {
+			return fmt.Errorf("WithBudget: ApprovalExtraTokens and ApprovalExtraCostUSD are only valid with BudgetWaitForApproval, not BudgetStopRun")
+		}
+		if b.MaxApprovals != 0 {
+			return fmt.Errorf("WithBudget: MaxApprovals is only valid with BudgetWaitForApproval, not BudgetStopRun")
+		}
+	case types.BudgetWaitForApproval:
+		// ApprovalHandler is validated at Run() call time, not here, so stream-only
+		// callers are not forced to provide a no-op handler.
+		if b.ApprovalExtraTokens == 0 && b.MaxTokens > 0 {
+			b.ApprovalExtraTokens = b.MaxTokens
+		}
+		if b.ApprovalExtraCostUSD == 0 && b.MaxCostUSD > 0 {
+			b.ApprovalExtraCostUSD = b.MaxCostUSD
+		}
+		// MaxApprovals defaults are applied in BudgetTracker; no mutation needed here.
+	default:
+		return fmt.Errorf("WithBudget: unknown OnExceeded action %q; use BudgetStopRun or BudgetWaitForApproval", b.OnExceeded)
+	}
+	return nil
 }
 
 // hookGroupsFingerprint returns a stable SHA-256 digest of configured hook group names for

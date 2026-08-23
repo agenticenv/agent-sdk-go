@@ -103,6 +103,7 @@ These examples run with `AGENT_RUNTIME=local` (default), `AGENT_RUNTIME=temporal
 | `agent_with_subagents` | Main agent + math specialist — `WithSubAgents`; prints **`STEP_STARTED` / `STEP_FINISHED`** (sub-agent name) around each child run when using `Stream` | — |
 | `agent_with_json_response` | Structured LLM output — `WithResponseFormat` + `interfaces.JSONSchema` (JSON with schema; no tools) | — |
 | `agent_with_reasoning` | Generic `interfaces.LLMReasoning` via `WithLLMSampling` — `Stream` to observe `thinking_delta` (e.g. Anthropic) | — |
+| `agent_with_budget` | Budget config via `WithBudget` — stop the run or pause for approval when the limit is reached | — |
 | `agent_with_mcp_config` | MCP via `WithMCPConfig` — transport from env; **[README](agent_with_mcp_config/README.md)** | stdio: — (`.env.defaults`); remote MCP: manual |
 | `agent_with_mcp_client` | Same via `mcpclient.NewClient` + `WithMCPClients` — **[README](agent_with_mcp_client/README.md)** | same as `mcp_config` |
 | `agent_with_a2a_config` | Outbound A2A via `WithA2AConfig` — **`A2A_URL`**; **[README](agent_with_a2a_config/README.md)** | `infra:a2a:up` or external A2A (manual) |
@@ -246,6 +247,17 @@ go run ./agent_with_json_response "What is the capital of Japan?"
 go run ./agent_with_reasoning
 go run ./agent_with_reasoning "Why is the sky blue? One short paragraph."
 ```
+
+### Budget config (`WithBudget`)
+
+Limits in this example are intentionally low so they trigger on a short prompt.
+
+```bash
+go run ./agent_with_budget
+go run ./agent_with_budget "Tell me a short interesting fact about space."
+```
+
+Scenario 2 asks `continue this run? (y/n)`. `task examples:*` sets `EXAMPLES_AUTO_APPROVE=true` so the batch run does not wait.
 
 ### Streaming + conversation (event handling pattern)
 

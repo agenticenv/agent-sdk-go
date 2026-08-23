@@ -3,6 +3,7 @@ package restate
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -99,8 +100,9 @@ type AgentLoopResult struct {
 // toolResult holds the output of a single tool execution step.
 // Mirrors toolResult in the local runtime.
 type toolResult struct {
-	message interfaces.Message
-	failed  bool // true: hard error, ExecuteTool failure, or context cancellation
+	message  interfaces.Message
+	failed   bool // true: hard error, ExecuteTool failure, or context cancellation
+	llmUsage *interfaces.LLMUsage
 }
 
 // toolCallState tracks per-tool approval and completion status during parallel execution.
@@ -222,7 +224,10 @@ func (s AgentLoop) handle(ctx restatesdk.Context, req AgentLoopRequest) (*AgentL
 		Tools:            tools,
 	})
 	if err != nil {
-		return nil, err
+		if isApplicationLoopError(err) {
+			s.rt.tools.stash.Delete(req.RunID)
+		}
+		return nil, terminalLoopError(err)
 	}
 
 	// Release the stash entry after success.
@@ -265,6 +270,27 @@ func (rt *RestateRuntime) validateAgentName(agentName string) error {
 		return nil
 	}
 	return fmt.Errorf("restate: agent name %q does not match this AgentLoop (%q)", agentName, rt.AgentSpec.Name)
+}
+
+// isApplicationLoopError reports errors that finish the run (do not retry).
+func isApplicationLoopError(err error) bool {
+	return errors.Is(err, types.ErrBudgetExceeded) || errors.Is(err, types.ErrBudgetApprovalUnavailable)
+}
+
+// terminalLoopError marks application-complete failures as Restate terminal so
+// the invocation is not retried (BudgetStopRun would otherwise loop forever).
+// ToTerminalError copies the message only, so the sentinel is re-wrapped for errors.Is.
+func terminalLoopError(err error) error {
+	if err == nil || restatesdk.IsTerminalError(err) {
+		return err
+	}
+	switch {
+	case errors.Is(err, types.ErrBudgetExceeded):
+		return fmt.Errorf("%w: %w", types.ErrBudgetExceeded, restatesdk.ToTerminalError(err))
+	case errors.Is(err, types.ErrBudgetApprovalUnavailable):
+		return fmt.Errorf("%w: %w", types.ErrBudgetApprovalUnavailable, restatesdk.ToTerminalError(err))
+	}
+	return err
 }
 
 // isMemoryScopeSet reports whether any field of a MemoryScope is populated.
@@ -375,6 +401,11 @@ func (rt *RestateRuntime) executeAgentLoop(ctx restatesdk.Context, input AgentLo
 		telemetry.Storage.PrefetchSearches += res.TotalSearches
 	}
 
+	// Budget tracker: nil when no budget is configured.
+	// enforceBudget is true on root runs (EventTopic not inherited from a parent).
+	budgetTracker := base.NewBudgetTracker(rt.AgentConfig.Limits.Budget)
+	enforceBudget := budgetTracker != nil && input.SubAgentDepth == 0
+
 	var lastContent string
 	var llmUsage *interfaces.LLMUsage
 
@@ -403,6 +434,9 @@ func (rt *RestateRuntime) executeAgentLoop(ctx restatesdk.Context, input AgentLo
 		}
 		telemetry.Run.TotalLLMCalls++
 		llmUsage = base.MergeLLMUsage(llmUsage, llmResult.Usage)
+		if budgetErr := rt.checkBudget(ctx, budgetTracker, enforceBudget, telemetry, llmResult.Usage, emit); budgetErr != nil {
+			return &AgentLoopResult{Content: lastContent, LLMUsage: llmUsage, Telemetry: telemetry}, budgetErr
+		}
 
 		if len(llmResult.ToolCalls) == 0 {
 			messages = append(messages, interfaces.Message{Role: interfaces.MessageRoleAssistant, Content: llmResult.Content})
@@ -433,6 +467,9 @@ func (rt *RestateRuntime) executeAgentLoop(ctx restatesdk.Context, input AgentLo
 				return nil, fmt.Errorf("llm final call (iter %d): %w", iter, err)
 			}
 			llmUsage = base.MergeLLMUsage(llmUsage, llmResult.Usage)
+			if budgetErr := rt.checkBudget(ctx, budgetTracker, enforceBudget, telemetry, llmResult.Usage, emit); budgetErr != nil {
+				return &AgentLoopResult{Content: lastContent, LLMUsage: llmUsage, Telemetry: telemetry}, budgetErr
+			}
 			messages = append(messages, interfaces.Message{Role: interfaces.MessageRoleAssistant, Content: llmResult.Content})
 			lastContent = llmResult.Content
 			telemetry.Run.TotalLLMCalls++
@@ -490,6 +527,12 @@ func (rt *RestateRuntime) executeAgentLoop(ctx restatesdk.Context, input AgentLo
 					telemetry.Storage.FailedMemoryStores++
 				} else {
 					telemetry.Storage.TotalMemoryStores++
+				}
+			}
+			if res.llmUsage != nil {
+				llmUsage = base.MergeLLMUsage(llmUsage, res.llmUsage)
+				if budgetErr := rt.checkBudget(ctx, budgetTracker, enforceBudget, telemetry, res.llmUsage, emit); budgetErr != nil {
+					return &AgentLoopResult{Content: lastContent, LLMUsage: llmUsage, Telemetry: telemetry}, budgetErr
 				}
 			}
 		}
@@ -775,11 +818,12 @@ func (rt *RestateRuntime) executeToolsParallel(
 			continue
 		}
 		tc := states[i].tc
-		content, execErr := rt.delegateToSubAgent(ctx, input, tc, input.SubAgentRoutes[tc.ToolName], emit)
+		content, usage, execErr := rt.delegateToSubAgent(ctx, input, tc, input.SubAgentRoutes[tc.ToolName], emit)
 		if execErr != nil {
 			writeResult(i, "Tool execution failed: "+execErr.Error(), true)
 		} else {
 			writeResult(i, content, false)
+			results[i].llmUsage = usage
 		}
 	}
 	return results, nil
@@ -834,11 +878,12 @@ func (rt *RestateRuntime) executeSingleTool(
 
 	var content string
 	failed := false
+	var llmUsage *interfaces.LLMUsage
 	subAgentRoute, isSubAgent := input.SubAgentRoutes[tc.ToolName]
 	switch approvalStatus {
 	case types.ApprovalStatusApproved:
 		if isSubAgent {
-			content, err = rt.delegateToSubAgent(ctx, input, tc, subAgentRoute, emit)
+			content, llmUsage, err = rt.delegateToSubAgent(ctx, input, tc, subAgentRoute, emit)
 			if err != nil {
 				return toolResult{}, err
 			}
@@ -876,7 +921,7 @@ func (rt *RestateRuntime) executeSingleTool(
 	return toolResult{message: interfaces.Message{
 		Role: interfaces.MessageRoleTool, Content: content,
 		ToolName: tc.ToolName, ToolCallID: tc.ToolCallID,
-	}, failed: failed}, nil
+	}, failed: failed, llmUsage: llmUsage}, nil
 }
 
 // awaitApproval creates a Restate awakeable, emits the approval CUSTOM event with the token,
@@ -932,6 +977,96 @@ func emitApprovalRequest(
 			}))
 	}
 	return awakeable, restatesdk.After(ctx, rt.approvalTaskTimeout())
+}
+
+// checkBudget adds usage to the tracker and, when enforceBudget is true, applies OnExceeded.
+func (rt *RestateRuntime) checkBudget(
+	ctx restatesdk.Context,
+	tracker *base.BudgetTracker,
+	enforceBudget bool,
+	telemetry *types.AgentTelemetry,
+	usage *interfaces.LLMUsage,
+	emit func(events.AgentEvent),
+) error {
+	if !enforceBudget || tracker == nil {
+		if tracker != nil {
+			_ = tracker.Add(usage)
+		}
+		return nil
+	}
+	budgetErr := tracker.Add(usage)
+	if budgetErr == nil {
+		return nil
+	}
+	return rt.handleBudgetExceeded(ctx, tracker, telemetry, budgetErr, emit)
+}
+
+// handleBudgetExceeded applies OnExceeded: stop the run, or wait for approval then continue.
+func (rt *RestateRuntime) handleBudgetExceeded(
+	ctx restatesdk.Context,
+	tracker *base.BudgetTracker,
+	telemetry *types.AgentTelemetry,
+	budgetErr error,
+	emit func(events.AgentEvent),
+) error {
+	cfg := rt.AgentConfig.Limits.Budget
+	action := types.BudgetStopRun
+	if cfg != nil && cfg.OnExceeded != "" {
+		action = cfg.OnExceeded
+	}
+	rt.logger.Warn(ctx, "restate: per-run budget exceeded",
+		slog.String("scope", "loop"),
+		slog.String("action", string(action)),
+		slog.String("detail", budgetErr.Error()))
+
+	if action == types.BudgetWaitForApproval {
+		approved, waitErr := rt.awaitBudgetApproval(ctx, tracker, budgetErr.Error(), emit)
+		if waitErr != nil {
+			telemetry.Run.FinishReason = types.FinishReasonBudgetExceeded
+			return fmt.Errorf("%w: %s", types.ErrBudgetExceeded, budgetErr.Error())
+		}
+		if approved {
+			tracker.AdvanceWatermark()
+			return nil
+		}
+	}
+	telemetry.Run.FinishReason = types.FinishReasonBudgetExceeded
+	return fmt.Errorf("%w: %s", types.ErrBudgetExceeded, budgetErr.Error())
+}
+
+// awaitBudgetApproval emits a CUSTOM budget_approval event and blocks on a Restate awakeable.
+func (rt *RestateRuntime) awaitBudgetApproval(
+	ctx restatesdk.Context,
+	tracker *base.BudgetTracker,
+	detail string,
+	emit func(events.AgentEvent),
+) (bool, error) {
+	awakeable := restatesdk.Awakeable[types.ApprovalStatus](ctx)
+	token := awakeable.Id()
+	tokens, costUSD := tracker.Totals()
+	emit(events.NewAgentCustomEvent(string(events.AgentCustomEventNameBudget), events.AgentCustomEventBudgetValue{
+		AgentName:     rt.AgentSpec.Name,
+		Detail:        detail,
+		TotalTokens:   tokens,
+		CostUSD:       costUSD,
+		ApprovalToken: token,
+	}))
+	timeout := restatesdk.After(ctx, rt.approvalTaskTimeout())
+	first, waitErr := restatesdk.WaitFirst(ctx, awakeable, timeout)
+	if waitErr != nil {
+		return false, waitErr
+	}
+	if first == timeout {
+		if err := timeout.Done(); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+	status, err := awakeable.Result()
+	if err != nil {
+		return false, err
+	}
+	return status == types.ApprovalStatusApproved, nil
 }
 
 // ─── Event emission ───────────────────────────────────────────────────────────

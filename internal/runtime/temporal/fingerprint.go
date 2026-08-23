@@ -66,6 +66,14 @@ type AgentFingerprintPayload struct {
 	MaxIterations     int   `json:"max_iterations"`
 	TimeoutNs         int64 `json:"timeout_ns"`
 	ApprovalTimeoutNs int64 `json:"approval_timeout_ns"`
+
+	// BudgetMaxTokens, BudgetMaxCostUSD, BudgetOnExceeded capture the per-run budget
+	// configuration for fingerprinting. Zero values mean no budget enforcement.
+	BudgetMaxTokens            int64   `json:"budget_max_tokens,omitempty"`
+	BudgetMaxCostUSD           float64 `json:"budget_max_cost_usd,omitempty"`
+	BudgetOnExceeded           string  `json:"budget_on_exceeded,omitempty"`
+	BudgetApprovalExtraTokens  int64   `json:"budget_approval_extra_tokens,omitempty"`
+	BudgetApprovalExtraCostUSD float64 `json:"budget_approval_extra_cost_usd,omitempty"`
 }
 
 // ComputeAgentFingerprint returns a stable SHA-256 hex digest of the payload (identity, prompts, tools,
@@ -128,6 +136,13 @@ func BuildAgentFingerprintPayload(
 		MaxIterations:            limits.MaxIterations,
 		TimeoutNs:                limits.Timeout.Nanoseconds(),
 		ApprovalTimeoutNs:        limits.ApprovalTimeout.Nanoseconds(),
+	}
+	if limits.Budget != nil {
+		m.BudgetMaxTokens = limits.Budget.MaxTokens
+		m.BudgetMaxCostUSD = limits.Budget.MaxCostUSD
+		m.BudgetOnExceeded = string(limits.Budget.OnExceeded)
+		m.BudgetApprovalExtraTokens = limits.Budget.ApprovalExtraTokens
+		m.BudgetApprovalExtraCostUSD = limits.Budget.ApprovalExtraCostUSD
 	}
 	if spec.ResponseFormat != nil {
 		rf := spec.ResponseFormat

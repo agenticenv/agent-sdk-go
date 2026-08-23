@@ -69,11 +69,12 @@ See [Timeouts & Modes](/advanced/timeouts-and-modes) for the full failure behavi
 
 ## Cost controls
 
+- **Budget** — Use [`WithBudget`](/features/budget) to set hard token and cost limits on each run. The SDK enforces them automatically across all runtimes and includes sub-agent usage in the total. Choose `BudgetStopRun` to halt on breach or `BudgetWaitForApproval` for human-in-the-loop control. See [Budget](/features/budget).
 - **Token budget per run** — Set `WithLLMSampling(&LLMSampling{MaxTokens: N})` to cap completion tokens per LLM call. Prevents runaway costs from unexpectedly long responses.
 - **Cap iteration count** — `WithMaxIterations` (default 5) directly caps how many LLM calls a single run makes. Reduce it for cost-sensitive workloads.
 - **Monitor token usage** — Read `result.LLMUsage.TotalTokens` on every run and aggregate by user/tenant. See [Token Usage](/features/token-usage).
 - **OTLP token metrics** — `agent.llm.tokens.input` and `agent.llm.tokens.output` histograms let you alert on token spend in dashboards. See [Metrics](/observability/metrics).
-- **Sub-agent token multiplication** — Each sub-agent delegation triggers its own LLM calls. Monitor sub-agent trees carefully — a 3-level deep tree with 3 tools per level can multiply token spend significantly.
+- **Sub-agent token multiplication** — Each sub-agent delegation triggers its own LLM calls. Monitor sub-agent trees carefully — a 3-level deep tree with 3 tools per level can multiply token spend significantly. Use `WithBudget` to cap total usage across the whole tree.
 - **Estimate before production** — Run the [Benchmarks](/testing/benchmarks) harness with real provider clients and `mock_tokens` tuned to your expected prompt size to estimate cost at target load.
 
 ## Prompt Caching

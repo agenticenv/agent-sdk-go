@@ -154,7 +154,7 @@ func (h *runHandle) awaitCompletion() {
 			h.err = context.Canceled
 			return
 		}
-		h.err = err
+		h.err = mapInvocationError(err)
 		return
 	}
 	if out != nil && out.Result != nil {
@@ -163,4 +163,20 @@ func (h *runHandle) awaitCompletion() {
 			h.res.RunID = h.id
 		}
 	}
+}
+
+// mapInvocationError restores SDK sentinels lost when Restate serializes a
+// terminal handler failure (message kept, Go error chain dropped).
+func mapInvocationError(err error) error {
+	if err == nil || isApplicationLoopError(err) {
+		return err
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, types.ErrBudgetExceeded.Error()):
+		return fmt.Errorf("%w: %v", types.ErrBudgetExceeded, err)
+	case strings.Contains(msg, types.ErrBudgetApprovalUnavailable.Error()):
+		return fmt.Errorf("%w: %v", types.ErrBudgetApprovalUnavailable, err)
+	}
+	return err
 }

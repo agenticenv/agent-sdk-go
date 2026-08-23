@@ -63,9 +63,13 @@ for ev := range eventCh {
 
 OpenAI streaming with `include_usage` surfaces totals on `RUN_FINISHED`. Example: [Stream](/examples/stream).
 
+## Budget enforcement
+
+To automatically stop or pause a run when a token or cost limit is reached, use [`WithBudget`](/features/budget). It works across all runtimes and covers sub-agent usage transparently without any hook code.
+
 ## Per-request usage
 
-For per-LLM-call breakdowns — to log each round individually, enforce mid-run budgets, or build cost dashboards — use [`AfterLLMHook`](/features/hooks) and inspect `in.Response.Usage` on each iteration:
+For per-LLM-call breakdowns — to log each round individually, build cost dashboards, or track iteration-level usage — use [`AfterLLMHook`](/features/hooks) and inspect `in.Response.Usage` on each iteration:
 
 ```go
 agent.WithHooks("cost", agent.AgentHooks{
@@ -91,6 +95,10 @@ agent.WithHooks("cost", agent.AgentHooks{
 ## Related
 
 <CardGroup cols={2}>
+
+  <Card title="Budget" icon="gauge" href="/features/budget" horizontal>
+    Token and cost limits with automatic enforcement
+  </Card>
 
   <Card title="Reasoning" icon="lightbulb" href="/features/reasoning" horizontal>
     ReasoningTokens from extended thinking

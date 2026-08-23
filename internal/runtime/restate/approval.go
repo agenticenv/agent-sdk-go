@@ -8,7 +8,7 @@ import (
 	"github.com/agenticenv/agent-sdk-go/internal/types"
 )
 
-// ErrNotApprovalCustomEvent means the CUSTOM event name is not tool or delegation approval.
+// ErrNotApprovalCustomEvent means the CUSTOM event name is not tool, delegation, or budget approval.
 var ErrNotApprovalCustomEvent = errors.New("restate: custom event is not a recognized approval kind")
 
 func toolApprovalFromEventValue(ev events.AgentCustomEventApprovalValue) types.ToolApprovalRequestValue {
@@ -27,6 +27,16 @@ func delegationApprovalFromEventValue(ev events.AgentCustomEventDelegationValue)
 		AgentName:     ev.AgentName,
 		SubAgentName:  ev.SubAgentName,
 		Args:          cloneArgsMap(ev.Args),
+		ApprovalToken: ev.ApprovalToken,
+	}
+}
+
+func budgetApprovalFromEventValue(ev events.AgentCustomEventBudgetValue) types.BudgetApprovalRequestValue {
+	return types.BudgetApprovalRequestValue{
+		AgentName:     ev.AgentName,
+		Detail:        ev.Detail,
+		TotalTokens:   ev.TotalTokens,
+		CostUSD:       ev.CostUSD,
 		ApprovalToken: ev.ApprovalToken,
 	}
 }
@@ -51,6 +61,13 @@ func prepareApprovalFromCustomEvent(ev *events.AgentCustomEvent) (req *types.App
 		}
 		v := delegationApprovalFromEventValue(raw)
 		return &types.ApprovalRequest{Name: types.ApprovalRequestNameSubAgent, Value: v}, v.ApprovalToken, nil
+	case events.AgentCustomEventNameBudget:
+		raw, err := events.ParseCustomEventBudget(ev)
+		if err != nil {
+			return nil, "", err
+		}
+		v := budgetApprovalFromEventValue(raw)
+		return &types.ApprovalRequest{Name: types.ApprovalRequestNameBudget, Value: v}, v.ApprovalToken, nil
 	default:
 		return nil, "", ErrNotApprovalCustomEvent
 	}

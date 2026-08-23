@@ -1,0 +1,46 @@
+---
+title: "Budget Config"
+description: "Configure WithBudget to stop or pause a run when token or cost limits are reached"
+---
+
+Shows [`WithBudget`](/features/budget) on a single agent: `BudgetStopRun` ends the run with `ErrBudgetExceeded`, and `BudgetWaitForApproval` pauses for the caller to continue or stop.
+
+Source: [`examples/agent_with_budget/`](https://github.com/agenticenv/agent-sdk-go/tree/main/examples/agent_with_budget)
+
+Limits in the example are intentionally low so they trigger on a short prompt. Raise them for real workloads.
+
+## What it demonstrates
+
+- Token cap via `MaxTokens`
+- Optional `MaxCostUSD` with caller-supplied `PromptUSDPer1M` / `CompletionUSDPer1M`
+- `BudgetStopRun` — run stops and `Get` returns `ErrBudgetExceeded`
+- `BudgetWaitForApproval` — `WithApprovalHandler` decides whether to continue
+
+## Run
+
+From `examples/`:
+
+```bash
+go run ./agent_with_budget
+go run ./agent_with_budget "Tell me a short interesting fact about space."
+```
+
+## Expected output
+
+Scenario 1 prints `run stopped: per-run budget exceeded (BudgetStopRun)` when the token cap is hit.
+
+Scenario 2 prints a `[budget] limit reached` line, then prompts `continue this run? (y/n)`. Type `y` to continue or `n` to stop with `ErrBudgetExceeded`. `task examples:*` sets `EXAMPLES_AUTO_APPROVE=true` and continues without a prompt.
+
+## Learn more
+
+<CardGroup cols={2}>
+
+  <Card title="Budget" icon="gauge" href="/features/budget" horizontal>
+    Limits, actions, validation, nested sub-agents
+  </Card>
+
+  <Card title="Approvals" icon="hand" href="/features/approvals" horizontal>
+    Run handler vs Stream CUSTOM events
+  </Card>
+
+</CardGroup>
