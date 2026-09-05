@@ -17,6 +17,26 @@
 >
 > Independent community library — **not** affiliated with Temporal Technologies or Restate.
 
+
+## Features
+
+- **LLM providers** — OpenAI, Anthropic, Gemini, DeepSeek, Ollama (local) + custom via `interfaces.LLMClient`
+- **Tools & MCP** — built-in and custom tools; MCP servers over stdio or streamable HTTP
+- **A2A** — expose agents as A2A servers or connect remote A2A agents as tools
+- **Sub-agents** — delegate to specialist agents with independent LLMs, tools, and task queues
+- **Human-in-the-loop approvals** — gate tool calls, MCP invocations, and delegation
+- **Conversation history** — multi-turn sessions via in-memory or Redis backends
+- **Memory & RAG** — long-term scoped memory and retrieval-augmented generation
+- **Streaming & AG-UI** — partial token streaming; AG-UI protocol for frontend integration
+- **Reasoning** — extended thinking on Anthropic, Gemini, DeepSeek, and OpenAI reasoning models
+- **Token usage** — aggregate prompt, completion, and reasoning token counts per run
+- **Budget control** — cap token spend per run; stop execution or require human-in-the-loop approval when the limits are reached
+- **Hooks & guardrails** — middleware at LLM, tool, retrieval, and memory lifecycle points
+- **Execution config** — per-operation timeouts and max attempts via `With*ExecutionConfig`
+- **Durable execution** — crash-resilient runs via Temporal or Restate; reconnect to active runs and resume event streams after a restart
+- **Distributed execution** — with Temporal, decouple client triggers from worker execution across processes; with Restate, scale via registered endpoint deployments
+- **Observability** — OpenTelemetry traces, metrics, and structured logs
+
 ## Install
 
 ```bash
@@ -151,25 +171,6 @@ defer a.Close()
 ```
 
 > Crashes and process restarts don't have to mean lost work or missed approvals — see [durable_agent/temporal](examples/durable_agent/temporal) (split worker) and [durable_agent/restate](examples/durable_agent/restate) (single process). For the stream reconnect protocol (`GetAgentStream` + `WithOffset`), see the [reconnect example](examples/agent_with_reconnect) and [Durable Execution](https://docs.agenticenv.ai/advanced/durable-execution).
-
-## Features
-
-- **LLM providers** — OpenAI, Anthropic, Gemini, DeepSeek, Ollama (local) + custom via `interfaces.LLMClient`
-- **Tools & MCP** — built-in and custom tools; MCP servers over stdio or streamable HTTP
-- **A2A** — expose agents as A2A servers or connect remote A2A agents as tools
-- **Sub-agents** — delegate to specialist agents with independent LLMs, tools, and task queues
-- **Human-in-the-loop approvals** — gate tool calls, MCP invocations, and delegation
-- **Conversation history** — multi-turn sessions via in-memory or Redis backends
-- **Memory & RAG** — long-term scoped memory and retrieval-augmented generation
-- **Streaming & AG-UI** — partial token streaming; AG-UI protocol for frontend integration
-- **Reasoning** — extended thinking on Anthropic, Gemini, DeepSeek, and OpenAI reasoning models
-- **Token usage** — aggregate prompt, completion, and reasoning token counts per run
-- **Budget control** — cap token spend per run; stop execution or require human-in-the-loop approval when the limits are reached
-- **Hooks & guardrails** — middleware at LLM, tool, retrieval, and memory lifecycle points
-- **Execution config** — per-operation timeouts and max attempts via `With*ExecutionConfig`
-- **Durable execution** — crash-resilient runs via Temporal or Restate; reconnect to active runs and resume event streams after a restart
-- **Distributed execution** — with Temporal, decouple client triggers from worker execution across processes; with Restate, scale via registered endpoint deployments
-- **Observability** — OpenTelemetry traces, metrics, and structured logs
 
 ## CLI (`agctl`)
 
