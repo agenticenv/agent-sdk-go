@@ -1,6 +1,6 @@
 module github.com/agenticenv/agent-sdk-go
 
-go 1.26
+go 1.26.0
 
 toolchain go1.26.6
 
@@ -10,15 +10,15 @@ replace github.com/agenticenv/agent-sdk-go/pkg/llm => ./pkg/llm
 
 require (
 	github.com/a2aproject/a2a-go/v2 v2.5.0
-	github.com/alicebob/miniredis/v2 v2.38.0
-	github.com/anthropics/anthropic-sdk-go v1.68.0
+	github.com/alicebob/miniredis/v2 v2.39.0
+	github.com/anthropics/anthropic-sdk-go v1.71.0
 	github.com/golang/mock v1.6.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/joho/godotenv v1.5.1
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/nexus-rpc/sdk-go v0.7.0
-	github.com/openai/openai-go/v3 v3.54.0
+	github.com/openai/openai-go/v3 v3.56.0
 	github.com/pgvector/pgvector-go v0.4.1
 	github.com/pgvector/pgvector-go/pgx v0.4.1
 	github.com/redis/go-redis/v9 v9.22.0
@@ -46,9 +46,9 @@ require (
 	go.temporal.io/sdk v1.48.0
 	go.temporal.io/sdk/contrib/opentelemetry v0.8.1
 	go.temporal.io/sdk/contrib/workflowstreams v0.1.1
-	golang.org/x/oauth2 v0.36.0
-	google.golang.org/genai v1.70.0
-	google.golang.org/grpc v1.83.1
+	golang.org/x/oauth2 v0.37.0
+	google.golang.org/genai v1.71.0
+	google.golang.org/grpc v1.83.2
 	gopkg.in/yaml.v3 v3.0.1
 )
 
