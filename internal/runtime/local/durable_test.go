@@ -427,6 +427,73 @@ done:
 	_ = collectEvents(t, ch, 5*time.Second) // drain original subscriber too
 }
 
+// TestDurable_GetStreamHandle_SameProcessReconnect_NoDuplicateFinished reproduces the
+// "double driver" bug: GetStreamHandle called while the original Stream() is still live
+// (waiting on an approval step) used to start a second durable.RunTask driver via
+// driveDurableStream, so both the original and the reconnecting subscriber ended up
+// receiving RUN_FINISHED twice. With registerDriver, the reconnect attaches to the
+// already-live driver instead of starting its own — each subscriber must see exactly
+// one RUN_FINISHED.
+func TestDurable_GetStreamHandle_SameProcessReconnect_NoDuplicateFinished(t *testing.T) {
+	client := &seqLLMClient{
+		responses: []*interfaces.LLMResponse{
+			{ToolCalls: []*interfaces.ToolCall{{ToolCallID: "c1", ToolName: "guarded"}}},
+			{Content: "final answer"},
+		},
+	}
+	tool := stubTool{name: "guarded", result: "ran", needsApproval: true}
+	rt := newDurableRT(t, client, "double-driver-agent")
+
+	handle, err := rt.Stream(context.Background(), &sdkruntime.RunRequest{
+		UserPrompt: "go",
+		Tools:      []interfaces.Tool{tool},
+	})
+	require.NoError(t, err)
+	ch, err := handle.Events(context.Background(), 0)
+	require.NoError(t, err)
+
+	// Drain until the approval CUSTOM event, same as the replay test above.
+	var token string
+	for token == "" {
+		ev := <-ch
+		if ev != nil && ev.Type() == events.AgentEventTypeCustom {
+			if val, perr := events.ParseCustomEventApproval(ev.(*events.AgentCustomEvent)); perr == nil {
+				token = val.ApprovalToken
+			}
+		}
+	}
+	require.NotEmpty(t, token)
+
+	// Reconnect while Stream()'s own driver is still live (Waiting on the approval
+	// step) — exactly the scenario the reviewer flagged.
+	handle2, err := rt.GetStreamHandle(context.Background(), handle.ID())
+	require.NoError(t, err)
+	ch2, err := handle2.Events(context.Background(), 0)
+	require.NoError(t, err)
+
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		_ = rt.approve(context.Background(), token, types.ApprovalStatusApproved)
+	}()
+
+	evs1 := collectEvents(t, ch, 5*time.Second)
+	evs2 := collectEvents(t, ch2, 5*time.Second)
+
+	require.Equal(t, 1, countFinishedEvents(evs1), "original subscriber must see exactly one RUN_FINISHED")
+	require.Equal(t, 1, countFinishedEvents(evs2), "reconnected subscriber must see exactly one RUN_FINISHED")
+}
+
+// countFinishedEvents counts RUN_FINISHED events in evs.
+func countFinishedEvents(evs []events.AgentEvent) int {
+	n := 0
+	for _, ev := range evs {
+		if ev != nil && ev.Type() == events.AgentEventTypeRunFinished {
+			n++
+		}
+	}
+	return n
+}
+
 // ---------------------------------------------------------------------------
 // Tools resolver rehydration
 // ---------------------------------------------------------------------------

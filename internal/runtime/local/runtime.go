@@ -70,6 +70,41 @@ type LocalRuntime struct {
 	// particular run's Tools are known) can look them up when it actually executes.
 	// Entries are added just before durable.RunTask and removed when Task.Exec returns.
 	liveRuns sync.Map // key: string runID, value: *liveRunExtras
+
+	// liveDrivers tracks which runID currently has an active in-process
+	// driveDurableRun/driveDurableStream goroutine (the "driver of record"), so a
+	// same-process GetRunHandle/GetStreamHandle reconnect can attach to it instead of
+	// starting a second durable.RunTask call for the same run — see registerDriver.
+	// Entries are added by registerDriver and removed by the driver goroutine when done.
+	liveDrivers sync.Map // key: string runID, value: driverHandle
+}
+
+// driverHandle is the subset of *runHandle/*streamHandle that registerDriver's callers
+// need to piggyback on an already-live in-process driver: just wait for its result.
+type driverHandle interface {
+	Get(ctx context.Context) (*types.AgentRunResult, error)
+}
+
+// registerDriver atomically registers handle as runID's live in-process driver, or
+// discovers that one already exists.
+//
+// ok is true when handle is now the driver of record: the caller must actually drive the
+// run (call durable.RunTask via startDurableRun) and defer rt.liveDrivers.Delete(runID)
+// when done. ok is false when existing is already driving: the caller must not call
+// durable.RunTask again — durable-go's per-(taskID,runID) lockRun would just block the
+// second call until the first finishes, then fast-return the already-computed output, so
+// nothing is gained — and worse, each independent driver publishes its own terminal
+// lifecycle event once its RunTask.Get returns, so a second driver means a same-process
+// reconnect subscriber sees RUN_FINISHED twice. Instead, wait on existing.Get and mirror
+// its result onto handle via markDone; the live driver's own single publish already
+// reaches this new subscriber's channel (subscribed before this call, per the existing
+// Run/Stream/GetRunHandle/GetStreamHandle ordering).
+func (rt *LocalRuntime) registerDriver(runID string, handle driverHandle) (existing driverHandle, ok bool) {
+	actual, loaded := rt.liveDrivers.LoadOrStore(runID, handle)
+	if loaded {
+		return actual.(driverHandle), false
+	}
+	return nil, true
 }
 
 // NewLocalRuntime constructs a LocalRuntime from functional options.

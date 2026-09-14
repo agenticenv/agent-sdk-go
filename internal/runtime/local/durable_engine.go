@@ -252,7 +252,18 @@ func (rt *LocalRuntime) startDurableRun(runCtx context.Context, runID string, dt
 // instead of calling executeAgentLoop directly. Used by both a fresh Run() and a
 // GetRunHandle reattach after a process restart (dto is then a zero value; the real
 // input is reloaded from disk — see startDurableRun).
+//
+// If a driver for handle.id is already live in this process (e.g. GetRunHandle called
+// while the original Run() — or another reattach — is still going), this attaches to it
+// instead of starting a second durable.RunTask call: see [LocalRuntime.registerDriver].
 func (rt *LocalRuntime) driveDurableRun(runCtx context.Context, dto durableRunInput, handle *runHandle) {
+	if existing, ok := rt.registerDriver(handle.id, handle); !ok {
+		res, err := existing.Get(runCtx)
+		handle.markDone(res, err)
+		return
+	}
+	defer rt.liveDrivers.Delete(handle.id)
+
 	out, err := rt.startDurableRun(runCtx, handle.id, dto).Get(runCtx)
 	if err != nil {
 		rt.logger.Error(runCtx, "runtime durable run failed",
@@ -312,7 +323,22 @@ func (rt *LocalRuntime) replayStepHistory(ctx context.Context, runID, channel st
 // publishes. emitStarted controls RUN_STARTED — true for a fresh Stream() call, false for
 // a GetStreamHandle reattach (the original caller already saw RUN_STARTED before the
 // crash; re-emitting it on reconnect would be confusing).
+//
+// If a driver for handle.id is already live in this process (e.g. GetStreamHandle called
+// while the original Stream() — or another reattach — is still going), this attaches to
+// it instead of starting a second durable.RunTask call: see [LocalRuntime.registerDriver].
+// The attach path never publishes anything itself — the live driver's own single
+// RUN_FINISHED/RUN_ERROR publish already reaches this new subscriber, which subscribed to
+// channel before this goroutine started (see GetStreamHandle/Stream ordering) — so
+// attaching here without publishing avoids delivering that event twice.
 func (rt *LocalRuntime) driveDurableStream(runCtx context.Context, dto durableRunInput, handle *streamHandle, channel, threadID string, emitStarted bool) {
+	if existing, ok := rt.registerDriver(handle.id, handle); !ok {
+		res, err := existing.Get(runCtx)
+		handle.markDone(res, err)
+		return
+	}
+	defer rt.liveDrivers.Delete(handle.id)
+
 	if emitStarted {
 		rt.publishLifecycleEvent(channel, events.NewAgentRunStartedEvent(threadID, handle.id))
 	}
