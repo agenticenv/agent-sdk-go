@@ -4,19 +4,19 @@ description: "How agent runs survive crashes — automatic runtime resilience an
 ---
 
 <Note>
-**Durable runtimes only (Temporal or Restate).** Durable execution — including step retries and `GetAgentStream` / `GetAgentRun` — requires the [Temporal](/runtimes/temporal) or [Restate](/runtimes/restate) runtime. The in-process `LocalRuntime` does not maintain a durable event log; non-zero offsets return `ErrStreamOffsetNotSupported`.
+**Durable by default, on every runtime.** The in-process (local) runtime is durable via [durable-go](https://github.com/agenticenv/durable-go) — no config needed, no external server. [Temporal](/runtimes/temporal) and [Restate](/runtimes/restate) add horizontal scaling and a client/worker split on top of the same durability guarantees, plus token-level (not step-level) reconnect fidelity. See [Runtime support](#runtime-support) for the one fidelity difference on local.
 </Note>
 
 **The problem:** Agent runs invoke LLM calls, tools, and memory operations that take time — and any of these processes can crash mid-run. Workers or endpoints can restart, your subscriber process can disconnect, and prompts get lost. Re-running the entire agent from scratch wastes tokens and time, and loses partially completed work.
 
-**The solution:** The durable runtime records every step of the run as durable history. If the executing process crashes, completed steps are not re-run — the run resumes exactly where it left off. If your client process crashes mid-run, call `GetAgentRun` (non-stream) or `GetAgentStream` + `WithOffset` (stream) to reconnect without restarting the agent. The public reconnect API is the same on Temporal and Restate.
+**The solution:** The durable runtime records every step of the run as durable history — on every runtime, including local. If the executing process crashes, completed steps are not re-run — the run resumes exactly where it left off. If your client process crashes mid-run, call `GetAgentRun` (non-stream) or `GetAgentStream` (stream, optionally with `WithOffset` on Temporal/Restate) to reconnect without restarting the agent. The core reconnect API is the same everywhere; local just can't seek to an arbitrary offset (see [Runtime support](#runtime-support)).
 
 These guarantees are independent:
 
 | Guarantee | What it means | Who handles it |
 |---|---|---|
 | **Server-side durability** | The run and all its steps survive process crashes and restarts | Runtime — automatic, no SDK code needed |
-| **Client-side stream recovery** | Your subscriber process can reconnect after a crash and resume the event stream from exactly where it left off | Your code — `GetAgentStream` + `WithOffset` |
+| **Client-side stream recovery** | Your subscriber process can reconnect after a crash and resume the event stream from exactly where it left off | Your code — `GetAgentStream` (+ `WithOffset` on Temporal/Restate) |
 | **Client-side run recovery** | Your process can reconnect to a still-running non-stream `Run` and wait for the result | Your code — `GetAgentRun` then `Get` / `Done` |
 
 ## Keep the run alive across disconnects
@@ -41,16 +41,17 @@ ch, err := s.Events(eventsCtx)
 
 ## Server-side durability
 
-The durable runtime records every step of the agent run — LLM calls, tool executions, approvals, memory operations — in durable history (Temporal workflow history, or Restate journaled steps). When the executing process crashes or restarts:
+The durable runtime records every step of the agent run — LLM calls, tool executions, approvals, memory operations — in durable history (a local durable-go journal, Temporal workflow history, or Restate journaled steps). When the executing process crashes or restarts:
 
 - **In-flight steps** are automatically retried on a recovered or different executor
 - **Completed steps** are not re-executed — the run fast-forwards through recorded history
 - **The final result is identical** regardless of how many interruptions occurred
 
-This is automatic. No SDK changes are needed beyond selecting Temporal or Restate.
+This is automatic on every runtime — durable by default on local, no SDK changes needed. Temporal/Restate are additional opt-in choices, not what makes a run durable.
 
 | Runtime | How steps are recorded | Who executes after a crash |
 |---|---|---|
+| **Local** | durable-go journal on local disk (`DataDir`) | The next process that reconnects to the same run — there is no separate server, so nothing resumes an abandoned run until you do (see the [local durability lab](/examples/durable-agent-local)) |
 | **Temporal** | Workflow history + activities | Any worker polling the task queue |
 | **Restate** | Durable Restate steps / awakeables | Any registered SDK endpoint deployment |
 
@@ -58,7 +59,11 @@ This is automatic. No SDK changes are needed beyond selecting Temporal or Restat
 
 When an LLM step retries (after a transient error or process crash), the LLM call restarts on the new attempt. The SDK detects this and signals any connected subscribers to discard token events from the failed attempt. Subscribers transparently receive clean token delivery from the new attempt — no duplicate or garbled output.
 
+On local, this shows up differently on reconnect: instead of clean live token delivery for an already-completed step, you get one coalesced `step_replayed` custom event per completed step (see [Client-side stream recovery](#client-side-stream-recovery) below).
+
 ### Experiencing it
+
+The [Durable Agent (Local)](/examples/durable-agent-local) example is the fastest way to feel this — zero infrastructure, kill and restart the same process, reconnect via `GetAgentStream` (no `WithOffset` — see [Runtime support](#runtime-support)).
 
 The [Durable Agent (Temporal)](/examples/durable-agent) example is a hands-on Temporal lab for this behavior (split `NewAgentWorker` topology). Scenarios 3, 4, and 6 deliberately crash or stop workers mid-run and show:
 
@@ -237,21 +242,24 @@ func (a *Agent) GetAgentRun(ctx context.Context, runID string) (AgentRun, error)
 
 `ErrRunAlreadyCompleted` — returned when the durable run is no longer live. Clear saved state and start a new turn/run.
 
-`ErrRunNotFound` — returned when `runID` is unknown or the runtime cannot reconnect (e.g. `LocalRuntime` after a crash).
+`ErrRunNotFound` / `ErrStreamNotFound` — returned when `runID` is unknown, or on the local runtime when durability is off (`local.DurabilityOff()`) so there is no journal to reconnect to.
 
-`ErrStreamOffsetNotSupported` — returned by `LocalRuntime` for non-zero offsets (no durable stream log).
+`ErrStreamOffsetNotSupported` — returned by the local runtime for any `fromOffset > 0` (no per-token durable log — only step-level replay from the start).
 
 ## Runtime support
 
 | Runtime | Server-side durability | Client-side reconnect |
 |---|---|---|
+| Local | Automatic (default) — durable-go journal on local disk | `GetAgentStream` / `GetAgentRun` — no `WithOffset(n>0)`; reconnect replays step history from the start, then goes live |
 | Temporal | Automatic — workflow history + activities | `GetAgentStream` + `WithOffset`; `GetAgentRun` (while run is live) |
 | Restate | Automatic — journaled steps + awakeables | Same public API as Temporal |
-| Local | No | Same-process handle only — no crash reconnect |
 
 ## Examples
 
 <CardGroup cols={2}>
+  <Card title="Durable Agent (Local)" icon="laptop" href="/examples/durable-agent-local" horizontal>
+    Zero-infrastructure lab: durable by default, kill and restart one process
+  </Card>
   <Card title="Durable Agent (Temporal)" icon="shield" href="/examples/durable-agent" horizontal>
     Temporal lab: crash workers, kill processes, observe durability
   </Card>

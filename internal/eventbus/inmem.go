@@ -13,8 +13,14 @@ import (
 var ErrClosed = errors.New("eventbus: closed")
 
 // Inmem is a process-local pub/sub suitable for streaming and approval fan-in on one host.
+//
+// mu is a RWMutex, not a plain Mutex: Publish holds RLock for its entire send loop (not
+// just the subscriber-list snapshot) so that Subscribe/Unsubscribe/Close — which all take
+// the exclusive Lock — cannot close a subscriber channel while Publish is still sending to
+// it. Concurrent Publish calls still proceed in parallel (RLock is shared); only a
+// close(ch) has to wait for in-flight publishes to finish.
 type Inmem struct {
-	mu     sync.Mutex
+	mu     sync.RWMutex
 	subs   map[string][]chan []byte
 	logger logger.Logger
 	closed bool
@@ -34,14 +40,20 @@ func NewInmem(l logger.Logger) *Inmem {
 var _ EventBus = (*Inmem)(nil)
 
 // Publish sends a copy of data to all subscribers of channel.
+//
+// Holds RLock for the whole call (snapshot + every send), not just the snapshot: this is
+// what keeps Unsubscribe/Close from calling close(ch) on a channel this call is still
+// writing to (see the Inmem.mu doc). Without that, a subscriber unsubscribing mid-publish
+// would race a send against a close on the very same channel — a real data race per the Go
+// memory model, not just a benign timing hazard, even though the runtime's panic on it is
+// deterministic.
 func (c *Inmem) Publish(ctx context.Context, channel string, data []byte) error {
-	c.mu.Lock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	if c.closed {
-		c.mu.Unlock()
 		return ErrClosed
 	}
-	subs := append([]chan []byte(nil), c.subs[channel]...)
-	c.mu.Unlock()
+	subs := c.subs[channel]
 
 	c.logger.Debug(ctx, "eventbus publish", slog.String("channel", channel), slog.Int("payloadLen", len(data)))
 

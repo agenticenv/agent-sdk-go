@@ -6,6 +6,8 @@ cloud.google.com/go/compute/metadata v0.9.0 h1:pDUj4QMoPejqq20dK0Pg2N4yG9zIkYGdB
 cloud.google.com/go/compute/metadata v0.9.0/go.mod h1:E0bWwX5wTnLPedCKqk3pJmVgCBSM6qQI1yTBdEb3C10=
 github.com/a2aproject/a2a-go/v2 v2.5.0 h1:ZdcFoxv+nZTUV0i2ue5hES76YCANFPG9vjqd7vK8yWM=
 github.com/a2aproject/a2a-go/v2 v2.5.0/go.mod h1:NcRp/ZHxgMzDj12/BteIC2gOjljuEBKaGRfEdJ2lNSI=
+github.com/agenticenv/durable-go v0.1.3 h1:wOPrnc3nTqt0cnuhe/zHOCaDqOBl50hbj8cp2yMGo14=
+github.com/agenticenv/durable-go v0.1.3/go.mod h1:Hwbhpa+wfqlMCQZSjoqYMQNtNLl8LNUc/+CEmyF+J1o=
 github.com/alicebob/miniredis/v2 v2.39.0 h1:M7WbmV5BmV56L8KTG0rw6vEQ+woTOghpDgin2xv4A0g=
 github.com/alicebob/miniredis/v2 v2.39.0/go.mod h1:TcL7YfarKPGDAthEtl5NBeHZfeUQj6OXMm/+iu5cLMM=
 github.com/anthropics/anthropic-sdk-go v1.71.0 h1:DK9xG3s5t+xUIOp+R+1LIRjkU/wG57YyQO3630+gYOE=
@@ -86,6 +88,8 @@ github.com/go-openapi/validate v0.26.3 h1:OkfZgLvLDnGP2hrRGD+42WBiPWWkoHomTJ+IVI
 github.com/go-openapi/validate v0.26.3/go.mod h1:7DOOa4raU6NRe7A8VQSKbm3VcuUIioREYHFt+er9Sk8=
 github.com/go-viper/mapstructure/v2 v2.5.0 h1:vM5IJoUAy3d7zRSVtIwQgBj7BiWtMPfmPEgAXnvj1Ro=
 github.com/go-viper/mapstructure/v2 v2.5.0/go.mod h1:oJDH3BJKyqBA2TXFhDsKDGDTlndYOZ6rGS0BRZIxGhM=
+github.com/gofrs/flock v0.13.1 h1:jjREztyBeSKBZYAC+mgc1laB+xsgy4kYMf3FbKF2UBo=
+github.com/gofrs/flock v0.13.1/go.mod h1:sf4BFiHwnvgxa25DlQoDqXQnwRMEOwqxRq37P6MzzmE=
 github.com/gogo/protobuf v1.3.2 h1:Ov1cvc58UF3b5XjBnZv7+opcTcQFZebYjWzi34vdm4Q=
 github.com/gogo/protobuf v1.3.2/go.mod h1:P1XiOD3dCwIKUDQYPy72D8LYyHL2YPYrpS2s69NZV8Q=
 github.com/golang-jwt/jwt/v5 v5.3.1 h1:kYf81DTWFe7t+1VvL7eS+jKFVWaUnK9cB1qbwn63YCY=

@@ -1,0 +1,70 @@
+---
+title: "Durable Agent (Local)"
+sidebarTitle: "Durable Agent (Local)"
+description: "Test local-runtime durability with a single agent process — kill mid-stream and reconnect from a saved offset, no server required"
+---
+
+The **`durable_agent/local`** example is an interactive **zero-infrastructure lab**. The in-process runtime is durable by default via [durable-go](https://github.com/agenticenv/durable-go) — no server, no worker, no client/worker split. Kill the agent mid-stream, restart it from the same working directory, and reconnect with `GetAgentStream` (no `WithOffset` — local's stream only supports `fromOffset` 0; reconnect replays step history from the start).
+
+Use it after [In-Process runtime](/runtimes/in-process) when you need to **feel** durable-by-default in action, with nothing to install. For the split worker/agent Temporal lab, see [Durable Agent (Temporal)](/examples/durable-agent); for the single-process Restate lab, see [Durable Agent (Restate)](/examples/durable-agent-restate).
+
+Source: [`examples/durable_agent/local/`](https://github.com/agenticenv/agent-sdk-go/tree/main/examples/durable_agent/local)
+
+<Note>
+Step-by-step exercises: **[`examples/durable_agent/local/README.md`](https://github.com/agenticenv/agent-sdk-go/blob/main/examples/durable_agent/local/README.md)**.
+</Note>
+
+## Architecture
+
+| Process | Entry | SDK pattern |
+|---|---|---|
+| **Agent** | `durable_agent/local` | `NewAgent` — durable by default, no `WithLocalConfig` needed |
+
+Everything runs in one process. The durable-go journal (`./agent_data/local-durable-agent`) on local disk *is* the durability mechanism — there is no separate server to keep running between kill and restart.
+
+Streaming and reconnect use the same public `GetAgentStream` / `GetAgentRun` APIs as Temporal/Restate, minus `WithOffset(n>0)`: reconnect always replays already-completed steps as one coalesced message each, not the original token-by-token stream, and is not seekable to an arbitrary position (see [Durable Execution](/advanced/durable-execution)).
+
+State file: `/tmp/durable_agent_local_runstate.json`.
+
+## Before you start
+
+From **`examples/`**, after [Configuration](/examples/configuration) (just an LLM provider key — no runtime env vars needed):
+
+```bash
+go run ./durable_agent/local
+```
+
+No `task infra:*` step, no server to start.
+
+## Durability scenarios
+
+| Scenario | What to try | What you learn |
+|---|---|---|
+| **1. Happy path** | REPL + short prompt | End-to-end local durable stream |
+| **2. Kill mid-stream** | `pkill -SIGKILL` during a long prompt; restart from the same directory; answer `y` to reconnect | `GetAgentStream` resumes a genuinely live run (no `WithOffset`) |
+| **3. Graceful Ctrl+C** | Ctrl+C during a long prompt; restart; answer `y` to reconnect | **Not** the same as a crash — `a.Close()` cancels the in-flight run; reconnect gets `ErrRunAlreadyCompleted` instead of resuming |
+| **4. Already finished** | Reconnect once to let it finish, then replay a stale saved state | `ErrRunAlreadyCompleted` via the more obvious path — local has no server to finish an abandoned run for you, so you must reconnect once first |
+| **5. `DURABILITY=off`** | Start with `DURABILITY=off`, kill mid-stream, restart | `ErrStreamNotFound` — no journal existed for that run; this is what durable-by-default saves you from |
+
+Full steps: [README](https://github.com/agenticenv/agent-sdk-go/blob/main/examples/durable_agent/local/README.md). Protocol details: [Durable Execution](/advanced/durable-execution).
+
+## Learn more
+
+<CardGroup cols={2}>
+
+  <Card title="Durable Execution" icon="shield-check" href="/advanced/durable-execution" horizontal>
+    Shared reconnect protocol (local, Temporal, and Restate)
+  </Card>
+
+  <Card title="In-Process Runtime" icon="laptop" href="/runtimes/in-process" horizontal>
+    Durability knobs — DataDir, AutoPurgeAge, Timeout, opt-out
+  </Card>
+
+  <Card title="Durable Agent (Temporal)" icon="server" href="/examples/durable-agent" horizontal>
+    Split worker/agent crash lab
+  </Card>
+
+  <Card title="Durable Agent (Restate)" icon="cube" href="/examples/durable-agent-restate" horizontal>
+    Single-process embedded-endpoint crash lab
+  </Card>
+</CardGroup>

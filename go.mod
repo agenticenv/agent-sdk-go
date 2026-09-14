@@ -1,6 +1,6 @@
 module github.com/agenticenv/agent-sdk-go
 
-go 1.26.0
+go 1.26.5
 
 toolchain go1.26.6
 
@@ -10,6 +10,7 @@ replace github.com/agenticenv/agent-sdk-go/pkg/llm => ./pkg/llm
 
 require (
 	github.com/a2aproject/a2a-go/v2 v2.5.0
+	github.com/agenticenv/durable-go v0.1.3
 	github.com/alicebob/miniredis/v2 v2.39.0
 	github.com/anthropics/anthropic-sdk-go v1.71.0
 	github.com/golang/mock v1.6.0
@@ -87,6 +88,7 @@ require (
 	github.com/go-openapi/swag/yamlutils v0.28.0 // indirect
 	github.com/go-openapi/validate v0.26.3 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
+	github.com/gofrs/flock v0.13.1 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect

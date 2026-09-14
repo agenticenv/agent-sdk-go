@@ -8,6 +8,10 @@ coverage.out
 coverage.html
 reports/
 
+# durable-go journal directories (local runtime's default DataDir; see
+# internal/runtime/local.LocalConfig.DataDir godoc)
+agent_data/
+
 # Node.js / Next.js (examples such as agent_copilotkit/ui)
 node_modules/
 .next/

@@ -1,6 +1,8 @@
 // Package runtime holds the opt-in execution-runtime factory contract used by
 // [github.com/agenticenv/agent-sdk-go/pkg/agent] and the temporal/restate
-// subpackages. Local runtime is built directly by pkg/agent and does not use
+// subpackages, plus the hook [pkg/agent/runtime/local] uses to reach pkg/agent's
+// unexported agentConfig fields for local's built-in (not opt-in) durability config.
+// Local runtime itself is still built directly by pkg/agent and does not implement
 // RuntimeFactory.
 package runtime
 
@@ -10,6 +12,7 @@ import (
 	"context"
 
 	internal_runtime "github.com/agenticenv/agent-sdk-go/internal/runtime"
+	internal_local "github.com/agenticenv/agent-sdk-go/internal/runtime/local"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
@@ -73,4 +76,29 @@ func WithRuntimeFactory(f RuntimeFactory) RuntimeFactoryOption {
 		panic("agent/runtime: pkg/agent not initialized")
 	}
 	return withRuntimeFactoryHook(f)
+}
+
+// LocalConfigOption is an opaque agent option. Concrete type is pkg/agent.Option;
+// [pkg/agent/runtime/local] type-asserts when returning to agent.NewAgent.
+type LocalConfigOption any
+
+// withLocalConfigHook is installed by pkg/agent on init.
+var withLocalConfigHook func(*internal_local.LocalConfig) LocalConfigOption
+
+// RegisterWithLocalConfigHook is called once from pkg/agent so
+// [github.com/agenticenv/agent-sdk-go/pkg/agent/runtime/local] can attach durable-go
+// config for the (always-built-in, non-opt-in) local runtime without an exported
+// agent.WithLocalConfig — the same reasoning as [RegisterWithRuntimeFactoryHook], applied
+// to local instead of Temporal/Restate.
+func RegisterWithLocalConfigHook(h func(*internal_local.LocalConfig) LocalConfigOption) {
+	withLocalConfigHook = h
+}
+
+// WithLocalConfig attaches durable-go configuration for the local runtime.
+// Used by pkg/agent/runtime/local only.
+func WithLocalConfig(cfg *internal_local.LocalConfig) LocalConfigOption {
+	if withLocalConfigHook == nil {
+		panic("agent/runtime: pkg/agent not initialized")
+	}
+	return withLocalConfigHook(cfg)
 }

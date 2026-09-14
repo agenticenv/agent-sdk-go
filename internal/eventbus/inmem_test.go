@@ -3,6 +3,7 @@ package eventbus
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
@@ -95,4 +96,42 @@ func TestInmem_Close_ClosesSubscribers(t *testing.T) {
 	if _, _, err := c.Subscribe(ctx, "ch"); !errors.Is(err, ErrClosed) {
 		t.Fatalf("Subscribe after Close: got %v, want ErrClosed", err)
 	}
+}
+
+// TestInmem_PublishRacesUnsubscribe reproduces the CI panic: Publish snapshots a
+// channel's subscriber list, then sends to each one without the lock held. If a
+// subscriber's closeFn (Unsubscribe) removes+closes its channel in that window, Publish
+// must not panic with "send on closed channel" — it should just drop that delivery.
+// Run with -race; a single iteration is not guaranteed to hit the window, so this fans
+// out many concurrent publish/unsubscribe pairs on fresh subscriptions each round.
+func TestInmem_PublishRacesUnsubscribe(t *testing.T) {
+	c := NewInmem(logger.NoopLogger())
+	ctx := context.Background()
+
+	const rounds = 200
+	var wg sync.WaitGroup
+	for i := 0; i < rounds; i++ {
+		ch, closeFn, err := c.Subscribe(ctx, "ch")
+		if err != nil {
+			t.Fatalf("Subscribe: %v", err)
+		}
+
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			if err := c.Publish(ctx, "ch", []byte("x")); err != nil {
+				t.Errorf("Publish: %v", err)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			_ = closeFn()
+		}()
+		// Drain to avoid blocking Publish on a full buffer, ignoring close.
+		go func() { //nolint:errcheck
+			for range ch {
+			}
+		}()
+	}
+	wg.Wait()
 }

@@ -1,10 +1,10 @@
 ---
 title: "Runtimes Overview"
 sidebarTitle: "Overview"
-description: "Choose between in-process, Temporal, and Restate runtimes based on your durability and infrastructure requirements"
+description: "Choose between in-process, Temporal, and Restate runtimes based on your distribution and infrastructure requirements"
 ---
 
-Agent SDK for Go supports three execution backends. **In-process is the default** — pass no Temporal or Restate options. **Temporal** and **Restate** are opt-in durable backends — import `pkg/agent/runtime/temporal` or `pkg/agent/runtime/restate` and add the matching config option when you need durable, production-grade execution.
+Agent SDK for Go supports three execution backends. **In-process is the default** — pass no Temporal or Restate options — and is **durable by default** via [durable-go](https://github.com/agenticenv/durable-go), with no extra infrastructure. **Temporal** and **Restate** are opt-in **distributed** backends — import `pkg/agent/runtime/temporal` or `pkg/agent/runtime/restate` and add the matching config option when you need multi-process/horizontally-scaled execution.
 
 Your agent code (`NewAgent`, tools, prompts, streaming) stays the same. Only the configuration changes.
 
@@ -13,36 +13,41 @@ Your agent code (`NewAgent`, tools, prompts, streaming) stays the same. Only the
 | | In-process | Temporal | Restate |
 |---|---|---|---|
 | **Enable** | Default — omit Temporal/Restate options | `temporal.WithTemporalConfig` or `temporal.WithTemporalClient` | `restate.WithRestateConfig` |
-| **Infrastructure** | None beyond your LLM provider | Running Temporal server or Temporal Cloud | Running Restate server or Restate Cloud |
+| **Infrastructure** | None beyond your LLM provider — durable-go journals to local disk | Running Temporal server or Temporal Cloud | Running Restate server or Restate Cloud |
 | **Where the loop runs** | Inside your Go process | Durable workflow + activities | Durable Restate invocation + embedded SDK endpoint |
-| **Crash recovery** | No — run is lost if the process exits | Yes — workflow history replays from last step | Yes — journal resumes from last completed step |
+| **Crash recovery** | Yes by default — durable-go journal resumes from last completed step (`local.WithLocalConfig` to tune or opt out) | Yes — workflow history replays from last step | Yes — journal resumes from last completed step |
 | **Horizontal scale** | Single process only | Add workers on task queues | Register multiple endpoint deployments |
 | **Split client / worker** | Not applicable | `DisableLocalWorker` + `NewAgentWorker` | Not applicable — endpoint is embedded in `NewAgent` |
-| **Feature parity** | Full (except durability / reconnect) | Full | Full |
+| **Feature parity** | Full | Full | Full |
+| **Reconnect fidelity** | Step-granularity replay (one coalesced message per completed step), not the original tokens | Token-level — original AG-UI events replay | Token-level — original AG-UI events replay |
 | **Conversation backend** | In-memory (single process) | Redis for split-process deployments | In-memory or Redis as needed for your topology |
 
 ## When to use in-process
 
-- Short-lived runs where crash recovery is not needed
+- Any single-process deployment that still wants crash recovery — this is the default, not a tradeoff
 - Zero-infrastructure deployments (serverless, scripts, single binary)
+- Skip it only if you need horizontal scaling or a client/worker split — that's what Temporal/Restate add
 
-See [In-Process](/runtimes/in-process) for details and limitations.
+See [In-Process](/runtimes/in-process) for details, the durability knobs, and the one remaining limitation (reconnect fidelity).
 
 ## When to use Temporal
 
-- Agent runs must survive process crashes, deploys, and restarts
 - You need horizontal scaling by adding workers on a task queue
 - You want to split the agent client and worker across separate processes (`NewAgentWorker`)
-- Long-running agent sessions require durable orchestration on Temporal
+- Reconnect needs token-level fidelity (original AG-UI events replay, not coalesced steps)
+- You want mature, battle-tested workflow orchestration tooling (Temporal Web UI, etc.)
+
+Crash recovery alone is not a reason to reach for Temporal — in-process already has it.
 
 See [Temporal](/runtimes/temporal) for cluster setup and SDK connection.
 
 ## When to use Restate
 
-- Agent runs must survive process crashes, deploys, and restarts
-- You prefer Restate’s ingress + embedded endpoint model
-- You want durable streaming and approvals with the same public `Run` / `Stream` / reconnect APIs
-- Long-running agent sessions require durable orchestration on Restate
+- You want durable orchestration with Restate’s ingress + embedded endpoint model
+- You need multiple registered endpoint deployments for scale
+- Reconnect needs token-level fidelity (original AG-UI events replay, not coalesced steps)
+
+Crash recovery alone is not a reason to reach for Restate — in-process already has it.
 
 See [Restate](/runtimes/restate) for server setup and SDK connection.
 
@@ -85,11 +90,11 @@ Provide **either** Temporal options **or** `restate.WithRestateConfig`, not both
 ## Switching runtimes
 
 <Tip>
-Start in-process during development and add Temporal or Restate for production with a single config change. The agent code — tools, prompts, streaming, approvals — does not change.
+In-process is already durable in development and production. Add Temporal or Restate only when you need distributed/horizontally-scaled execution — the agent code (tools, prompts, streaming, approvals) does not change.
 </Tip>
 
-1. Develop with no Temporal or Restate options
-2. Add `temporal.WithTemporalConfig` (or `WithTemporalClient`) **or** `restate.WithRestateConfig` for production
+1. Start in-process with no Temporal or Restate options — durable by default
+2. Add `temporal.WithTemporalConfig` (or `WithTemporalClient`) **or** `restate.WithRestateConfig` when you need multi-process/horizontal scale
 3. If you use conversation with a Temporal split-process deployment (agent + separate worker), switch from in-memory to Redis. See [Conversation](/features/conversation)
 
 ## Related pages

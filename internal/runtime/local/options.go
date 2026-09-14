@@ -60,6 +60,29 @@ func WithApprovalHandler(fn types.ApprovalHandler) Option {
 	}
 }
 
+// WithLocalConfig sets durable-go execution configuration. Nil (or never calling this
+// option) means the zero-value [LocalConfig] — durable by default. See [LocalConfig] for
+// field semantics.
+func WithLocalConfig(cfg *LocalConfig) Option {
+	return func(r *LocalRuntime) {
+		r.localConfig = cfg
+	}
+}
+
+// ToolsResolver resolves the static tool list for a run with no live per-request Tools —
+// used to rehydrate a resumed durable run after a process restart (see
+// [LocalRuntime.toolsResolver]). Matches [github.com/agenticenv/agent-sdk-go/pkg/agent/runtime.RuntimeParams.ToolsResolver].
+type ToolsResolver func(ctx context.Context) ([]interfaces.Tool, error)
+
+// WithToolsResolver sets the callback [LocalRuntime.GetRunHandle] / [LocalRuntime.GetStreamHandle]
+// use to rebuild a resumed durable run's tool list. Optional — nil means a resumed run has no
+// tools (LLM calls still work; tool calls the LLM attempts will run with an empty tool list).
+func WithToolsResolver(fn ToolsResolver) Option {
+	return func(r *LocalRuntime) {
+		r.toolsResolver = fn
+	}
+}
+
 func buildLocalRuntime(opts ...Option) (*LocalRuntime, error) {
 	r := &LocalRuntime{logger: logger.NoopLogger()}
 	for _, opt := range opts {

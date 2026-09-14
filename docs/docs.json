@@ -195,6 +195,7 @@
           {
             "group": "Durable & Distributed",
             "pages": [
+              "examples/durable-agent-local",
               "examples/durable-agent",
               "examples/durable-agent-restate",
               "examples/agent-worker",

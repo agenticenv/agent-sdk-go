@@ -1,7 +1,7 @@
 ---
 title: "Agent SDK for Go"
 sidebarTitle: "Introduction"
-description: "Build AI agents in-process, or crash-resilient with Temporal or Restate."
+description: "Build AI agents in Go, crash-resilient by default — scale out with Temporal or Restate when you need to."
 ---
 
 **Agent SDK for Go** is a Go library for building production AI agents. It handles the full execution loop — LLM calls, tool use, approvals, memory, multi-agent delegation — so you write configuration and business logic, not plumbing.
@@ -28,7 +28,7 @@ result, _ := agentRun.Get(ctx)
 fmt.Println(result.Content) // Paris.
 ```
 
-That's it — configure once, call repeatedly. Tools, memory, streaming, and durable execution are additive options — not new APIs to learn.
+That's it — configure once, call repeatedly. Tools, memory, and streaming are additive options — not new APIs to learn. This agent is already durable: it journals every LLM call and tool execution to disk via [durable-go](https://github.com/agenticenv/durable-go), no extra config needed.
 
 ## Install
 
@@ -36,27 +36,27 @@ That's it — configure once, call repeatedly. Tools, memory, streaming, and dur
 go get github.com/agenticenv/agent-sdk-go@latest
 ```
 
-Go 1.26+. OpenAI API key required for the example above; Anthropic and Gemini are also built in. Temporal and Restate are optional.
+Go 1.26+. OpenAI API key required for the example above; Anthropic and Gemini are also built in. Temporal and Restate are optional — they add distributed, horizontally-scaled execution, not durability itself.
 
 ## Why Agent SDK for Go
 
 - **Idiomatic Go** — functional options, typed interfaces, no reflection magic. Swap any component (LLM client, memory backend, approval policy) by passing a different option.
-- **Same code, three runtimes** — run in-process for development with no infrastructure, then add `temporal.WithTemporalConfig` (from `pkg/agent/runtime/temporal`) or `restate.WithRestateConfig` (from `pkg/agent/runtime/restate`) for crash-proof durable execution in production. Nothing else changes.
-- **Concurrent by default** — one `Agent` instance handles parallel `Run` and `Stream` calls; durable runtimes issue each a unique run automatically.
+- **Durable by default, no infrastructure** — the in-process runtime journals every step via [durable-go](https://github.com/agenticenv/durable-go); kill the process and reconnect after a restart. Add `temporal.WithTemporalConfig` (from `pkg/agent/runtime/temporal`) or `restate.WithRestateConfig` (from `pkg/agent/runtime/restate`) only when you need horizontal scale or a client/worker split. Nothing else changes.
+- **Concurrent by default** — one `Agent` instance handles parallel `Run` and `Stream` calls; every runtime issues each a unique run automatically.
 - **Protocol-native integrations** — MCP tool servers, A2A agent-to-agent delegation, and AG-UI streaming events are first-class, not adapters bolted on after the fact.
 - **Middleware hooks** — intercept LLM calls, tool use, retrieval, and memory at any lifecycle point for logging, PII scrubbing, and guardrails without touching agent logic.
 - **Cache-aware requests** — LLM requests are structured for provider caching, with Anthropic prompt-cache breakpoints to reduce cost on multi-turn runs.
 
 ## Runtimes
 
-Run agents locally for development, or with Temporal or Restate for production-grade durability and fault tolerance.
+Run agents in-process — durable by default, no infrastructure — or add Temporal or Restate when you need horizontal scale or a client/worker split.
 
 | | In-process (default) | Temporal | Restate |
 |---|---|---|---|
 | Setup | No infra | Running Temporal server | Running Restate server |
-| Durability | None | Survives crashes and restarts | Survives crashes and restarts |
+| Durability | Survives crashes and restarts (durable-go journal); opt out with `local.DurabilityOff()` | Survives crashes and restarts | Survives crashes and restarts |
 | Scale | Single process | Horizontal worker pools | Multiple registered endpoints |
-| When | Dev, scripts, low-volume APIs | Production, long-running tasks | Production, long-running tasks |
+| When | Dev, scripts, low-volume APIs, and production single-process deployments | Production, long-running, horizontally-scaled tasks | Production, long-running, horizontally-scaled tasks |
 
 Add `temporal.WithTemporalConfig` or `restate.WithRestateConfig` to switch. See [Runtimes](/runtimes/overview).
 

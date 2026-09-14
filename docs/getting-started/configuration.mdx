@@ -16,7 +16,7 @@ a, err := agent.NewAgent(
 )
 ```
 
-A durable runtime connection is **optional**. Omit Temporal and Restate options to use the in-process runtime; import `pkg/agent/runtime/temporal` or `pkg/agent/runtime/restate` and add the matching config option for durable execution. All other options work identically across runtimes.
+A Temporal or Restate connection is **optional**. Omit Temporal and Restate options to use the in-process runtime, which is already durable by default (via `pkg/agent/runtime/local`'s durable-go journal, no config needed); import `pkg/agent/runtime/temporal` or `pkg/agent/runtime/restate` and add the matching config option only when you need distributed, horizontally-scaled execution. All other options work identically across runtimes.
 
 ## Core options
 

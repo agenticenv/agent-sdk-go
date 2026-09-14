@@ -3,6 +3,7 @@ package local
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/agenticenv/agent-sdk-go/internal/types"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
+	durable "github.com/agenticenv/durable-go"
 	"github.com/google/uuid"
 )
 
@@ -38,8 +40,71 @@ type LocalRuntime struct {
 	// pendingApprovals holds token → resolve channel for tools awaiting human approval.
 	// Used by approve() to unblock executeSingleTool when the caller responds via
 	// StreamHandle.Approve (streaming path). Thread-safe: parallel tool calls each register
-	// their own token.
+	// their own token. Only used on the non-durable path — see pendingApprovals doc on
+	// approve() for how durable mode branches to durable.CompleteStep instead.
 	pendingApprovals sync.Map // key: string token, value: chan types.ApprovalStatus
+
+	// --- durable-go wiring (see durable_engine.go). Zero values (engine nil) behave
+	// exactly like the pre-durability runtime: Run/Stream/GetRunHandle/GetStreamHandle
+	// take the original in-memory-only paths below unchanged. ---
+
+	// localConfig is the durability configuration from [WithLocalConfig]. Nil means the
+	// zero-value LocalConfig (durable by default with all-default knobs).
+	localConfig *LocalConfig
+	// engine is the durable-go engine backing this runtime, or nil when durability is
+	// disabled ([LocalConfig.Durability] false).
+	engine *durable.Engine
+	// ownsEngine is true when this runtime constructed engine (LocalConfig.Engine was not
+	// set) and must Close it; false for a caller-supplied Engine.
+	ownsEngine bool
+	// taskID is the durable-go taskID this runtime registers itself under (sanitized
+	// agent name). Only meaningful when engine != nil.
+	taskID string
+	// toolsResolver resolves the static (registry/MCP/A2A/sub-agent-tool-schema) tool list
+	// for a run that has no live per-request Tools available — used to rehydrate a resumed
+	// durable run after a process restart. May be nil (resumed runs then see no tools).
+	toolsResolver ToolsResolver
+	// liveRuns holds the non-JSON-serializable per-run extras (Tools, SubAgentRoutes,
+	// ChannelName, EventTypes) for runs started in this process via Run/Stream, keyed by
+	// runID, so the durable-go Task.Exec closure (registered once, long before any
+	// particular run's Tools are known) can look them up when it actually executes.
+	// Entries are added just before durable.RunTask and removed when Task.Exec returns.
+	liveRuns sync.Map // key: string runID, value: *liveRunExtras
+
+	// liveDrivers tracks which runID currently has an active in-process
+	// driveDurableRun/driveDurableStream goroutine (the "driver of record"), so a
+	// same-process GetRunHandle/GetStreamHandle reconnect can attach to it instead of
+	// starting a second durable.RunTask call for the same run — see registerDriver.
+	// Entries are added by registerDriver and removed by the driver goroutine when done.
+	liveDrivers sync.Map // key: string runID, value: driverHandle
+}
+
+// driverHandle is the subset of *runHandle/*streamHandle that registerDriver's callers
+// need to piggyback on an already-live in-process driver: just wait for its result.
+type driverHandle interface {
+	Get(ctx context.Context) (*types.AgentRunResult, error)
+}
+
+// registerDriver atomically registers handle as runID's live in-process driver, or
+// discovers that one already exists.
+//
+// ok is true when handle is now the driver of record: the caller must actually drive the
+// run (call durable.RunTask via startDurableRun) and defer rt.liveDrivers.Delete(runID)
+// when done. ok is false when existing is already driving: the caller must not call
+// durable.RunTask again — durable-go's per-(taskID,runID) lockRun would just block the
+// second call until the first finishes, then fast-return the already-computed output, so
+// nothing is gained — and worse, each independent driver publishes its own terminal
+// lifecycle event once its RunTask.Get returns, so a second driver means a same-process
+// reconnect subscriber sees RUN_FINISHED twice. Instead, wait on existing.Get and mirror
+// its result onto handle via markDone; the live driver's own single publish already
+// reaches this new subscriber's channel (subscribed before this call, per the existing
+// Run/Stream/GetRunHandle/GetStreamHandle ordering).
+func (rt *LocalRuntime) registerDriver(runID string, handle driverHandle) (existing driverHandle, ok bool) {
+	actual, loaded := rt.liveDrivers.LoadOrStore(runID, handle)
+	if loaded {
+		return actual.(driverHandle), false
+	}
+	return nil, true
 }
 
 // NewLocalRuntime constructs a LocalRuntime from functional options.
@@ -48,9 +113,13 @@ func NewLocalRuntime(opts ...Option) (*LocalRuntime, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := r.setupDurability(); err != nil {
+		return nil, err
+	}
 	r.logger.Info(context.Background(), "runtime created",
 		slog.String("scope", "runtime"),
-		slog.String("name", r.AgentSpec.Name))
+		slog.String("name", r.AgentSpec.Name),
+		slog.Bool("durable", r.engine != nil))
 	r.eventbus = eventbus.NewInmem(r.logger)
 	r.ownsEventBus = true
 	return r, nil
@@ -136,8 +205,50 @@ func (rt *LocalRuntime) Run(ctx context.Context, req *sdkruntime.RunRequest) (sd
 	rt.shareEventBusWithSubAgents(req.SubAgents)
 
 	handle := newRunHandle(runID, rt, runCancel)
+	if rt.engine != nil {
+		handle.setDurable(rt.engine, rt.taskID)
+		dto := rt.buildDurableRunInput(ctx, req, false)
+		rt.storeLiveRunExtras(runID, req.Tools, req.SubAgents, "")
+		go rt.driveDurableRun(runCtx, dto, handle)
+		return handle, nil
+	}
 	go rt.driveRun(runCtx, req, handle)
 	return handle, nil
+}
+
+// buildDurableRunInput resolves the memory scope (using the caller's ctx — durable-go's
+// own execution ctx is disconnected from it, see durableExec) and assembles the resume
+// DTO for a fresh durable Run/Stream call. isStream selects the CUSTOM-events-only
+// (Run) vs. all-events-by-default (Stream) EventTypes default, matching driveRun/driveStream.
+func (rt *LocalRuntime) buildDurableRunInput(ctx context.Context, req *sdkruntime.RunRequest, isStream bool) durableRunInput {
+	memoryScope, memErr := rt.ResolveMemoryScope(ctx)
+	if memErr != nil {
+		rt.logger.Warn(ctx, "runtime memory scope resolve failed, continuing with empty scope",
+			slog.String("scope", "runtime"),
+			slog.Any("error", memErr))
+		memoryScope = interfaces.MemoryScope{}
+	}
+
+	var eventTypes []events.AgentEventType
+	if isStream {
+		eventTypes = []events.AgentEventType{events.AgentEventAll}
+		if len(req.EventTypes) > 0 {
+			eventTypes = req.EventTypes
+		}
+	} else if rt.approvalHandler != nil {
+		eventTypes = []events.AgentEventType{events.AgentEventTypeCustom}
+	}
+
+	return durableRunInput{
+		UserPrompt:       req.UserPrompt,
+		ConversationID:   req.ConversationID,
+		IsStream:         isStream,
+		StreamingEnabled: req.EnableLLMStream,
+		EventTypes:       eventTypes,
+		MaxSubAgentDepth: req.MaxSubAgentDepth,
+		MemoryScope:      memoryScope,
+		Budget:           rt.AgentConfig.Limits.Budget,
+	}
 }
 
 // driveRun drives the agent loop for a [runHandle] and signals completion via [runHandle.markDone].
@@ -205,13 +316,48 @@ func (rt *LocalRuntime) driveRun(runCtx context.Context, req *sdkruntime.RunRequ
 	}, nil)
 }
 
-// GetRunHandle always returns [types.ErrRunNotFound]. LocalRuntime does not
-// track runs durably; same-process live handles are managed by the agent run registry.
-// After a process crash there is nothing to reconnect to.
-// Never returns [types.ErrRunAlreadyCompleted] — Local cannot distinguish finished vs
-// unknown; the agent run registry handles in-process terminal checks.
-func (rt *LocalRuntime) GetRunHandle(_ context.Context, _ string) (sdkruntime.RunHandle, error) {
-	return nil, types.ErrRunNotFound
+// GetRunHandle reconnects to runID.
+//
+// Non-durable: always returns [types.ErrRunNotFound] — LocalRuntime tracks nothing
+// durably; same-process live handles are managed by the agent run registry, and after a
+// process crash there is nothing to reconnect to.
+//
+// Durable ([LocalConfig.Durability] true, the default): looks up runID's persisted
+// TaskInfo. A terminal run (Completed/Failed, including a cancelled run — see
+// durable.ErrRunCancelled) returns [types.ErrRunAlreadyCompleted]; an unknown runID
+// returns [types.ErrRunNotFound]. Otherwise re-drives it via durable.RunTask, which
+// resumes from wherever it left off — fast-replaying already-completed steps (no LLM/tool
+// re-calls) and continuing live from the first new step. Tools are rehydrated via
+// [ToolsResolver] when set (nil otherwise — see durableExec); sub-agent delegation
+// routes are not recoverable across a process restart on this interface (no request
+// payload survives it) — a delegation tool call on a resumed run gets the existing
+// "Sub-agent delegation not available for this runtime" fallback message.
+func (rt *LocalRuntime) GetRunHandle(ctx context.Context, runID string) (sdkruntime.RunHandle, error) {
+	if rt.engine == nil {
+		return nil, types.ErrRunNotFound
+	}
+	// Empty runID must never reach durable.RunTask (via driveDurableRun below): durable-go
+	// treats "" as "resume the oldest Running/Waiting run for this taskID" — the wrong run
+	// entirely when more than one is in flight. Reject it here instead.
+	if strings.TrimSpace(runID) == "" {
+		return nil, types.ErrRunNotFound
+	}
+	info, ok, err := rt.engine.GetTask(ctx, rt.taskID, runID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, types.ErrRunNotFound
+	}
+	if info.Status == durable.StatusCompleted || info.Status == durable.StatusFailed {
+		return nil, types.ErrRunAlreadyCompleted
+	}
+
+	runCtx, runCancel := context.WithCancel(ctx)
+	handle := newRunHandle(runID, rt, runCancel)
+	handle.setDurable(rt.engine, rt.taskID)
+	go rt.driveDurableRun(runCtx, durableRunInput{}, handle)
+	return handle, nil
 }
 
 // OnApproval is a deprecated Runtime-interface wrapper around [LocalRuntime.approve].
@@ -270,6 +416,16 @@ func (rt *LocalRuntime) Stream(ctx context.Context, req *sdkruntime.RunRequest) 
 	}
 
 	handle := newStreamHandle(runID, rt, runCancel, eventCh)
+	if rt.engine != nil {
+		handle.setDurable(rt.engine, rt.taskID)
+		dto := rt.buildDurableRunInput(ctx, req, true)
+		rt.storeLiveRunExtras(runID, req.Tools, req.SubAgents, channel)
+		go func() {
+			defer func() { _ = closeSub() }()
+			rt.driveDurableStream(runCtx, dto, handle, channel, threadID, true)
+		}()
+		return handle, nil
+	}
 	rt.publishLifecycleEvent(channel, events.NewAgentRunStartedEvent(threadID, runID))
 	go rt.driveStream(runCtx, req, handle, channel, threadID, closeSub)
 	return handle, nil
@@ -352,22 +508,86 @@ func (rt *LocalRuntime) driveStream(
 	handle.markDone(agentRunResult, nil)
 }
 
-// GetStreamHandle always returns [types.ErrStreamNotFound]. LocalRuntime does not
-// track streams durably; same-process live handles are managed by the agent stream registry.
-// After a process crash there is nothing to reconnect to.
-// Never returns [types.ErrRunAlreadyCompleted] — Local cannot distinguish finished vs
-// unknown; the agent stream registry handles in-process terminal checks.
-func (rt *LocalRuntime) GetStreamHandle(_ context.Context, _ string) (sdkruntime.StreamHandle, error) {
-	return nil, types.ErrStreamNotFound
+// GetStreamHandle reconnects to runID's stream.
+//
+// Non-durable: always returns [types.ErrStreamNotFound] — LocalRuntime tracks nothing
+// durably; same-process live handles are managed by the agent stream registry, and after
+// a process crash there is nothing to reconnect to.
+//
+// Durable ([LocalConfig.Durability] true, the default): looks up runID's persisted
+// TaskInfo the same way [LocalRuntime.GetRunHandle] does ([types.ErrStreamNotFound] /
+// [types.ErrRunAlreadyCompleted] in place of the Run-path sentinels). On success,
+// subscribes a fresh channel, replays already-completed steps as one coarse
+// [events.AgentCustomEventNameStepReplayed] event each (see replayStepHistory — step
+// granularity only, never the original token-by-token stream; document this to callers),
+// then re-drives the run via durable.RunTask so anything not yet done continues live on
+// that same channel. See [LocalRuntime.GetRunHandle] for the tools/sub-agent-routes
+// rehydration caveat, which applies identically here.
+func (rt *LocalRuntime) GetStreamHandle(ctx context.Context, runID string) (sdkruntime.StreamHandle, error) {
+	if rt.engine == nil {
+		return nil, types.ErrStreamNotFound
+	}
+	// See the identical guard in GetRunHandle: an empty runID must never reach
+	// durable.RunTask (via driveDurableStream below).
+	if strings.TrimSpace(runID) == "" {
+		return nil, types.ErrStreamNotFound
+	}
+	info, ok, err := rt.engine.GetTask(ctx, rt.taskID, runID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, types.ErrStreamNotFound
+	}
+	if info.Status == durable.StatusCompleted || info.Status == durable.StatusFailed {
+		return nil, types.ErrRunAlreadyCompleted
+	}
+
+	threadID := runID
+	channel := localChannelName(runID)
+	runCtx, runCancel := context.WithCancel(ctx)
+	eventCh, closeSub, err := rt.subscribeToAgentEvents(runCtx, channel)
+	if err != nil {
+		runCancel()
+		return nil, err
+	}
+	rt.replayStepHistory(runCtx, runID, channel)
+
+	handle := newStreamHandle(runID, rt, runCancel, eventCh)
+	handle.setDurable(rt.engine, rt.taskID)
+	go func() {
+		defer func() { _ = closeSub() }()
+		rt.driveDurableStream(runCtx, durableRunInput{}, handle, channel, threadID, false)
+	}()
+	return handle, nil
 }
 
-// approve resolves a pending tool approval registered during a streaming run.
-// When a tool requires approval, executeSingleTool registers a token and blocks; the
-// caller receives a CUSTOM event on the stream with that token and calls
-// [sdkruntime.StreamHandle.Approve] to unblock.
-// Returns [types.ErrApprovalAlreadyResolved] when the token is unknown or was already
-// resolved (same sentinel as Temporal when CompleteActivity reports not found).
-func (rt *LocalRuntime) approve(_ context.Context, approvalToken string, status types.ApprovalStatus) error {
+// approve resolves a pending tool, sub-agent, or budget approval identified by
+// approvalToken with status.
+//
+// Durable runtimes (engine != nil) always use durable-go tokens: approvalToken is a
+// [durable.StepToken] and resolution goes through [durable.CompleteStep], which
+// delivers status directly as that step's result (see durableApprovalWait) — this
+// applies uniformly to both the Run-path ApprovalHandler's Respond callback and
+// StreamHandle.Approve, since both durable.RunTask closures are cooperating on the same
+// underlying step. Returns [types.ErrApprovalAlreadyResolved] when the step is already
+// completed (durable.ErrRunAlreadyFinished) or the token cannot be decoded.
+//
+// Non-durable runtimes keep the original in-memory channel lookup: executeSingleTool
+// registers a token and blocks; the caller receives a CUSTOM event on the stream with
+// that token and calls [sdkruntime.StreamHandle.Approve] to unblock. Returns
+// [types.ErrApprovalAlreadyResolved] when the token is unknown or was already resolved
+// (same sentinel as Temporal when CompleteActivity reports not found).
+func (rt *LocalRuntime) approve(ctx context.Context, approvalToken string, status types.ApprovalStatus) error {
+	if rt.engine != nil {
+		if err := durable.CompleteStep(ctx, rt.engine, approvalToken, status); err != nil {
+			if errors.Is(err, durable.ErrRunAlreadyFinished) || errors.Is(err, durable.ErrInvalidToken) {
+				return types.ErrApprovalAlreadyResolved
+			}
+			return err
+		}
+		return nil
+	}
 	val, ok := rt.pendingApprovals.LoadAndDelete(approvalToken)
 	if !ok {
 		return types.ErrApprovalAlreadyResolved
@@ -379,10 +599,21 @@ func (rt *LocalRuntime) approve(_ context.Context, approvalToken string, status 
 
 // Close releases runtime resources. When this runtime owns the event bus
 // ([ownsEventBus]), the bus is closed; shared buses from [setEventBus] are left alone.
+// When this runtime constructed its durable-go engine ([ownsEngine]), the engine is
+// closed too — that cancels every in-flight run on it, not just this agent's. A
+// caller-supplied [LocalConfig.Engine] is never closed here; the caller owns it.
 func (rt *LocalRuntime) Close() {
 	if rt.ownsEventBus && rt.eventbus != nil {
 		rt.eventbus.Close()
 		rt.ownsEventBus = false
+	}
+	if rt.ownsEngine && rt.engine != nil {
+		if err := rt.engine.Close(); err != nil {
+			rt.logger.Warn(context.Background(), "local: durable engine close failed",
+				slog.String("scope", "runtime"),
+				slog.Any("error", err))
+		}
+		rt.ownsEngine = false
 	}
 	rt.logger.Info(context.Background(), "runtime closed",
 		slog.String("scope", "runtime"),

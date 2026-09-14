@@ -6,8 +6,17 @@ import (
 	"testing"
 
 	"github.com/agenticenv/agent-sdk-go/internal/runtime"
+	"github.com/agenticenv/agent-sdk-go/internal/runtime/local"
 	agentruntime "github.com/agenticenv/agent-sdk-go/pkg/agent/runtime"
 )
+
+// noDurability disables durable-go for tests that only care about runtime *selection*
+// (Temporal vs local), not durability — keeps them from creating a real durable-go
+// engine (and an "agent_data/<name>" journal directory) as a side effect.
+func noDurability() *local.LocalConfig {
+	off := false
+	return &local.LocalConfig{Durability: &off}
+}
 
 func TestHasTemporalRuntime(t *testing.T) {
 	var cfg agentConfig
@@ -32,7 +41,7 @@ func TestHasRestateRuntime(t *testing.T) {
 }
 
 func TestBuildAgentRuntime_NoTemporalFactory_BuildsLocalRuntime(t *testing.T) {
-	cfg := &agentConfig{Name: "n", LLMClient: testLLM(t)}
+	cfg := &agentConfig{Name: "n", LLMClient: testLLM(t), localConfig: noDurability()}
 	rt, err := cfg.buildAgentRuntime(false)
 	if err != nil {
 		t.Fatalf("expected local runtime to be built, got error: %v", err)
@@ -47,6 +56,32 @@ func TestBuildAgentRuntime_NoTemporalFactory_MissingLLMErrors(t *testing.T) {
 	_, err := cfg.buildAgentRuntime(false)
 	if err == nil || !strings.Contains(err.Error(), "llm client is required") {
 		t.Fatalf("expected 'llm client is required', got %v", err)
+	}
+}
+
+func TestWithLocalConfig_ConflictsWithRuntimeFactory(t *testing.T) {
+	cfg := &agentConfig{}
+	withTestTemporal("q")(cfg)
+	withLocalConfig(noDurability())(cfg)
+	if cfg.factoryConflict == nil || !strings.Contains(cfg.factoryConflict.Error(), "incompatible") {
+		t.Fatalf("expected incompatible conflict error, got %v", cfg.factoryConflict)
+	}
+}
+
+func TestWithLocalConfig_ConflictsWithRuntimeFactory_ReverseOrder(t *testing.T) {
+	cfg := &agentConfig{}
+	withLocalConfig(noDurability())(cfg)
+	withTestTemporal("q")(cfg)
+	if cfg.factoryConflict == nil || !strings.Contains(cfg.factoryConflict.Error(), "incompatible") {
+		t.Fatalf("expected incompatible conflict error, got %v", cfg.factoryConflict)
+	}
+}
+
+func TestWithLocalConfig_NilIsNoop(t *testing.T) {
+	cfg := &agentConfig{}
+	withLocalConfig(nil)(cfg)
+	if cfg.localConfig != nil || cfg.factoryConflict != nil {
+		t.Fatalf("expected nil cfg to be a no-op, got localConfig=%v factoryConflict=%v", cfg.localConfig, cfg.factoryConflict)
 	}
 }
 

@@ -111,6 +111,12 @@ const (
 	AgentCustomEventNameSubAgentDelegation AgentCustomEventName = events.AgentCustomEventNameSubAgentDelegation
 	// AgentCustomEventNameBudget is a per-run budget limit pause.
 	AgentCustomEventNameBudget AgentCustomEventName = events.AgentCustomEventNameBudget
+	// AgentCustomEventNameStepReplayed is emitted once per already-completed durable-go
+	// step when a local-runtime durable stream reconnects (GetAgentStream after a process
+	// restart). Coarse, step-granularity replay — not the original token-by-token content.
+	// See [AgentCustomEventStepReplayedValue] and the local runtime's durability docs
+	// ([github.com/agenticenv/agent-sdk-go/pkg/agent/runtime/local]).
+	AgentCustomEventNameStepReplayed AgentCustomEventName = events.AgentCustomEventNameStepReplayed
 )
 
 // AgentCustomEventApprovalValue is the value of the custom event for tool approval.
@@ -121,6 +127,10 @@ type AgentCustomEventDelegationValue = events.AgentCustomEventDelegationValue
 
 // AgentCustomEventBudgetValue is the value of the custom event for budget approval.
 type AgentCustomEventBudgetValue = events.AgentCustomEventBudgetValue
+
+// AgentCustomEventStepReplayedValue is the value of the custom event emitted for each
+// already-completed step replayed on a local-runtime durable stream reconnect.
+type AgentCustomEventStepReplayedValue = events.AgentCustomEventStepReplayedValue
 
 // ParseCustomEventApproval returns the typed value for CUSTOM events with name [AgentCustomEventNameToolApproval].
 // Use this when handling stream events: JSON decode leaves Value as map[string]any.
@@ -136,4 +146,10 @@ func ParseCustomEventDelegation(ev *AgentCustomEvent) (AgentCustomEventDelegatio
 // ParseCustomEventBudget returns the typed value for CUSTOM events with name [AgentCustomEventNameBudget].
 func ParseCustomEventBudget(ev *AgentCustomEvent) (AgentCustomEventBudgetValue, error) {
 	return events.ParseCustomEventBudget(ev)
+}
+
+// ParseCustomEventStepReplayed returns the typed value for CUSTOM events with name
+// [AgentCustomEventNameStepReplayed].
+func ParseCustomEventStepReplayed(ev *AgentCustomEvent) (AgentCustomEventStepReplayedValue, error) {
+	return events.ParseCustomEventStepReplayed(ev)
 }
