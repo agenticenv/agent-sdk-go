@@ -92,12 +92,12 @@ Expected output includes the agent name, model, and assistant reply in `result.C
 | `openai.NewClient` | Creates an [`interfaces.LLMClient`](/getting-started/llm-providers) for OpenAI |
 | `agent.NewAgent` | Builds the agent with your prompt and LLM client; uses in-process runtime by default |
 | `a.Run` | Starts a run and returns an [`AgentRun`](/getting-started/run) handle; call `Get` for [`*AgentRunResult`](/features/token-usage) |
-| `a.Close` | Stops any embedded Temporal worker or Restate SDK endpoint and flushes OTLP exporters; active durable runs are **not** terminated |
+| `a.Close` | Stops any embedded Temporal worker or Restate SDK endpoint, closes the in-process durable-go engine, and flushes OTLP exporters |
 
 <Warning>
-`defer a.Close()` is not optional when using a durable runtime — it shuts down the embedded Temporal worker or Restate SDK endpoint. On the in-process runtime it is a no-op but still good practice.
+`defer a.Close()` is always required, on every runtime — it shuts down the embedded Temporal worker / Restate SDK endpoint and flushes OTLP exporters.
 
-**Durability note:** `Close` does not terminate in-flight Temporal workflows or Restate invocations. Runs continue on the server and resume when a worker or endpoint is available again — this is the core durability guarantee.
+**Durability note — runtimes differ here:** on Temporal/Restate, `Close` does **not** terminate in-flight runs — they continue on the server and resume when a worker or endpoint is available again. On the in-process (local) runtime, `Close` **does** cancel every in-flight run on the durable-go engine it owns (not just this agent's run) and waits for that cancellation to be journaled — those runs become terminal, not resumable. A graceful shutdown (`Close`) is therefore not equivalent to a crash for local durability purposes; only an unclean process exit (`kill -9`, OOM) that skips `Close` leaves a run genuinely resumable on restart. See [In-Process durability](/runtimes/in-process#durability).
 </Warning>
 
 

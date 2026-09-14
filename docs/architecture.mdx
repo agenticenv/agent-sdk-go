@@ -75,15 +75,15 @@ Each iteration is one LLM round-trip. The loop repeats until the LLM returns a f
 
 ## Runtimes
 
-Run agents locally for development, or with Temporal or Restate for production-grade durability and fault tolerance. The same agent code runs on all three — the SDK picks the backend based on which options you pass to `NewAgent`.
+Run agents in-process — durable by default via [durable-go](https://github.com/agenticenv/durable-go), no infrastructure — or add Temporal or Restate for horizontal scale and a client/worker split. The same agent code runs on all three — the SDK picks the backend based on which options you pass to `NewAgent`.
 
 | | In-process | Temporal | Restate |
 |---|---|---|---|
 | **How it runs** | Agent loop executes in your Go process | Agent loop becomes a Temporal workflow | Agent loop runs as a Restate durable invocation |
-| **Durability** | None — process crash loses the run | Full — Temporal replays after crashes | Full — Restate resumes from journaled steps |
+| **Durability** | Full by default — durable-go journals to local disk; opt out with `local.DurabilityOff()` | Full — Temporal replays after crashes | Full — Restate resumes from journaled steps |
 | **Worker scaling** | Single process | Horizontal — multiple worker processes on the same task queue | Multiple registered SDK endpoint deployments |
 | **Setup** | No infra required | Requires a running Temporal server | Requires a running Restate server |
-| **When to use** | Development, scripts, low-volume APIs | Production with Temporal workers | Production with Restate ingress + endpoint |
+| **When to use** | Development, scripts, low-volume APIs, and production single-process deployments | Production with Temporal workers, needs horizontal scale | Production with Restate ingress + endpoint, needs horizontal scale |
 
 Add `temporal.WithTemporalConfig` / `temporal.WithTemporalClient` (from `pkg/agent/runtime/temporal`) or `restate.WithRestateConfig` (from `pkg/agent/runtime/restate`) to switch. Everything else stays the same.
 

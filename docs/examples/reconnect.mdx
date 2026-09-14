@@ -100,13 +100,16 @@ The current time is
 
 Events emitted while the subscriber was "gone" (after the simulated crash) are delivered in Phase B.
 
-The simulated crash cancels only the Events context (not Stream), not a real `kill -9`. For a real process-kill story, see [Durable Agent (Temporal)](/examples/durable-agent) or [Durable Agent (Restate)](/examples/durable-agent-restate).
+The simulated crash cancels only the Events context (not Stream), not a real `kill -9`. For a real process-kill story, see [Durable Agent (Local)](/examples/durable-agent-local) (zero infrastructure), [Durable Agent (Temporal)](/examples/durable-agent), or [Durable Agent (Restate)](/examples/durable-agent-restate).
 
 ## Learn more
 
 <CardGroup cols={2}>
   <Card title="Durable Execution" icon="shield-check" href="/advanced/durable-execution" horizontal>
     Full protocol, API reference, and offset semantics
+  </Card>
+  <Card title="Durable Agent (Local)" icon="laptop" href="/examples/durable-agent-local" horizontal>
+    Real process kill, zero infrastructure, no offsets
   </Card>
   <Card title="Durable Agent (Restate)" icon="shield" href="/examples/durable-agent-restate" horizontal>
     Real process kill + state file reconnect (single process)

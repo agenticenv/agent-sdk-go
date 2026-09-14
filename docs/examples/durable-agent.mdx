@@ -6,7 +6,7 @@ description: "Test Temporal durability with worker crashes, process restarts, an
 
 The **`durable_agent/temporal`** example is an interactive **Temporal lab**, not a minimal hello-world. It runs the agent client and Temporal worker in **separate processes**, streams events over the workflow's event stream, and includes a REPL so you can deliberately break things — kill workers, crash processes, miss approvals — and observe how Temporal and the SDK behave.
 
-Use it after [Agent Worker](/examples/agent-worker) when you need to **feel** durability guarantees. For the single-process Restate lab, see [Durable Agent (Restate)](/examples/durable-agent-restate).
+Use it after [Agent Worker](/examples/agent-worker) when you need to **feel** durability guarantees. For a zero-infrastructure single-process lab, see [Durable Agent (Local)](/examples/durable-agent-local); for the single-process Restate lab, see [Durable Agent (Restate)](/examples/durable-agent-restate).
 
 Source: [`examples/durable_agent/temporal/`](https://github.com/agenticenv/agent-sdk-go/tree/main/examples/durable_agent/temporal)
 
@@ -202,5 +202,9 @@ If you add tools that require approval and ignore prompts, tools are skipped wit
 
   <Card title="Temporal Runtime" icon="server" href="/runtimes/temporal" horizontal>
     Architecture and event delivery model
+  </Card>
+
+  <Card title="Durable Agent (Local)" icon="laptop" href="/examples/durable-agent-local" horizontal>
+    Zero-infrastructure crash/reconnect lab, durable by default
   </Card>
 </CardGroup>

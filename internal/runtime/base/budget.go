@@ -3,6 +3,7 @@ package base
 import (
 	"fmt"
 	"math"
+	"sync"
 
 	"github.com/agenticenv/agent-sdk-go/internal/types"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
@@ -18,12 +19,20 @@ const (
 )
 
 // BudgetTracker accumulates token and cost usage for one run and checks limits.
-// It is not safe for concurrent use; callers must serialize access.
+//
+// Safe for concurrent use: all methods lock an internal mutex. This matters when a shared
+// tracker (nested sub-agents pass their parent's BudgetTracker down, see
+// AgentLoopInput.BudgetTracker) is mutated from more than one goroutine at once — e.g. two
+// sub-agent delegation tool calls running concurrently under
+// [types.AgentToolExecutionModeParallel] each call Add for their own LLM usage against the
+// same tracker.
 //
 // Cost is stored internally as integer nano-dollars (1e-9 USD) to avoid floating-point
 // accumulation drift over hundreds of LLM calls. Public methods return and accept float64 USD
 // for API compatibility; conversions are performed at the boundary.
 type BudgetTracker struct {
+	mu sync.Mutex
+
 	cfg *types.BudgetConfig
 
 	totalTokens      int64
@@ -112,6 +121,8 @@ func (t *BudgetTracker) Add(u *interfaces.LLMUsage) error {
 	if t == nil || u == nil {
 		return nil
 	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.hasAdded = true
 	t.totalTokens += u.TotalTokens
 	t.totalCostNanoUSD += u.PromptTokens*t.promptRateNanoUSDPerToken +
@@ -126,9 +137,12 @@ func (t *BudgetTracker) Check() error {
 	if t == nil {
 		return nil
 	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	return t.checkLimits()
 }
 
+// checkLimits is the unlocked core of Add/Check. Callers must hold t.mu.
 func (t *BudgetTracker) checkLimits() error {
 	if t.cfg.MaxTokens > 0 {
 		// ApprovalExtraTokens is set by validateBudget for wait_for_approval (defaults to
@@ -173,6 +187,8 @@ func (t *BudgetTracker) AdvanceWatermark() (approvalGranted bool) {
 	if t == nil {
 		return true
 	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.approvalCount++
 	t.watermarkTokens = t.totalTokens
 	t.watermarkCostNanoUSD = t.totalCostNanoUSD
@@ -185,6 +201,8 @@ func (t *BudgetTracker) ApprovalsExhausted() bool {
 	if t == nil {
 		return false
 	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	return t.approvalCount >= t.effectiveMaxApproval
 }
 
@@ -193,6 +211,8 @@ func (t *BudgetTracker) ApprovalCount() int {
 	if t == nil {
 		return 0
 	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	return t.approvalCount
 }
 
@@ -201,6 +221,8 @@ func (t *BudgetTracker) Totals() (tokens int64, costUSD float64) {
 	if t == nil {
 		return 0, 0
 	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	return t.totalTokens, float64(t.totalCostNanoUSD) / nanoUSDPerUSD
 }
 
@@ -209,6 +231,8 @@ func (t *BudgetTracker) WatermarkTotals() (tokens int64, costUSD float64) {
 	if t == nil {
 		return 0, 0
 	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	return t.watermarkTokens, float64(t.watermarkCostNanoUSD) / nanoUSDPerUSD
 }
 
@@ -219,6 +243,8 @@ func (t *BudgetTracker) RestoreState(tokens int64, costUSD float64, wmTokens int
 	if t == nil {
 		return
 	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	if t.hasAdded {
 		panic("budget: RestoreState called after Add — restore must happen before accumulation begins")
 	}

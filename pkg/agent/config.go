@@ -15,6 +15,7 @@ import (
 
 	"github.com/agenticenv/agent-sdk-go/internal/hooks"
 	"github.com/agenticenv/agent-sdk-go/internal/runtime"
+	"github.com/agenticenv/agent-sdk-go/internal/runtime/local"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
 	agentruntime "github.com/agenticenv/agent-sdk-go/pkg/agent/runtime"
 	"github.com/agenticenv/agent-sdk-go/pkg/conversation"
@@ -194,7 +195,8 @@ type agentConfig struct {
 	Description        string
 	SystemPrompt       string
 	runtimeFactory     agentruntime.RuntimeFactory
-	factoryConflict    error // set when conflicting runtime factories are applied
+	factoryConflict    error              // set when conflicting runtime factories are applied
+	localConfig        *local.LocalConfig // durable-go config for the local runtime; nil = defaults (durable by default)
 	instanceId         string
 	LLMClient          interfaces.LLMClient
 	tools              []interfaces.Tool // staging for [WithTools]; consumed when the agent is created

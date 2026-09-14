@@ -26,6 +26,7 @@ import (
 func newLoopRT(t *testing.T, maxIter int, client interfaces.LLMClient, tools ...interfaces.Tool) (*LocalRuntime, []interfaces.Tool) {
 	t.Helper()
 	rt, err := NewLocalRuntime(
+		testNoDurability(),
 		WithLogger(logger.NoopLogger()),
 		WithAgentSpec(sdkruntime.AgentSpec{Name: "loop-agent", SystemPrompt: "sys"}),
 		WithAgentConfig(sdkruntime.AgentConfig{
@@ -103,6 +104,7 @@ func TestExecuteAgentLoop_MemoryRecallAndStore(t *testing.T) {
 	}
 
 	rt, err := NewLocalRuntime(
+		testNoDurability(),
 		WithLogger(logger.NoopLogger()),
 		WithAgentSpec(sdkruntime.AgentSpec{Name: "mem-agent", SystemPrompt: "sys"}),
 		WithAgentConfig(sdkruntime.AgentConfig{
@@ -141,6 +143,7 @@ func TestExecuteAgentLoop_MemoryAlwaysRunEndStore(t *testing.T) {
 		},
 	}
 	rt, err := NewLocalRuntime(
+		testNoDurability(),
 		WithLogger(logger.NoopLogger()),
 		WithAgentSpec(sdkruntime.AgentSpec{Name: "mem-agent", SystemPrompt: "sys"}),
 		WithAgentConfig(sdkruntime.AgentConfig{
@@ -178,6 +181,7 @@ func TestExecuteAgentLoop_OnDemandSaveMemoryTool(t *testing.T) {
 		},
 	}
 	rt, err := NewLocalRuntime(
+		testNoDurability(),
 		WithLogger(logger.NoopLogger()),
 		WithAgentSpec(sdkruntime.AgentSpec{Name: "mem-agent", SystemPrompt: "sys"}),
 		WithAgentConfig(sdkruntime.AgentConfig{
@@ -209,6 +213,7 @@ func TestExecuteAgentLoop_OnDemandSaveMemoryTool(t *testing.T) {
 func TestExecuteAgentLoop_LLMError(t *testing.T) {
 	client := &seqLLMClient{errs: []error{errors.New("llm fail")}}
 	rt, err := NewLocalRuntime(
+		testNoDurability(),
 		WithLogger(logger.NoopLogger()),
 		WithAgentSpec(sdkruntime.AgentSpec{Name: "loop-agent", SystemPrompt: "sys"}),
 		WithAgentConfig(sdkruntime.AgentConfig{
@@ -233,6 +238,7 @@ func TestExecuteAgentLoop_DefaultMaxIterations(t *testing.T) {
 		responses: []*interfaces.LLMResponse{{Content: "early exit"}},
 	}
 	rt, err := NewLocalRuntime(
+		testNoDurability(),
 		WithLogger(logger.NoopLogger()),
 		WithAgentConfig(sdkruntime.AgentConfig{
 			LLM:    sdkruntime.AgentLLM{Client: client},
@@ -386,6 +392,7 @@ func TestExecuteAgentLoop_WithConversationID(t *testing.T) {
 		responses: []*interfaces.LLMResponse{{Content: "with history"}},
 	}
 	rt, err := NewLocalRuntime(
+		testNoDurability(),
 		WithLogger(logger.NoopLogger()),
 		WithAgentConfig(sdkruntime.AgentConfig{
 			LLM:     sdkruntime.AgentLLM{Client: client},
@@ -414,6 +421,7 @@ func TestExecuteAgentLoop_ConversationFetchErrorContinues(t *testing.T) {
 		responses: []*interfaces.LLMResponse{{Content: "continued without history"}},
 	}
 	rt, err := NewLocalRuntime(
+		testNoDurability(),
 		WithLogger(logger.NoopLogger()),
 		WithAgentConfig(sdkruntime.AgentConfig{
 			LLM:     sdkruntime.AgentLLM{Client: client},
@@ -448,6 +456,7 @@ func TestExecuteAgentLoop_RetrieverPrefetch(t *testing.T) {
 		responses: []*interfaces.LLMResponse{{Content: "answer with context"}},
 	}
 	rt, err := NewLocalRuntime(
+		testNoDurability(),
 		WithLogger(logger.NoopLogger()),
 		WithAgentConfig(sdkruntime.AgentConfig{
 			LLM: sdkruntime.AgentLLM{Client: client},
@@ -479,6 +488,7 @@ func TestExecuteAgentLoop_RetrieverAllFailContinues(t *testing.T) {
 		responses: []*interfaces.LLMResponse{{Content: "answer without context"}},
 	}
 	rt, err := NewLocalRuntime(
+		testNoDurability(),
 		WithLogger(logger.NoopLogger()),
 		WithAgentConfig(sdkruntime.AgentConfig{
 			LLM: sdkruntime.AgentLLM{Client: client},
@@ -650,7 +660,7 @@ func TestExecuteSingleTool_Approved(t *testing.T) {
 	rt, tools := newLoopRT(t, 5, &seqLLMClient{}, tool)
 
 	emit, evs := captureEmit()
-	msg, err := rt.executeSingleTool(context.Background(), loopToolsInput(tools), "msg-1", 0,
+	msg, err := rt.executeSingleTool(context.Background(), loopToolsInput(tools), "msg-1", 0, 0,
 		testToolCall("c1", "my-tool"), rt.executionPolicies(), emit)
 
 	require.NoError(t, err)
@@ -668,7 +678,7 @@ func TestExecuteSingleTool_ToolExecError(t *testing.T) {
 	tool := stubTool{name: "boom", execErr: errors.New("exec failed")}
 	rt, tools := newLoopRT(t, 5, &seqLLMClient{}, tool)
 
-	msg, err := rt.executeSingleTool(context.Background(), loopToolsInput(tools), "msg", 0,
+	msg, err := rt.executeSingleTool(context.Background(), loopToolsInput(tools), "msg", 0, 0,
 		testToolCall("c1", "boom"), rt.executionPolicies(), noopEmit)
 	require.NoError(t, err) // tool errors become a content message, not a hard error
 	require.Contains(t, msg.message.Content, "exec failed")
@@ -678,7 +688,7 @@ func TestExecuteSingleTool_ToolExecError(t *testing.T) {
 func TestExecuteSingleTool_UnknownToolErrors(t *testing.T) {
 	rt, _ := newLoopRT(t, 5, &seqLLMClient{}) // no tools registered
 
-	_, err := rt.executeSingleTool(context.Background(), AgentLoopInput{}, "msg", 0,
+	_, err := rt.executeSingleTool(context.Background(), AgentLoopInput{}, "msg", 0, 0,
 		testToolCall("c1", "ghost"), rt.executionPolicies(), noopEmit)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "ghost")
@@ -699,7 +709,7 @@ func TestExecuteSingleTool_AuthorizationDenied(t *testing.T) {
 	authTool := authorizerStubLocal{name: "restricted", allow: false, reason: "policy denied"}
 	rt, tools := newLoopRT(t, 5, &seqLLMClient{}, authTool)
 
-	msg, err := rt.executeSingleTool(context.Background(), loopToolsInput(tools), "msg", 0,
+	msg, err := rt.executeSingleTool(context.Background(), loopToolsInput(tools), "msg", 0, 0,
 		testToolCall("c1", "restricted"), rt.executionPolicies(), noopEmit)
 	require.NoError(t, err)
 	require.Contains(t, msg.message.Content, msgToolUnauthorized)
@@ -711,7 +721,7 @@ func TestExecuteSingleTool_AuthorizationError(t *testing.T) {
 	authTool := authorizerStubLocal{name: "err-tool", allow: false, authErr: errors.New("auth backend down")}
 	rt, tools := newLoopRT(t, 5, &seqLLMClient{}, authTool)
 
-	_, err := rt.executeSingleTool(context.Background(), loopToolsInput(tools), "msg", 0,
+	_, err := rt.executeSingleTool(context.Background(), loopToolsInput(tools), "msg", 0, 0,
 		testToolCall("c1", "err-tool"), rt.executionPolicies(), noopEmit)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "auth backend down")
@@ -723,7 +733,7 @@ func TestExecuteSingleTool_ApprovalUnavailable(t *testing.T) {
 	rt, tools := newLoopRT(t, 5, &seqLLMClient{}, tool)
 
 	msg, err := rt.executeSingleTool(context.Background(),
-		AgentLoopInput{ChannelName: "", ApprovalHandler: nil, Tools: tools}, "msg", 0,
+		AgentLoopInput{ChannelName: "", ApprovalHandler: nil, Tools: tools}, "msg", 0, 0,
 		testToolCallNeedsApproval("c1", "guarded"), rt.executionPolicies(), noopEmit)
 	require.NoError(t, err)
 	require.Contains(t, msg.message.Content, msgToolApprovalUnavailable)
@@ -738,7 +748,7 @@ func TestExecuteSingleTool_ApprovalHandlerApproves(t *testing.T) {
 	}
 
 	msg, err := rt.executeSingleTool(context.Background(),
-		AgentLoopInput{ApprovalHandler: handler, Tools: tools}, "msg", 0,
+		AgentLoopInput{ApprovalHandler: handler, Tools: tools}, "msg", 0, 0,
 		testToolCallNeedsApproval("c1", "guarded"), rt.executionPolicies(), noopEmit)
 	require.NoError(t, err)
 	require.Equal(t, "ok", msg.message.Content)
@@ -753,7 +763,7 @@ func TestExecuteSingleTool_ApprovalHandlerRejects(t *testing.T) {
 	}
 
 	msg, err := rt.executeSingleTool(context.Background(),
-		AgentLoopInput{ApprovalHandler: handler, Tools: tools}, "msg", 0,
+		AgentLoopInput{ApprovalHandler: handler, Tools: tools}, "msg", 0, 0,
 		testToolCallNeedsApproval("c1", "guarded"), rt.executionPolicies(), noopEmit)
 	require.NoError(t, err)
 	require.Equal(t, msgToolRejected, msg.message.Content)
@@ -802,7 +812,7 @@ func TestExecuteSingleTool_StreamingApproveUnblocks(t *testing.T) {
 		result, resultErr = rt.executeSingleTool(
 			context.Background(),
 			AgentLoopInput{ChannelName: "some-channel", Tools: tools}, // streaming path
-			"msg", 0,
+			"msg", 0, 0,
 			testToolCallNeedsApproval("c1", "guarded"),
 			rt.executionPolicies(),
 			emit,
@@ -829,6 +839,7 @@ func TestExecuteSingleTool_StreamingApproveUnblocks(t *testing.T) {
 func TestExecuteSingleTool_ApprovalTimeout(t *testing.T) {
 	tool := stubTool{name: "guarded", result: "should not run", needsApproval: true}
 	rt, err := NewLocalRuntime(
+		testNoDurability(),
 		WithLogger(logger.NoopLogger()),
 		WithAgentSpec(sdkruntime.AgentSpec{Name: "loop-agent", SystemPrompt: "sys"}),
 		WithAgentConfig(sdkruntime.AgentConfig{
@@ -840,7 +851,7 @@ func TestExecuteSingleTool_ApprovalTimeout(t *testing.T) {
 	tools := []interfaces.Tool{tool}
 
 	_, err = rt.executeSingleTool(context.Background(),
-		AgentLoopInput{ChannelName: "some-channel", Tools: tools}, "msg", 0,
+		AgentLoopInput{ChannelName: "some-channel", Tools: tools}, "msg", 0, 0,
 		testToolCallNeedsApproval("c1", "guarded"), rt.executionPolicies(), noopEmit)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "tool approval timed out")
@@ -860,7 +871,7 @@ func TestExecuteSingleTool_ApprovalContextCancel(t *testing.T) {
 	}()
 
 	_, err := rt.executeSingleTool(ctx,
-		AgentLoopInput{ChannelName: "some-channel", Tools: tools}, "msg", 0,
+		AgentLoopInput{ChannelName: "some-channel", Tools: tools}, "msg", 0, 0,
 		testToolCallNeedsApproval("c1", "guarded"), rt.executionPolicies(), noopEmit)
 
 	<-done
@@ -916,6 +927,7 @@ func TestPersistConversationMessages_StoresAllMessages(t *testing.T) {
 	conv.EXPECT().AddMessage(gomock.Any(), "conv-1", gomock.Any()).Return(nil).Times(3)
 
 	rt, err := NewLocalRuntime(
+		testNoDurability(),
 		WithLogger(logger.NoopLogger()),
 		WithAgentConfig(sdkruntime.AgentConfig{
 			LLM:     sdkruntime.AgentLLM{Client: &seqLLMClient{}},
@@ -939,6 +951,7 @@ func TestPersistConversationMessages_AddMessageErrorContinues(t *testing.T) {
 	conv.EXPECT().AddMessage(gomock.Any(), "c", gomock.Any()).Return(errors.New("store err"))
 
 	rt, err := NewLocalRuntime(
+		testNoDurability(),
 		WithLogger(logger.NoopLogger()),
 		WithAgentConfig(sdkruntime.AgentConfig{
 			LLM:     sdkruntime.AgentLLM{Client: &seqLLMClient{}},
@@ -962,6 +975,7 @@ func TestPersistConversationMessages_ContinuesAfterFailure(t *testing.T) {
 	)
 
 	rt, err := NewLocalRuntime(
+		testNoDurability(),
 		WithLogger(logger.NoopLogger()),
 		WithAgentConfig(sdkruntime.AgentConfig{
 			LLM:     sdkruntime.AgentLLM{Client: &seqLLMClient{}},

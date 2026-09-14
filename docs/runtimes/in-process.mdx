@@ -1,10 +1,10 @@
 ---
 title: "In-Process Runtime"
 sidebarTitle: "In-Process"
-description: "Run the full agent loop in-process with no external infrastructure or durable runtime required"
+description: "Run the full agent loop in-process, durable by default via durable-go, with no external infrastructure required"
 ---
 
-The in-process runtime is the **default**. When you call [`NewAgent`](/getting-started/quickstart) without Temporal or Restate options, the agent loop runs directly inside your Go process — no external orchestration server.
+The in-process runtime is the **default**. When you call [`NewAgent`](/getting-started/quickstart) without Temporal or Restate options, the agent loop runs directly inside your Go process — no external orchestration server. It is also **durable by default**: every LLM call and tool execution is journaled to disk via [durable-go](https://github.com/agenticenv/durable-go), so a process crash can resume instead of losing the in-flight run. Tune the journal or opt out entirely with `local.WithLocalConfig` — see [Durability](#durability) below.
 
 ## Enable
 
@@ -52,21 +52,57 @@ All SDK capabilities are available on the in-process runtime:
 - Human-in-the-loop approvals
 - Budget (`WithBudget`)
 - OpenTelemetry observability
+- **Durable execution and reconnect** (`GetAgentRun` / `GetAgentStream`) — on by default, see [Durability](#durability)
 
-Durable execution (crash recovery) and durable reconnect (`GetAgentRun` / `GetAgentStream` + `WithOffset`) require the [Temporal](/runtimes/temporal) or [Restate](/runtimes/restate) runtime. Temporal also offers horizontal worker scaling via `NewAgentWorker`; Restate scales via multiple registered endpoint deployments.
+Horizontal worker scaling (`NewAgentWorker` / multiple registered endpoint deployments) requires [Temporal](/runtimes/temporal) or [Restate](/runtimes/restate).
+
+## Durability
+
+The in-process runtime journals every LLM call and tool execution to disk via [durable-go](https://github.com/agenticenv/durable-go) — no `WithLocalConfig` call needed. If the process crashes mid-run, restart it (from the same working directory) and reconnect with `GetAgentRun` or `GetAgentStream`; already-completed steps are not re-executed. Unlike Temporal/Restate, `GetAgentStream`'s `Events` does not accept `WithOffset(n)` for `n > 0` here — reconnect always replays full step history first (see [Reconnect fidelity](#limitations) below), then continues live.
+
+Import `pkg/agent/runtime/local` to tune the journal or opt out:
+
+```go
+import "github.com/agenticenv/agent-sdk-go/pkg/agent/runtime/local"
+
+a, err := agent.NewAgent(
+    agent.WithLLMClient(llmClient),
+    agent.WithSystemPrompt("You are a helpful assistant."),
+    local.WithLocalConfig(&local.LocalConfig{
+        DataDir:      "./agent_data/my-agent", // default: "./agent_data/<agent_name>"
+        AutoPurgeAge: 24 * time.Hour,           // default: 7 days; negative disables purge
+        Timeout:      2 * time.Minute,          // default: none — set this in production
+    }),
+)
+```
+
+| Field | Default | Notes |
+|---|---|---|
+| `Durability` | `true` (`nil`) | `local.DurabilityOff()` opts out entirely — pure in-memory, pre-durability behavior |
+| `Engine` | none | Supply a pre-built `durable.Engine` to share across agents/tasks; you own `Close` |
+| `DataDir` | `./agent_data/<agent_name>` | Exclusive-locked per process — **distinct `DataDir` per replica** in multi-instance deployments |
+| `AutoPurgeAge` | 7 days | Running/Waiting runs (e.g. a pending approval) are never purged regardless of age |
+| `Timeout` | none | Unbounded by default — a stuck approval or a cancelled-but-uncancelled run can run forever; set this in production |
+
+<Warning>
+`DataDir` is exclusive-locked (in-process + OS `flock`). Running more than one process/replica against the same `DataDir` fails the second one's engine creation. Give each replica a distinct `DataDir` (e.g. derived from hostname/pod name).
+</Warning>
+
+<Warning>
+**`a.Close()` cancels in-flight local runs — this is not the same as a crash.** `Close` closes the durable-go engine it owns, which cancels every in-flight run on that engine (not just the calling agent's) and waits for that cancellation to be journaled before returning. Those runs become terminal (not resumable) — `GetAgentStream` / `GetAgentRun` return `ErrRunAlreadyCompleted` for them afterward, the same as a run that finished normally. On Temporal/Restate, closing the client does **not** affect server-side runs. Practically: a graceful shutdown handler that calls `a.Close()` while runs are in flight finalizes them; only an unclean process exit that skips `Close` (`kill -9`, OOM, panic before `defer` runs) leaves a run genuinely resumable via reconnect on the next process start.
+</Warning>
 
 ## Limitations
 
 | Limitation | Detail |
 |---|---|
-| **No crash recovery** | If the process exits mid-run, the run is lost — no replay, no resume |
-| **No crash reconnect** | `GetAgentRun` / `GetAgentStream` return `ErrRunNotFound` / `ErrStreamNotFound` after a crash; `Events(..., WithOffset(n))` with `n > 0` returns `ErrStreamOffsetNotSupported` |
+| **Reconnect fidelity** | No `WithOffset(n>0)` — `Events` only accepts `fromOffset` 0 (`ErrStreamOffsetNotSupported` otherwise). `GetAgentStream` replays already-completed steps as **one coalesced message each** (`step_replayed` custom events), not the original token-by-token stream. Live tokens resume once reconnect reaches the in-flight step. Temporal/Restate support `WithOffset` and replay the original AG-UI events instead |
 | **Single process** | No horizontal worker scaling |
 | **In-memory conversation only** | Redis works technically, but Temporal split-process deployments require Redis for shared conversation |
 | **Split client/worker** | Available on Temporal via `DisableLocalWorker` and `NewAgentWorker` |
 
 <Note>
-Handles from `Run` / `Stream` are same-process only. For crash reconnect (`GetAgentRun`, `GetAgentStream` + `WithOffset`), use the [Temporal](/runtimes/temporal) or [Restate](/runtimes/restate) runtime.
+Handles from `Run` / `Stream` are same-process only in the sense that `AgentRun`/`AgentStream` values themselves don't survive a restart — but the underlying run does (it's journaled). Reconnect via `GetAgentRun` / `GetAgentStream` + the saved `runID`, the same public API used on Temporal/Restate. See [Durable Execution](/advanced/durable-execution).
 </Note>
 
 ## Error handling
@@ -115,15 +151,16 @@ Any panic inside a tool call is caught and returned as a `RUN_ERROR` event / err
 
 | Scenario | In-process fit |
 |---|---|
-| Local development and unit testing | Ideal |
-| CI pipelines and integration tests | Ideal |
+| Local development and unit testing | Ideal (`local.DurabilityOff()` to skip journal files in tests) |
+| CI pipelines and integration tests | Ideal (same) |
 | Simple API or script with short runs | Good |
-| Production chat with crash recovery required | Use Temporal or Restate |
+| Production chat, single process, crash recovery required | Good — this is the default, no extra runtime needed |
 | Multi-process or horizontally scaled execution | Use Temporal (`NewAgentWorker`) or Restate (multiple endpoint deployments) |
+| Reconnect needs token-level fidelity, not coalesced steps | Use Temporal or Restate |
 
-## Switch to a durable runtime
+## Switch to a distributed runtime
 
-Import a durable runtime package and add its config option — no other code changes:
+Import a distributed runtime package and add its config option — no other code changes. (Crash recovery alone is not a reason to switch — in-process already has it; do this for horizontal scale, a client/worker split, or token-level reconnect fidelity.)
 
 **Temporal:**
 
@@ -163,5 +200,9 @@ A running Temporal or Restate server is required. See [Temporal](/runtimes/tempo
 
   <Card title="Stream" icon="wave-square" href="/examples/stream" horizontal>
     Streaming tokens and tool events in-process
+  </Card>
+
+  <Card title="Durable Agent (Local)" icon="shield" href="/examples/durable-agent-local" horizontal>
+    Zero-infrastructure crash/reconnect lab — kill and restart the process
   </Card>
 </CardGroup>

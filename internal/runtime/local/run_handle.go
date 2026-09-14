@@ -7,6 +7,7 @@ import (
 
 	sdkruntime "github.com/agenticenv/agent-sdk-go/internal/runtime"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
+	durable "github.com/agenticenv/durable-go"
 )
 
 var _ sdkruntime.RunHandle = (*runHandle)(nil)
@@ -32,6 +33,18 @@ type runHandle struct {
 	status types.RunStatus
 	res    *types.AgentRunResult
 	err    error
+
+	// durable-go wiring, set via setDurable when this handle's run is durable-go-backed.
+	// nil (the default) means Cancel/markDone use the original plain-ctx-cancel behavior.
+	durableEngine *durable.Engine
+	durableTaskID string
+}
+
+// setDurable marks this handle as backing a durable-go run, so Cancel routes through
+// engine.CancelRun instead of (or in addition to) the plain ctx cancel func.
+func (h *runHandle) setDurable(engine *durable.Engine, taskID string) {
+	h.durableEngine = engine
+	h.durableTaskID = taskID
 }
 
 // newRunHandle creates a live handle for runID. cancel aborts the run context;
@@ -55,14 +68,47 @@ func (h *runHandle) Status(_ context.Context) (types.RunStatus, error) {
 	return h.status, nil
 }
 
-// Cancel requests cancellation of the run context only. It does not update status
-// or close Done — the agent loop must exit and [runHandle.markDone] owns that
-// (context.Canceled → Cancelled).
-// Returns [types.ErrRunAlreadyCompleted] when cancelOnce already ran
-// (prior Cancel or [runHandle.markDone]) or when cancel was nil.
-func (h *runHandle) Cancel(_ context.Context) error {
-	cancelled := false
+// Cancel requests cancellation of the run. Durable handles ([setDurable]) call
+// [durable.Engine.CancelRun] — durable-go persists a cancel signal and, if this run is
+// executing in this process, cancels its Task.Exec ctx immediately; a resumed run
+// checks the signal before Task.Exec runs and fails fast on its next RunStep. This is
+// cooperative only: a step function that never checks ctx keeps running in the
+// background regardless (see durable-go CancelRun doc). It does not update status or
+// close Done directly — the agent loop must actually exit and [runHandle.markDone]
+// owns that (ErrRunCancelled / context.Canceled → Cancelled).
+//
+// Non-durable handles keep the original plain-ctx-cancel behavior.
+//
+// Eventual consistency note (durable only): this also cancels the plain local run ctx,
+// which can make [runHandle.Get] return immediately with context.Canceled before
+// durable-go's own background goroutine finishes persisting the run's terminal
+// meta.json (durable.Engine.CancelRun's doc: "RunTask.Get... return[s] promptly
+// regardless" of whether that goroutine has exited). A [LocalRuntime.GetRunHandle] or
+// [durable.Engine.GetTask] call made immediately after Get returns may briefly still
+// observe StatusRunning; poll if you need to observe the settled on-disk state.
+//
+// Returns [types.ErrRunAlreadyCompleted] when the run is already terminal (durable:
+// engine.CancelRun returned durable.ErrRunAlreadyFinished; non-durable: cancelOnce
+// already ran via a prior Cancel or markDone, or cancel was nil).
+func (h *runHandle) Cancel(ctx context.Context) error {
+	if h.durableEngine != nil {
+		err := h.durableEngine.CancelRun(ctx, h.durableTaskID, h.id)
+		h.cancelOnce.Do(func() {
+			if h.cancel != nil {
+				h.cancel()
+				h.cancel = nil
+			}
+		})
+		if err != nil {
+			if errors.Is(err, durable.ErrRunAlreadyFinished) {
+				return types.ErrRunAlreadyCompleted
+			}
+			return err
+		}
+		return nil
+	}
 
+	cancelled := false
 	h.cancelOnce.Do(func() {
 		if h.cancel != nil {
 			h.cancel()
@@ -107,6 +153,11 @@ func (h *runHandle) Done() <-chan struct{} { return h.doneCh }
 // finishes. markDone is the only place that writes terminal status:
 //   - err == nil → Completed
 //   - errors.Is(err, context.Canceled) → Cancelled (parent ctx cancel or Cancel)
+//   - durable.ErrRunCancelled (via engine.CancelRun) → Cancelled. Matched both by
+//     errors.Is (a live, in-process run's error is the real sentinel) and by string
+//     (err.Error() == durable.ErrRunCancelled.Error()) because a run reloaded from disk
+//     reconstructs its error via errors.New(info.Error) — a different value that
+//     errors.Is cannot match. See durable-go's ErrRunCancelled doc.
 //   - other err → Failed (including context.DeadlineExceeded / timeouts)
 func (h *runHandle) markDone(res *types.AgentRunResult, err error) {
 	h.mu.Lock()
@@ -115,7 +166,9 @@ func (h *runHandle) markDone(res *types.AgentRunResult, err error) {
 	switch {
 	case err == nil:
 		h.status = types.StatusCompleted
-	case errors.Is(err, context.Canceled):
+	case errors.Is(err, context.Canceled),
+		errors.Is(err, durable.ErrRunCancelled),
+		err.Error() == durable.ErrRunCancelled.Error():
 		h.status = types.StatusCancelled
 	default:
 		h.status = types.StatusFailed

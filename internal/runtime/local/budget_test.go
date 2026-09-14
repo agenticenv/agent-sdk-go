@@ -56,6 +56,7 @@ func llmResp(content string, promptTokens, completionTokens, totalTokens int64) 
 func newBudgetRT(t *testing.T, budget *types.BudgetConfig, client interfaces.LLMClient, approvalHandler types.ApprovalHandler) *LocalRuntime {
 	t.Helper()
 	rt, err := NewLocalRuntime(
+		testNoDurability(),
 		WithLogger(logger.NoopLogger()),
 		WithAgentSpec(sdkruntime.AgentSpec{Name: "budget-agent", SystemPrompt: "sys"}),
 		WithAgentConfig(sdkruntime.AgentConfig{

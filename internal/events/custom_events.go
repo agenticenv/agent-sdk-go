@@ -49,7 +49,25 @@ const (
 	AgentCustomEventNameToolApproval       AgentCustomEventName = "tool_approval"
 	AgentCustomEventNameSubAgentDelegation AgentCustomEventName = "sub_agent_delegation"
 	AgentCustomEventNameBudget             AgentCustomEventName = "budget_approval"
+	// AgentCustomEventNameStepReplayed is emitted once per already-completed durable-go
+	// step when a LocalRuntime durable stream reconnects (GetStreamHandle) after a
+	// process restart. It is a coarse, step-granularity replay marker — not the original
+	// token-by-token content — see AgentCustomEventStepReplayedValue and
+	// [github.com/agenticenv/agent-sdk-go/internal/runtime/local]'s stream-reconnect docs.
+	AgentCustomEventNameStepReplayed AgentCustomEventName = "step_replayed"
 )
+
+// AgentCustomEventStepReplayedValue is the JSON shape for CUSTOM name=step_replayed.
+// Result is the step's raw cached JSON result (shape depends on the step: an LLM-call
+// step's result differs from a tool-exec step's), included as best-effort context, not a
+// stable schema callers should depend on.
+type AgentCustomEventStepReplayedValue struct {
+	StepID      string          `json:"stepId"`
+	Status      string          `json:"status"`
+	Result      json.RawMessage `json:"result,omitempty"`
+	StartedAt   string          `json:"startedAt,omitempty"`
+	CompletedAt string          `json:"completedAt,omitempty"`
+}
 
 // AgentCustomEventApprovalValue is the JSON shape for CUSTOM name=approval (tool or delegation; use Kind).
 type AgentCustomEventApprovalValue struct {
@@ -155,4 +173,16 @@ func ParseCustomEventBudget(ev *AgentCustomEvent) (AgentCustomEventBudgetValue, 
 		return AgentCustomEventBudgetValue{}, fmt.Errorf("events: not a budget approval custom event")
 	}
 	return parseCustomPayload[AgentCustomEventBudgetValue](ev)
+}
+
+// ParseCustomEventStepReplayed returns the typed value field for CUSTOM events with name
+// "step_replayed" (LocalRuntime durable stream reconnect — see AgentCustomEventNameStepReplayed).
+func ParseCustomEventStepReplayed(ev *AgentCustomEvent) (AgentCustomEventStepReplayedValue, error) {
+	if ev == nil {
+		return AgentCustomEventStepReplayedValue{}, fmt.Errorf("events: nil custom event")
+	}
+	if ev.Name != string(AgentCustomEventNameStepReplayed) {
+		return AgentCustomEventStepReplayedValue{}, fmt.Errorf("events: not a step-replayed custom event")
+	}
+	return parseCustomPayload[AgentCustomEventStepReplayedValue](ev)
 }

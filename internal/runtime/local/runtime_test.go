@@ -70,10 +70,21 @@ func (t stubTool) Execute(_ context.Context, _ map[string]any) (any, error) {
 }
 func (t stubTool) ApprovalRequired() bool { return t.needsApproval }
 
+// testNoDurability disables durable-go for tests written against the original pure
+// in-memory execution path (i.e. almost every test in this package predating
+// durability). Dedicated durability tests (durable_test.go) opt back in explicitly
+// with their own [LocalConfig] and a per-test temp DataDir so they never share
+// journal state (or an OS-level DataDir lock) with each other or with these tests.
+func testNoDurability() Option {
+	off := false
+	return WithLocalConfig(&LocalConfig{Durability: &off})
+}
+
 // newLocalRT constructs a LocalRuntime suitable for tests.
 func newLocalRT(t *testing.T, client interfaces.LLMClient, tools ...interfaces.Tool) *LocalRuntime {
 	t.Helper()
 	rt, err := NewLocalRuntime(
+		testNoDurability(),
 		WithLogger(logger.NoopLogger()),
 		WithAgentSpec(sdkruntime.AgentSpec{Name: "test-agent", SystemPrompt: "you are helpful"}),
 		WithAgentConfig(sdkruntime.AgentConfig{
@@ -149,6 +160,7 @@ func waitHandleStatus(t *testing.T, h interface {
 
 func TestNewLocalRuntime_MissingLLMClient(t *testing.T) {
 	_, err := NewLocalRuntime(
+		testNoDurability(),
 		WithAgentSpec(sdkruntime.AgentSpec{Name: "agent"}),
 		WithAgentConfig(sdkruntime.AgentConfig{}),
 	)
@@ -158,6 +170,7 @@ func TestNewLocalRuntime_MissingLLMClient(t *testing.T) {
 
 func TestNewLocalRuntime_DefaultNoopObservability(t *testing.T) {
 	rt, err := NewLocalRuntime(
+		testNoDurability(),
 		WithAgentConfig(sdkruntime.AgentConfig{
 			LLM: sdkruntime.AgentLLM{Client: &seqLLMClient{}},
 		}),
@@ -173,6 +186,7 @@ func TestNewLocalRuntime_WithAllOptions(t *testing.T) {
 	metrics := ifmocks.NewMockMetrics(ctrl)
 
 	rt, err := NewLocalRuntime(
+		testNoDurability(),
 		WithLogger(logger.NoopLogger()),
 		WithAgentSpec(sdkruntime.AgentSpec{Name: "my-agent"}),
 		WithAgentConfig(sdkruntime.AgentConfig{
@@ -239,6 +253,7 @@ func TestGetRunHandle_NotFound(t *testing.T) {
 func TestRun_CancelAbortsLiveRun(t *testing.T) {
 	blocking := &blockingLLMClient{block: make(chan struct{})}
 	rt, err := NewLocalRuntime(
+		testNoDurability(),
 		WithLogger(logger.NoopLogger()),
 		WithAgentSpec(sdkruntime.AgentSpec{Name: "test-agent"}),
 		WithAgentConfig(sdkruntime.AgentConfig{
@@ -271,6 +286,7 @@ func TestRun_PropagatesLLMError(t *testing.T) {
 		errs: []error{errors.New("llm unavailable")},
 	}
 	rt, err := NewLocalRuntime(
+		testNoDurability(),
 		WithLogger(logger.NoopLogger()),
 		WithAgentSpec(sdkruntime.AgentSpec{Name: "test-agent", SystemPrompt: "you are helpful"}),
 		WithAgentConfig(sdkruntime.AgentConfig{
@@ -297,6 +313,7 @@ func TestRun_PropagatesLLMError(t *testing.T) {
 func TestRun_AppliesTimeoutWhenNoDeadline(t *testing.T) {
 	blocking := &blockingLLMClient{block: make(chan struct{})}
 	rt, err := NewLocalRuntime(
+		testNoDurability(),
 		WithLogger(logger.NoopLogger()),
 		WithAgentConfig(sdkruntime.AgentConfig{
 			LLM: sdkruntime.AgentLLM{Client: blocking},
@@ -355,6 +372,7 @@ func TestRun_WithApprovalHandler(t *testing.T) {
 	}
 
 	rt, err := NewLocalRuntime(
+		testNoDurability(),
 		WithLogger(logger.NoopLogger()),
 		WithAgentSpec(sdkruntime.AgentSpec{Name: "test-agent", SystemPrompt: "you are helpful"}),
 		WithAgentConfig(sdkruntime.AgentConfig{
@@ -413,6 +431,7 @@ func TestRun_PersistsConversationMessages(t *testing.T) {
 		responses: []*interfaces.LLMResponse{{Content: "persisted"}},
 	}
 	rt, err := NewLocalRuntime(
+		testNoDurability(),
 		WithLogger(logger.NoopLogger()),
 		WithAgentSpec(sdkruntime.AgentSpec{Name: "agent"}),
 		WithAgentConfig(sdkruntime.AgentConfig{
@@ -481,6 +500,7 @@ func TestStream_EmitsRunError(t *testing.T) {
 		errs: []error{errors.New("llm down")},
 	}
 	rt, err := NewLocalRuntime(
+		testNoDurability(),
 		WithLogger(logger.NoopLogger()),
 		WithAgentSpec(sdkruntime.AgentSpec{Name: "test-agent", SystemPrompt: "you are helpful"}),
 		WithAgentConfig(sdkruntime.AgentConfig{
@@ -605,6 +625,7 @@ func TestStream_Status_RunningThenTerminal(t *testing.T) {
 func TestStream_Cancel_AbortsLiveStream(t *testing.T) {
 	blocking := &blockingLLMClient{block: make(chan struct{})}
 	rt, err := NewLocalRuntime(
+		testNoDurability(),
 		WithLogger(logger.NoopLogger()),
 		WithAgentSpec(sdkruntime.AgentSpec{Name: "test-agent"}),
 		WithAgentConfig(sdkruntime.AgentConfig{

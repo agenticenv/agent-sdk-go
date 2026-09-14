@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/agenticenv/agent-sdk-go/internal/events"
@@ -16,6 +17,7 @@ import (
 	"github.com/agenticenv/agent-sdk-go/internal/runtime/base"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
+	durable "github.com/agenticenv/durable-go"
 	"github.com/google/uuid"
 )
 
@@ -62,6 +64,50 @@ type AgentLoopInput struct {
 	// True on root runs when WithBudget is configured; false on nested subagent calls
 	// so the parent run's tracker accumulates child usage and enforces the limit.
 	EnforceBudget bool
+
+	// --- durable-go wiring. Both fields are the zero value (nil, "") on the
+	// non-durable path and on sub-agent recursion when the parent itself is not durable;
+	// executeAgentLoop and its helpers fall back to the original in-memory behavior
+	// whenever stepRunner is nil. See durable_engine.go and the runStep helper below. ---
+
+	// stepRunner is the durable-go StepRunner for this run, or nil when durability is
+	// disabled. Shared unchanged across nested sub-agent executeAgentLoop calls — a
+	// sub-agent has no durable.Task of its own; its LLM/tool calls are steps on the same
+	// parent run, disambiguated by stepPrefix.
+	stepRunner *durable.StepRunner
+	// stepPrefix is prepended to every step ID this call generates (empty at the top
+	// level). A sub-agent delegation extends it so nested step IDs cannot collide with
+	// the parent's or a sibling delegation's: see the "subagent-<iter>-<idx>/" prefix
+	// built in executeSingleTool.
+	stepPrefix string
+	// budgetApprovalSeq disambiguates budget-approval step IDs across an entire run tree
+	// (including sub-agents, which share one BudgetTracker). A plain iteration/phase key
+	// is not always unique — a tight budget can breach more than once without the
+	// iteration counter advancing in between. Nil on the non-durable path. Shared by
+	// pointer so every recursion level draws from the same sequence.
+	budgetApprovalSeq *atomic.Int64
+}
+
+// runStep wraps fn as a durable-go step when sr is non-nil, memoising fn's result under
+// stepID and replaying it (without re-invoking fn) on a later resume; when sr is nil it
+// just calls fn directly (opts are ignored), so every call site works unchanged on the
+// non-durable path.
+func runStep[O any](ctx context.Context, sr *durable.StepRunner, stepID string, fn func(context.Context) (O, error), opts ...durable.StepOption) (O, error) {
+	if sr == nil {
+		return fn(ctx)
+	}
+	return durable.RunStep(ctx, sr, stepID, fn, opts...).Get(ctx)
+}
+
+// nextBudgetApprovalStepID returns a fresh, run-tree-unique step ID for one budget
+// approval pause, or "" when seq is nil (non-durable path — caller must not call
+// durable.RunStep with an empty ID; the "" sentinel tells awaitBudgetApprovalStatus to
+// skip the durable wrapper entirely).
+func nextBudgetApprovalStepID(prefix string, seq *atomic.Int64) string {
+	if seq == nil {
+		return ""
+	}
+	return fmt.Sprintf("%sbudget-approval-%d", prefix, seq.Add(1))
 }
 
 // AgentLoopResult is the outcome of a completed local agent run.
@@ -252,22 +298,24 @@ func (rt *LocalRuntime) executeAgentLoop(ctx context.Context, input AgentLoopInp
 			Tools:            tools,
 			Emit:             emit,
 		}
-		if input.StreamingEnabled {
-			llmResult, err = executeWithPolicy(ctx, policies.LLM, func(attemptCtx context.Context) (*base.LLMResult, error) {
-				return rt.ExecuteLLMStream(attemptCtx, executeLLMInput)
-			})
-		} else {
-			llmResult, err = executeWithPolicy(ctx, policies.LLM, func(attemptCtx context.Context) (*base.LLMResult, error) {
+		llmStepID := fmt.Sprintf("%sllm-%d", input.stepPrefix, iter)
+		llmResult, err = runStep(ctx, input.stepRunner, llmStepID, func(stepCtx context.Context) (*base.LLMResult, error) {
+			if input.StreamingEnabled {
+				return executeWithPolicy(stepCtx, policies.LLM, func(attemptCtx context.Context) (*base.LLMResult, error) {
+					return rt.ExecuteLLMStream(attemptCtx, executeLLMInput)
+				})
+			}
+			return executeWithPolicy(stepCtx, policies.LLM, func(attemptCtx context.Context) (*base.LLMResult, error) {
 				return rt.ExecuteLLM(attemptCtx, executeLLMInput)
 			})
-		}
+		})
 		if err != nil {
 			return nil, fmt.Errorf("llm call (iter %d): %w", iter, err)
 		}
 
 		telemetry.Run.TotalLLMCalls++
 		llmUsage = base.MergeLLMUsage(llmUsage, llmResult.Usage)
-		if budgetErr := rt.checkBudget(ctx, input, telemetry, llmResult.Usage); budgetErr != nil {
+		if budgetErr := rt.checkBudget(ctx, input, telemetry, llmResult.Usage, iter, "llm"); budgetErr != nil {
 			return &AgentLoopResult{Content: lastContent, LLMUsage: llmUsage, Telemetry: telemetry}, budgetErr
 		}
 
@@ -300,20 +348,22 @@ func (rt *LocalRuntime) executeAgentLoop(ctx context.Context, input AgentLoopInp
 				Tools:            tools,
 				Emit:             emit,
 			}
-			if input.StreamingEnabled {
-				llmResult, err = executeWithPolicy(ctx, policies.LLM, func(attemptCtx context.Context) (*base.LLMResult, error) {
-					return rt.ExecuteLLMStream(attemptCtx, executeLLMInput)
-				})
-			} else {
-				llmResult, err = executeWithPolicy(ctx, policies.LLM, func(attemptCtx context.Context) (*base.LLMResult, error) {
+			finalLLMStepID := fmt.Sprintf("%sllm-final-%d", input.stepPrefix, iter)
+			llmResult, err = runStep(ctx, input.stepRunner, finalLLMStepID, func(stepCtx context.Context) (*base.LLMResult, error) {
+				if input.StreamingEnabled {
+					return executeWithPolicy(stepCtx, policies.LLM, func(attemptCtx context.Context) (*base.LLMResult, error) {
+						return rt.ExecuteLLMStream(attemptCtx, executeLLMInput)
+					})
+				}
+				return executeWithPolicy(stepCtx, policies.LLM, func(attemptCtx context.Context) (*base.LLMResult, error) {
 					return rt.ExecuteLLM(attemptCtx, executeLLMInput)
 				})
-			}
+			})
 			if err != nil {
 				return nil, fmt.Errorf("llm final call (iter %d): %w", iter, err)
 			}
 			llmUsage = base.MergeLLMUsage(llmUsage, llmResult.Usage)
-			if budgetErr := rt.checkBudget(ctx, input, telemetry, llmResult.Usage); budgetErr != nil {
+			if budgetErr := rt.checkBudget(ctx, input, telemetry, llmResult.Usage, iter, "llm-final"); budgetErr != nil {
 				return &AgentLoopResult{Content: lastContent, LLMUsage: llmUsage, Telemetry: telemetry}, budgetErr
 			}
 			messages = append(messages, interfaces.Message{
@@ -382,7 +432,7 @@ func (rt *LocalRuntime) executeAgentLoop(ctx context.Context, input AgentLoopInp
 
 		// Nested sub-agents accumulate into the shared tracker during their run.
 		// Enforce here (like Temporal/Restate after tools), not only on the next parent LLM call.
-		if budgetErr := rt.enforceBudgetIfExceeded(ctx, input, telemetry); budgetErr != nil {
+		if budgetErr := rt.enforceBudgetIfExceeded(ctx, input, telemetry, iter); budgetErr != nil {
 			return &AgentLoopResult{Content: lastContent, LLMUsage: llmUsage, Telemetry: telemetry}, budgetErr
 		}
 
@@ -456,7 +506,7 @@ func (rt *LocalRuntime) executeToolsParallel(
 		wg.Add(1)
 		go func(idx int, tc base.ToolCallRequest) {
 			defer wg.Done()
-			result, err := rt.executeSingleTool(ctx, input, messageID, iteration, tc, policies, emit)
+			result, err := rt.executeSingleTool(ctx, input, messageID, iteration, idx, tc, policies, emit)
 			if err != nil {
 				rt.logger.Info(ctx, "local: parallel tool failed",
 					slog.String("scope", "loop"),
@@ -496,7 +546,7 @@ func (rt *LocalRuntime) executeToolsSequential(
 
 	results := make([]toolResult, len(toolCalls))
 	for idx, tc := range toolCalls {
-		result, err := rt.executeSingleTool(ctx, input, messageID, iteration, tc, policies, emit)
+		result, err := rt.executeSingleTool(ctx, input, messageID, iteration, idx, tc, policies, emit)
 		if err != nil {
 			rt.logger.Info(ctx, "local: sequential tool failed",
 				slog.String("scope", "loop"),
@@ -525,6 +575,7 @@ func (rt *LocalRuntime) executeSingleTool(
 	input AgentLoopInput,
 	messageID string,
 	iteration int,
+	idx int,
 	tc base.ToolCallRequest,
 	policies sdkruntime.ExecutionPolicies,
 	emit func(events.AgentEvent),
@@ -588,7 +639,68 @@ func (rt *LocalRuntime) executeSingleTool(
 		// No channel (non-streaming Execute) and no handler: skip approval.
 		if input.ChannelName == "" && input.ApprovalHandler == nil {
 			approvalStatus = types.ApprovalStatusUnavailable
+		} else if input.stepRunner != nil {
+			// Durable path: a single non-blocking RunStep per approval — see
+			// durableApprovalWait. Never selects/blocks; ErrStepPending suspends just this
+			// step (durable-go persists StepStatusWaiting) until a later
+			// durable.CompleteStep call (from LocalRuntime.approve or the handler's Respond
+			// callback here) delivers the decision, which becomes this step's cached result.
+			stepID := fmt.Sprintf("%sapproval-%d-%d", input.stepPrefix, iteration, idx)
+			buildEvent := func(token string) events.AgentEvent {
+				if isSubAgent {
+					return events.NewAgentCustomEvent(string(events.AgentCustomEventNameSubAgentDelegation),
+						events.AgentCustomEventDelegationValue{
+							AgentName:     rt.AgentSpec.Name,
+							SubAgentName:  tc.ToolDisplayName,
+							Args:          tc.Args,
+							ApprovalToken: token,
+						})
+				}
+				return events.NewAgentCustomEvent(string(events.AgentCustomEventNameToolApproval),
+					events.AgentCustomEventApprovalValue{
+						AgentName:       rt.AgentSpec.Name,
+						ToolCallID:      tc.ToolCallID,
+						ToolName:        tc.ToolName,
+						ToolDisplayName: tc.ToolDisplayName,
+						Args:            tc.Args,
+						ApprovalToken:   token,
+					})
+			}
+			buildRequest := func(token string) *types.ApprovalRequest {
+				if isSubAgent {
+					return &types.ApprovalRequest{
+						Name: types.ApprovalRequestNameSubAgent,
+						Value: types.SubAgentDelegationApprovalRequestValue{
+							AgentName:     rt.AgentSpec.Name,
+							SubAgentName:  tc.ToolDisplayName,
+							Args:          tc.Args,
+							ApprovalToken: token,
+						},
+					}
+				}
+				return &types.ApprovalRequest{
+					Name: types.ApprovalRequestNameTool,
+					Value: types.ToolApprovalRequestValue{
+						AgentName:       rt.AgentSpec.Name,
+						ToolCallID:      tc.ToolCallID,
+						ToolName:        tc.ToolName,
+						ToolDisplayName: tc.ToolDisplayName,
+						Args:            tc.Args,
+						ApprovalToken:   token,
+					},
+				}
+			}
+			name := types.ApprovalRequestNameTool
+			if isSubAgent {
+				name = types.ApprovalRequestNameSubAgent
+			}
+			status, err := rt.durableApprovalWait(ctx, input, stepID, name, buildEvent, buildRequest)
+			if err != nil {
+				return toolResult{message: interfaces.Message{}, failed: true}, err
+			}
+			approvalStatus = status
 		} else {
+			// Non-durable path: unchanged blocking-channel behavior.
 			approvalTimeout := rt.approvalTaskTimeout()
 			approvalTimer := time.NewTimer(approvalTimeout)
 			defer approvalTimer.Stop()
@@ -712,6 +824,14 @@ func (rt *LocalRuntime) executeSingleTool(
 						Tools:            subAgentRoute.tools,
 						BudgetTracker:    input.BudgetTracker,
 						EnforceBudget:    false,
+						// A sub-agent has no durable.Task of its own — its LLM/tool calls
+						// become steps on the same parent run, sharing stepRunner but
+						// namespaced under a prefix unique to this delegation call site
+						// (iteration+idx) so they cannot collide with the parent's own
+						// steps or a sibling delegation's.
+						stepRunner:        input.stepRunner,
+						stepPrefix:        fmt.Sprintf("%ssubagent-%d-%d/", input.stepPrefix, iteration, idx),
+						budgetApprovalSeq: input.budgetApprovalSeq,
 					})
 				})
 				emit(events.NewAgentStepFinishedEvent(delegationName))
@@ -738,16 +858,19 @@ func (rt *LocalRuntime) executeSingleTool(
 				slog.String("tool", tc.ToolName),
 				slog.String("toolCallID", tc.ToolCallID))
 			toolPolicy := rt.toolExecutionPolicy(tc.ToolKind, policies)
-			result, execErr := executeWithPolicy(ctx, toolPolicy, func(attemptCtx context.Context) (string, error) {
-				return rt.ExecuteTool(attemptCtx, base.ExecuteToolInput{
-					Logger:     log,
-					Tools:      tools,
-					ToolName:   tc.ToolName,
-					Args:       tc.Args,
-					ToolCallID: tc.ToolCallID,
-					RunID:      input.RunID,
-					Iteration:  iteration,
-				}, input.MemoryScope)
+			toolStepID := fmt.Sprintf("%stool-exec-%d-%d", input.stepPrefix, iteration, idx)
+			result, execErr := runStep(ctx, input.stepRunner, toolStepID, func(stepCtx context.Context) (string, error) {
+				return executeWithPolicy(stepCtx, toolPolicy, func(attemptCtx context.Context) (string, error) {
+					return rt.ExecuteTool(attemptCtx, base.ExecuteToolInput{
+						Logger:     log,
+						Tools:      tools,
+						ToolName:   tc.ToolName,
+						Args:       tc.Args,
+						ToolCallID: tc.ToolCallID,
+						RunID:      input.RunID,
+						Iteration:  iteration,
+					}, input.MemoryScope)
+				})
 			})
 			if execErr != nil {
 				content = "Tool execution failed: " + execErr.Error()
@@ -927,6 +1050,8 @@ func (rt *LocalRuntime) checkBudget(
 	input AgentLoopInput,
 	telemetry *types.AgentTelemetry,
 	usage *interfaces.LLMUsage,
+	iteration int,
+	phase string,
 ) error {
 	if input.BudgetTracker == nil {
 		return nil
@@ -941,7 +1066,7 @@ func (rt *LocalRuntime) checkBudget(
 	if budgetErr == nil {
 		return nil
 	}
-	return rt.applyBudgetExceeded(ctx, input, telemetry, budgetErr)
+	return rt.applyBudgetExceeded(ctx, input, telemetry, budgetErr, iteration, phase)
 }
 
 // enforceBudgetIfExceeded applies OnExceeded when the shared tracker is already over limits
@@ -950,6 +1075,7 @@ func (rt *LocalRuntime) enforceBudgetIfExceeded(
 	ctx context.Context,
 	input AgentLoopInput,
 	telemetry *types.AgentTelemetry,
+	iteration int,
 ) error {
 	if !input.EnforceBudget || input.BudgetTracker == nil {
 		return nil
@@ -958,7 +1084,7 @@ func (rt *LocalRuntime) enforceBudgetIfExceeded(
 	if budgetErr == nil {
 		return nil
 	}
-	return rt.applyBudgetExceeded(ctx, input, telemetry, budgetErr)
+	return rt.applyBudgetExceeded(ctx, input, telemetry, budgetErr, iteration, "tools")
 }
 
 func (rt *LocalRuntime) applyBudgetExceeded(
@@ -966,6 +1092,8 @@ func (rt *LocalRuntime) applyBudgetExceeded(
 	input AgentLoopInput,
 	telemetry *types.AgentTelemetry,
 	budgetErr error,
+	iteration int,
+	phase string,
 ) error {
 	cfg := rt.AgentConfig.Limits.Budget
 	action := types.BudgetStopRun
@@ -1017,7 +1145,7 @@ func (rt *LocalRuntime) applyBudgetExceeded(
 
 	if action == types.BudgetWaitForApproval && !approvalsExhausted {
 		rt.Metrics.IncrementCounter(ctx, types.MetricBudgetApprovalRequested, kindAttr)
-		status := rt.awaitBudgetApprovalStatus(ctx, input, budgetErr.Error())
+		status := rt.awaitBudgetApprovalStatus(ctx, input, budgetErr.Error(), iteration, phase)
 		switch status {
 		case types.ApprovalStatusApproved:
 			rt.Metrics.IncrementCounter(ctx, types.MetricBudgetApprovalApproved, kindAttr)
@@ -1048,7 +1176,52 @@ func (rt *LocalRuntime) applyBudgetExceeded(
 // awaitBudgetApprovalStatus sends a CUSTOM budget_approval event and invokes the approval
 // handler. Returns the resolved ApprovalStatus. Returns ApprovalStatusUnavailable when
 // there is no subscriber connected (channel empty and no handler configured).
-func (rt *LocalRuntime) awaitBudgetApprovalStatus(ctx context.Context, input AgentLoopInput, detail string) types.ApprovalStatus {
+//
+// Durable mode (input.stepRunner != nil) wraps the wait in a RunStep keyed by iteration
+// and phase (see nextBudgetApprovalStepID) so the pause, and the eventual decision, survive
+// a process restart: see durableApprovalWait for the shared two-phase (emit-then-pending,
+// decide-via-CompleteStep) design also used for tool/sub-agent approvals.
+func (rt *LocalRuntime) awaitBudgetApprovalStatus(ctx context.Context, input AgentLoopInput, detail string, iteration int, phase string) types.ApprovalStatus {
+	hasChannel := strings.TrimSpace(input.ChannelName) != ""
+	if input.ApprovalHandler == nil && !hasChannel {
+		return types.ApprovalStatusUnavailable
+	}
+
+	tokens, costUSD := input.BudgetTracker.Totals()
+	buildEvent := func(token string) events.AgentEvent {
+		return events.NewAgentCustomEvent(string(events.AgentCustomEventNameBudget),
+			events.AgentCustomEventBudgetValue{
+				AgentName:     rt.AgentSpec.Name,
+				Detail:        detail,
+				TotalTokens:   tokens,
+				CostUSD:       costUSD,
+				ApprovalToken: token,
+			})
+	}
+
+	if stepID := nextBudgetApprovalStepID(input.stepPrefix, input.budgetApprovalSeq); stepID != "" {
+		status, err := rt.durableApprovalWait(ctx, input, stepID, types.ApprovalRequestNameBudget, buildEvent, func(token string) *types.ApprovalRequest {
+			return &types.ApprovalRequest{
+				Name: types.ApprovalRequestNameBudget,
+				Value: types.BudgetApprovalRequestValue{
+					AgentName:     rt.AgentSpec.Name,
+					Detail:        detail,
+					TotalTokens:   tokens,
+					CostUSD:       costUSD,
+					ApprovalToken: token,
+				},
+			}
+		})
+		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				return types.ApprovalStatusTimedOut
+			}
+			return types.ApprovalStatusRejected
+		}
+		return status
+	}
+
+	// Non-durable path: unchanged blocking-channel behavior.
 	token := uuid.New().String()
 	resultCh := make(chan types.ApprovalStatus, 1)
 	respond := func(status types.ApprovalStatus) error {
@@ -1058,44 +1231,29 @@ func (rt *LocalRuntime) awaitBudgetApprovalStatus(ctx context.Context, input Age
 		}
 		return nil
 	}
-
-	tokens, costUSD := input.BudgetTracker.Totals()
-	value := types.BudgetApprovalRequestValue{
-		AgentName:     rt.AgentSpec.Name,
-		Detail:        detail,
-		TotalTokens:   tokens,
-		CostUSD:       costUSD,
-		ApprovalToken: token,
-	}
 	approvalReq := &types.ApprovalRequest{
-		Name:    types.ApprovalRequestNameBudget,
-		Value:   value,
+		Name: types.ApprovalRequestNameBudget,
+		Value: types.BudgetApprovalRequestValue{
+			AgentName:     rt.AgentSpec.Name,
+			Detail:        detail,
+			TotalTokens:   tokens,
+			CostUSD:       costUSD,
+			ApprovalToken: token,
+		},
 		Respond: respond,
 	}
 
-	// Register the token so streaming callers can call Stream.Approve(token, status) to unblock.
 	rt.pendingApprovals.Store(token, resultCh)
 	defer rt.pendingApprovals.Delete(token)
 
-	// Emit CUSTOM event for streaming callers so they can call Stream.Approve(token, status).
-	hasChannel := strings.TrimSpace(input.ChannelName) != ""
-	rt.publishEventToChannel(ctx, input.ChannelName, events.NewAgentCustomEvent(string(events.AgentCustomEventNameBudget),
-		events.AgentCustomEventBudgetValue{
-			AgentName:     value.AgentName,
-			Detail:        value.Detail,
-			TotalTokens:   value.TotalTokens,
-			CostUSD:       value.CostUSD,
-			ApprovalToken: value.ApprovalToken,
-		}))
+	rt.publishEventToChannel(ctx, input.ChannelName, buildEvent(token))
 
-	// Non-streaming: call the approval handler synchronously.
 	if input.ApprovalHandler != nil {
 		approvalTimeout := rt.approvalTaskTimeout()
 		approvalCtx, cancel := context.WithTimeout(ctx, approvalTimeout)
 		input.ApprovalHandler(approvalCtx, approvalReq)
 		cancel()
 	} else if !hasChannel {
-		// No handler and no stream channel — cannot deliver the approval request.
 		return types.ApprovalStatusUnavailable
 	}
 
@@ -1104,5 +1262,69 @@ func (rt *LocalRuntime) awaitBudgetApprovalStatus(ctx context.Context, input Age
 		return status
 	case <-ctx.Done():
 		return types.ApprovalStatusRejected
+	}
+}
+
+// durableApprovalWait is the shared durable-mode wait used by budget, tool, and sub-agent
+// approvals. It runs a single RunStep that, on first execution (cache miss), emits ev
+// (built from the step's own durable token) and returns ErrStepPending immediately — it
+// never blocks. The eventual status is delivered by a later durable.CompleteStep call
+// (from [LocalRuntime.approve], driven by StreamHandle.Approve or, for the Run-path
+// ApprovalHandler, by the Respond callback built here) and is unmarshaled directly into
+// this RunStep's result; fn itself is not re-invoked to consume it (see durable-go
+// step.go: CompleteStep's payload becomes the step's cached result once written).
+//
+// On resume, a cache hit replays the previously-approved/rejected status without emitting
+// ev again; a step still Waiting resumes waiting under a fresh deadline.
+func (rt *LocalRuntime) durableApprovalWait(
+	ctx context.Context,
+	input AgentLoopInput,
+	stepID string,
+	name types.ApprovalRequestName,
+	buildEvent func(token string) events.AgentEvent,
+	buildRequest func(token string) *types.ApprovalRequest,
+) (types.ApprovalStatus, error) {
+	timeout := rt.approvalTaskTimeout()
+	var stepToken string
+	status, err := runStep(ctx, input.stepRunner, stepID, func(stepCtx context.Context) (types.ApprovalStatus, error) {
+		stepToken = input.stepRunner.StepToken(stepCtx)
+		rt.publishEventToChannel(stepCtx, input.ChannelName, buildEvent(stepToken))
+
+		if input.ApprovalHandler != nil {
+			req := buildRequest(stepToken)
+			req.Respond = rt.durableApprovalRespond(stepToken)
+			go func() {
+				handlerCtx, cancel := context.WithTimeout(context.Background(), timeout)
+				defer cancel()
+				input.ApprovalHandler(handlerCtx, req)
+			}()
+		}
+		return types.ApprovalStatusNone, durable.ErrStepPending
+	}, durable.WithStepTimeout(timeout))
+	if err != nil && errors.Is(err, context.DeadlineExceeded) && stepToken != "" {
+		// fn ran (this attempt was not a replay of an already-terminal step) and then hit
+		// the step deadline: waitForSignal leaves the step's disk record at
+		// StepStatusWaiting (not terminal) so a *different*, still-live wait could still be
+		// completed later. That is wrong for an approval we are about to treat as timed
+		// out here — a later resume must not wait on it again. Self-resolve it now so a
+		// resume gets an immediate cache hit with the same TimedOut outcome we return below.
+		if completeErr := durable.CompleteStep(context.Background(), rt.engine, stepToken, types.ApprovalStatusTimedOut); completeErr != nil &&
+			!errors.Is(completeErr, durable.ErrRunAlreadyFinished) {
+			rt.logger.Warn(ctx, "local: failed to self-resolve timed-out durable approval step",
+				slog.String("scope", "loop"),
+				slog.String("stepID", stepID),
+				slog.Any("error", completeErr))
+		}
+		return types.ApprovalStatusTimedOut, nil
+	}
+	return status, err
+}
+
+// durableApprovalRespond returns an [types.ApprovalSender] that resolves a durable
+// approval step by token instead of writing to an in-memory channel — used for both the
+// Run-path ApprovalHandler and (indirectly, via [LocalRuntime.approve]) StreamHandle.Approve.
+func (rt *LocalRuntime) durableApprovalRespond(token string) types.ApprovalSender {
+	return func(status types.ApprovalStatus) error {
+		return durable.CompleteStep(context.Background(), rt.engine, token, status)
 	}
 }

@@ -14,6 +14,9 @@ func init() {
 	agentruntime.RegisterWithRuntimeFactoryHook(func(f agentruntime.RuntimeFactory) agentruntime.RuntimeFactoryOption {
 		return withRuntimeFactory(f)
 	})
+	agentruntime.RegisterWithLocalConfigHook(func(cfg *local.LocalConfig) agentruntime.LocalConfigOption {
+		return withLocalConfig(cfg)
+	})
 }
 
 // TemporalConfig holds connection settings for the Temporal-based execution runtime.
@@ -58,7 +61,25 @@ func withRuntimeFactory(f agentruntime.RuntimeFactory) Option {
 		if c.runtimeFactory != nil && c.runtimeFactory.Name() != f.Name() {
 			c.factoryConflict = fmt.Errorf("provide either %s or %s, not both", c.runtimeFactory.Name(), f.Name())
 		}
+		if c.localConfig != nil {
+			c.factoryConflict = fmt.Errorf("WithLocalConfig is incompatible with the %s runtime factory", f.Name())
+		}
 		c.runtimeFactory = f
+	}
+}
+
+// withLocalConfig sets durable-go configuration for the local runtime. Conflicts with any
+// opt-in [agentruntime.RuntimeFactory] (Temporal/Restate) since those don't use LocalRuntime.
+func withLocalConfig(cfg *local.LocalConfig) Option {
+	return func(c *agentConfig) {
+		if cfg == nil {
+			return
+		}
+		if c.runtimeFactory != nil {
+			c.factoryConflict = fmt.Errorf("WithLocalConfig is incompatible with the %s runtime factory", c.runtimeFactory.Name())
+			return
+		}
+		c.localConfig = cfg
 	}
 }
 
@@ -115,6 +136,8 @@ func (cfg *agentConfig) buildLocalRuntime() (*local.LocalRuntime, error) {
 		local.WithApprovalHandler(cfg.approvalHandler),
 		local.WithTracer(cfg.tracer),
 		local.WithMetrics(cfg.metrics),
+		local.WithLocalConfig(cfg.localConfig),
+		local.WithToolsResolver(cfg.resolveTools),
 	}
 	return local.NewLocalRuntime(options...)
 }
