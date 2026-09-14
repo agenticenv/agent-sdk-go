@@ -7,9 +7,9 @@
 [![License](https://img.shields.io/github/license/agenticenv/agent-sdk-go?label=License)](LICENSE)
 [![Mentioned in Awesome Go](https://awesome.re/mentioned-badge.svg)](https://github.com/avelino/awesome-go)
 
-**AI agents in Go that keep running even when your process doesn't — durable by default, no infrastructure required.**
+**Build durable Go AI agents that pick up right where they left off.**
 
-**Open-source Go SDK for building AI agents** — crash-resilient agents with a pluggable execution runtime: run in-process ([durable-go](https://github.com/agenticenv/durable-go)) with zero infrastructure, or scale out to [Temporal](https://temporal.io) / [Restate](https://restate.dev) for distributed, horizontally-scaled execution across processes. Every core component is a pluggable interface, so nothing is locked in.
+**Open-source Go SDK for building durable AI agents.** Runs in-process with crash-resilient execution via [durable-go](https://github.com/agenticenv/durable-go) with zero setup, or switch to [Temporal](https://temporal.io) / [Restate](https://restate.dev) for crash-resilient, distributed execution. Every core component is a pluggable interface, so you're never locked in.
 
 📖 [Documentation](https://docs.agenticenv.ai)  ·  [Quickstart](https://docs.agenticenv.ai/getting-started/quickstart)  ·  [Examples](https://docs.agenticenv.ai/examples/running-examples) 
 
@@ -33,7 +33,7 @@
 - **Budget control** — cap token spend per run; stop execution or require human-in-the-loop approval when the limits are reached
 - **Hooks & guardrails** — middleware at LLM, tool, retrieval, and memory lifecycle points
 - **Execution config** — per-operation timeouts and max attempts via `With*ExecutionConfig`
-- **Durable execution** — crash-resilient runs on every runtime, in-process included; reconnect to active runs and resume event streams after a restart
+- **Durable execution** — crash-resilient runs on every runtime; reconnect to active runs and resume event streams after a restart
 - **Distributed execution** — with Temporal, decouple client triggers from worker execution across processes; with Restate, scale via registered endpoint deployments
 - **Observability** — OpenTelemetry traces, metrics, and structured logs
 
@@ -43,7 +43,7 @@
 go get github.com/agenticenv/agent-sdk-go@latest
 ```
 
-Go 1.26+. Agents are durable by default, no infrastructure required — the in-process runtime journals to a local directory (`./agent_data/<agent_name>` by default). Add a [Temporal](https://temporal.io) or [Restate](https://restate.dev) server only when you want distributed, multi-process execution — see [temporal-setup.md](temporal-setup.md) and [restate-setup.md](restate-setup.md).
+Go 1.26+. Agents are durable by default, no infrastructure required. Add a [Temporal](https://temporal.io) or [Restate](https://restate.dev) server only when you want distributed, multi-process execution — see [temporal-setup.md](temporal-setup.md) and [restate-setup.md](restate-setup.md).
 
 ## Quick Start
 
@@ -69,12 +69,16 @@ llmClient, _ := openai.NewClient(
 a, _ := agent.NewAgent(
     agent.WithSystemPrompt("You are a helpful assistant."),
     agent.WithLLMClient(llmClient),
+    // Durable by default (journals to ./agent_data/<agent_name>). To tune the journal or opt
+    // out, import "github.com/agenticenv/agent-sdk-go/pkg/agent/runtime/local" and add:
+    // local.WithLocalConfig(&local.LocalConfig{
+    //     DataDir:      "./agent_data/my-agent", // default: "./agent_data/<agent_name>"
+    //     AutoPurgeAge: 24 * time.Hour,           // default: 7 days
+    //     Timeout:      2 * time.Minute,          // default: none — bound long-running/stuck runs
+    //     Durability:   local.DurabilityOff(),    // or opt out entirely — pure in-memory, no journal
+    // }),
 )
 defer a.Close()
-
-// This agent is already durable — no extra config needed. Every Run/Stream call
-// above is journaled via durable-go; kill the process mid-run and a restart can
-// reconnect with GetAgentRun / GetAgentStream. See "Local" below to tune or opt out.
 
 // --- Run ---
 run, _ := a.Run(context.Background(), "Reply with a short greeting.", nil)
@@ -112,33 +116,6 @@ for event := range events {
     }
 }
 ```
-
-**Local** (durable by default — tune the journal or opt out) — import `pkg/agent/runtime/local`:
-
-```go
-import "github.com/agenticenv/agent-sdk-go/pkg/agent/runtime/local"
-
-a, _ := agent.NewAgent(
-    agent.WithSystemPrompt("You are a helpful assistant."),
-    agent.WithLLMClient(llmClient),
-    local.WithLocalConfig(&local.LocalConfig{
-        DataDir:      "./agent_data/my-agent", // default: "./agent_data/<agent_name>"
-        AutoPurgeAge: 24 * time.Hour,           // default: 7 days
-        Timeout:      2 * time.Minute,          // default: none — bound long-running/stuck runs in production
-    }),
-)
-defer a.Close()
-
-// Opt out entirely — pure in-memory, pre-durability behavior, no journal:
-a2, _ := agent.NewAgent(
-    agent.WithSystemPrompt("You are a helpful assistant."),
-    agent.WithLLMClient(llmClient),
-    local.WithLocalConfig(&local.LocalConfig{Durability: local.DurabilityOff()}),
-)
-defer a2.Close()
-```
-
-> Same `Run` / `Stream` / `GetAgentRun` / `GetAgentStream` reconnect APIs as Temporal/Restate below — but no `WithOffset(n>0)`: local's stream isn't seekable by offset, only replayable from the start. Reconnect replays completed steps as one coalesced message each (step granularity), not the original token-by-token stream. See [`examples/durable_agent/local`](examples/durable_agent/local) for a hands-on lab — zero infrastructure required.
 
 **Temporal** (distributed execution) — import `pkg/agent/runtime/temporal`:
 
@@ -201,7 +178,7 @@ defer a.Close()
 // Same Run / Stream / GetAgentStream + WithOffset APIs as Temporal
 ```
 
-> Crashes and process restarts don't have to mean lost work or missed approvals — see [durable_agent/local](examples/durable_agent/local) (single process, zero infrastructure), [durable_agent/temporal](examples/durable_agent/temporal) (split worker), and [durable_agent/restate](examples/durable_agent/restate) (single process). For the stream reconnect protocol (`GetAgentStream` + `WithOffset`), see the [reconnect example](examples/agent_with_reconnect) and [Durable Execution](https://docs.agenticenv.ai/advanced/durable-execution).
+> Crashes and process restarts don't have to mean lost work or missed approvals — see [durable_agent/local](examples/durable_agent/local) (single process, zero infrastructure), [durable_agent/temporal](examples/durable_agent/temporal) (split worker), and [durable_agent/restate](examples/durable_agent/restate) (single process). For the stream reconnect protocol (`GetAgentStream` + `WithOffset`), see the [reconnect example](examples/agent_with_reconnect) and [Durable Execution](https://docs.agenticenv.ai/advanced/durable-execution). Local has no `WithOffset(n>0)` — only replay from the start, with completed steps coalesced into one message each (step granularity), not the original token-by-token stream.
 
 ## CLI (`agctl`)
 
