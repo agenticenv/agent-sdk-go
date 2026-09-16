@@ -89,14 +89,16 @@ type AgentLoopInput struct {
 }
 
 // runStep wraps fn as a durable-go step when sr is non-nil, memoising fn's result under
-// stepID and replaying it (without re-invoking fn) on a later resume; when sr is nil it
-// just calls fn directly (opts are ignored), so every call site works unchanged on the
-// non-durable path.
+// stepID (empty struct input — call sites close over their args) and replaying it
+// (without re-invoking fn) on a later resume; when sr is nil it just calls fn directly
+// (opts are ignored), so every call site works unchanged on the non-durable path.
 func runStep[O any](ctx context.Context, sr *durable.StepRunner, stepID string, fn func(context.Context) (O, error), opts ...durable.StepOption) (O, error) {
 	if sr == nil {
 		return fn(ctx)
 	}
-	return durable.RunStep(ctx, sr, stepID, fn, opts...).Get(ctx)
+	return durable.RunStep(ctx, sr, stepID, struct{}{}, func(ctx context.Context, _ struct{}) (O, error) {
+		return fn(ctx)
+	}, opts...).Get(ctx)
 }
 
 // nextBudgetApprovalStepID returns a fresh, run-tree-unique step ID for one budget
