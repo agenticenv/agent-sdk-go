@@ -251,6 +251,9 @@ tasks:
       EXAMPLES_WITH_PROMPTS:
         - agent_with_conversation
         - agent_with_stream_conversation
+      EXAMPLES_LOCAL:
+        # Caller-owned durable-go engine — local only (not Temporal/Restate).
+        - NAME: agent_with_durable_engine
       EXAMPLES_TEMPORAL:
         - NAME: agent_with_temporal_client
         - NAME: agent_with_workflows
@@ -300,6 +303,18 @@ tasks:
         vars:
           NAME: '{{.ITEM}}'
           PROMPT: "Hi"
+          RUNTIME: '{{.RUNTIME}}'
+          REPORT_FILE: '{{.REPORT_FILE}}'
+          LOG_FILE: '{{.LOG_FILE}}'
+          COUNT_FILE: '{{.COUNT_FILE}}'
+          SKIP_RUN: '{{.SKIP_RUN}}'
+      - for:
+          var: EXAMPLES_LOCAL
+        if: '{{eq .RUNTIME "local"}}'
+        ignore_error: true
+        task: exec:example
+        vars:
+          NAME: '{{.ITEM.NAME}}'
           RUNTIME: '{{.RUNTIME}}'
           REPORT_FILE: '{{.REPORT_FILE}}'
           LOG_FILE: '{{.LOG_FILE}}'

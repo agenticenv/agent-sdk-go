@@ -55,8 +55,8 @@ Example: [Simple Agent](https://docs.agenticenv.ai/examples/simple-agent.md)
 1. Read [In-Process runtime](https://docs.agenticenv.ai/runtimes/in-process.md)
 2. `NewAgent` with no Temporal/Restate options is already durable — every LLM call and tool execution journals to `./agent_data/<agent_name>` via durable-go
 3. Kill the process mid-run, restart from the same working directory, then reconnect with `GetAgentRun` or `GetAgentStream` (no `WithOffset(n>0)` — see next section)
-4. Tune or opt out: import `pkg/agent/runtime/local`, add `local.WithLocalConfig(&local.LocalConfig{...})` — `DataDir`, `AutoPurgeAge`, `Timeout`, or `Durability: local.DurabilityOff()` to disable entirely
-5. Example: [Durable Agent (Local)](https://docs.agenticenv.ai/examples/durable-agent-local.md)
+4. Tune or opt out: import `pkg/agent/runtime/local`, add `local.WithLocalConfig(&local.LocalConfig{...})` — `DataDir`, `AutoPurgeAge`, `Timeout`, or `Durability: local.DurabilityOff()` to disable entirely. For payload codec, journal MAC, or a step-token key that survives restart, pass a caller-owned `durable.Engine` as `LocalConfig.Engine` (you own `Close`) — same idea as `temporal.WithTemporalClient`
+5. Example: [Durable Agent (Local)](https://docs.agenticenv.ai/examples/durable-agent-local.md) · caller-owned engine: [Durable Engine](https://docs.agenticenv.ai/examples/durable-engine.md)
 
 ### Switch to Temporal (distributed execution)
 

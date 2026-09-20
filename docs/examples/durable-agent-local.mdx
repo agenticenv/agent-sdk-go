@@ -48,6 +48,10 @@ No `task infra:*` step, no server to start.
 
 Full steps: [README](https://github.com/agenticenv/agent-sdk-go/blob/main/examples/durable_agent/local/README.md). Protocol details: [Durable Execution](/advanced/durable-execution).
 
+## Production engine
+
+The lab uses the SDK-built engine (plaintext journal). For payload codec, journal MAC, or a step-token key that survives restart, pass a caller-owned `durable.Engine` as `local.LocalConfig.Engine` — you own `Close`. Runnable example: [Durable Engine](/examples/durable-engine). Snippet: [README — Production engine](https://github.com/agenticenv/agent-sdk-go/blob/main/examples/durable_agent/local/README.md#production-engine-caller-owned). Same pattern as [Temporal Client](/examples/temporal-client). Details: [In-Process durability](/runtimes/in-process#caller-owned-engine-payload-codec-journal-mac-step-token-key).
+
 ## Learn more
 
 <CardGroup cols={2}>
@@ -57,7 +61,7 @@ Full steps: [README](https://github.com/agenticenv/agent-sdk-go/blob/main/exampl
   </Card>
 
   <Card title="In-Process Runtime" icon="laptop" href="/runtimes/in-process" horizontal>
-    Durability knobs — DataDir, AutoPurgeAge, Timeout, opt-out
+    SDK-built knobs vs caller-owned Engine
   </Card>
 
   <Card title="Durable Agent (Temporal)" icon="server" href="/examples/durable-agent" horizontal>

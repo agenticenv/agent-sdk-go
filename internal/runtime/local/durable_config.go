@@ -18,9 +18,14 @@ type LocalConfig struct {
 	Durability *bool
 
 	// Engine, when set, is used as-is instead of constructing one from DataDir/knobs below.
+	// This is the TLS / Temporal Cloud equivalent: build a [durable.Engine] yourself when
+	// you need WithPayloadCodec, WithJournalMACKey, WithStepTokenKey (approval tokens that
+	// survive a restart), or other durable-go options the SDK does not expose as knobs.
 	// The caller retains ownership: LocalRuntime.Close does not close a caller-supplied
-	// Engine. Takes priority over every field below. Multiple agents/tasks may share one
-	// Engine (see [durable.RegisterTask] — one taskID per agent name).
+	// Engine. Takes priority over every field below — DataDir, AutoPurgeAge,
+	// AutoPurgeMaxRuns, AutoPurgeMaxBytes, Timeout, and LockTimeout are ignored (set them
+	// on durable.NewEngine). Multiple agents/tasks may share one Engine (see
+	// [durable.RegisterTask] — one taskID per agent name).
 	Engine *durable.Engine
 
 	// DataDir is the durable-go journal directory for an engine this runtime constructs
@@ -36,12 +41,24 @@ type LocalConfig struct {
 
 	// AutoPurgeAge is how long a Completed/Failed run is kept before automatic deletion.
 	// Running and Waiting runs (e.g. a pending approval) are never purged regardless of age.
-	// 0 uses the default (7 days). Negative disables auto-purge entirely.
+	// 0 uses the default (7 days). Negative disables age-based purge; AutoPurgeMaxRuns and
+	// AutoPurgeMaxBytes still apply when set (durable-go starts the purger from those caps
+	// alone).
 	AutoPurgeAge time.Duration
 
 	// AutoPurgeInterval is how often the purge sweep runs. 0 uses the default (1 hour).
 	// Ignored when AutoPurgeAge is negative.
 	AutoPurgeInterval time.Duration
+
+	// AutoPurgeMaxRuns deletes the oldest Completed/Failed runs when their count exceeds
+	// this value. 0 (default) means no count cap. Running and Waiting runs are never
+	// counted or removed. Ignored when Engine is set.
+	AutoPurgeMaxRuns int
+
+	// AutoPurgeMaxBytes deletes the oldest Completed/Failed runs when their directories
+	// exceed this many bytes on disk. 0 (default) means no size cap. Ignored when Engine
+	// is set.
+	AutoPurgeMaxBytes int64
 
 	// MaxRetries is the default durable-go task retry count for this engine. 0 (default)
 	// means a task body runs once; a step failure still stops task-level retries regardless

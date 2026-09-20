@@ -109,6 +109,49 @@ func TestDurable_CallerSuppliedEngineNotClosed(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestSlogFromLogger(t *testing.T) {
+	require.Nil(t, slogFromLogger(nil))
+	require.NotNil(t, slogFromLogger(logger.NoopLogger()))
+	require.Nil(t, slogFromLogger(stubLogger{}))
+}
+
+type stubLogger struct{}
+
+func (stubLogger) Debug(context.Context, string, ...any) {}
+func (stubLogger) Info(context.Context, string, ...any)  {}
+func (stubLogger) Warn(context.Context, string, ...any)  {}
+func (stubLogger) Error(context.Context, string, ...any) {}
+
+func TestDurable_AutoPurgeCapsConstructEngine(t *testing.T) {
+	client := &seqLLMClient{responses: []*interfaces.LLMResponse{{Content: "ok"}}}
+	cases := []struct {
+		name string
+		cfg  LocalConfig
+	}{
+		{name: "max-runs", cfg: LocalConfig{AutoPurgeMaxRuns: 10}},
+		{name: "max-bytes", cfg: LocalConfig{AutoPurgeMaxBytes: 1 << 20}},
+		{name: "age-off-with-max-runs", cfg: LocalConfig{AutoPurgeAge: -1, AutoPurgeMaxRuns: 5}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.cfg.DataDir = t.TempDir()
+			rt, err := NewLocalRuntime(
+				WithLogger(logger.NoopLogger()),
+				WithAgentSpec(sdkruntime.AgentSpec{Name: "purge-caps-" + tc.name}),
+				WithAgentConfig(sdkruntime.AgentConfig{
+					LLM:    sdkruntime.AgentLLM{Client: client},
+					Limits: sdkruntime.AgentLimits{MaxIterations: 5, Timeout: 5 * time.Second},
+				}),
+				WithLocalConfig(&tc.cfg),
+			)
+			require.NoError(t, err)
+			t.Cleanup(rt.Close)
+			require.NotNil(t, rt.engine)
+			require.True(t, rt.ownsEngine)
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // GetRunHandle / GetStreamHandle lookup semantics
 // ---------------------------------------------------------------------------

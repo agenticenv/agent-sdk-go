@@ -60,7 +60,11 @@ Horizontal worker scaling (`NewAgentWorker` / multiple registered endpoint deplo
 
 The in-process runtime journals every LLM call and tool execution to disk via [durable-go](https://github.com/agenticenv/durable-go) — no `WithLocalConfig` call needed. If the process crashes mid-run, restart it (from the same working directory) and reconnect with `GetAgentRun` or `GetAgentStream`; already-completed steps are not re-executed. Unlike Temporal/Restate, `GetAgentStream`'s `Events` does not accept `WithOffset(n)` for `n > 0` here — reconnect always replays full step history first (see [Reconnect fidelity](#limitations) below), then continues live.
 
-Import `pkg/agent/runtime/local` to tune the journal or opt out:
+Same split as Temporal: `LocalConfig` knobs build a default engine (like [`WithTemporalConfig`](/runtimes/temporal#withtemporalconfig-simple-local-dev)); `LocalConfig.Engine` is a caller-owned engine for security and custom options (like [`WithTemporalClient`](/runtimes/temporal#withtemporalclient-temporal-cloud-tls-custom-options)).
+
+### SDK-built engine (default)
+
+The SDK constructs a durable-go engine and manages its lifecycle. Import `pkg/agent/runtime/local` to tune the journal or opt out:
 
 ```go
 import "github.com/agenticenv/agent-sdk-go/pkg/agent/runtime/local"
@@ -79,18 +83,79 @@ a, err := agent.NewAgent(
 | Field | Default | Notes |
 |---|---|---|
 | `Durability` | `true` (`nil`) | `local.DurabilityOff()` opts out entirely — pure in-memory, pre-durability behavior |
-| `Engine` | none | Supply a pre-built `durable.Engine` to share across agents/tasks; you own `Close` |
+| `Engine` | none | Leave unset for the SDK-built engine. See [Caller-owned Engine](#caller-owned-engine-payload-codec-journal-mac-step-token-key) |
 | `DataDir` | `./agent_data/<agent_name>` | Exclusive-locked per process — **distinct `DataDir` per replica** in multi-instance deployments |
-| `AutoPurgeAge` | 7 days | Running/Waiting runs (e.g. a pending approval) are never purged regardless of age |
+| `AutoPurgeAge` | 7 days | Running/Waiting runs (e.g. a pending approval) are never purged regardless of age. Negative disables age-based purge; max-run/max-byte caps still apply if set |
+| `AutoPurgeMaxRuns` | none | Cap on Completed/Failed runs kept on disk. 0 = no count cap |
+| `AutoPurgeMaxBytes` | none | Cap on Completed/Failed run directory size. 0 = no size cap |
 | `Timeout` | none | Unbounded by default — a stuck approval or a cancelled-but-uncancelled run can run forever; set this in production |
 
 <Warning>
 `DataDir` is exclusive-locked (in-process + OS `flock`). Running more than one process/replica against the same `DataDir` fails the second one's engine creation. Give each replica a distinct `DataDir` (e.g. derived from hostname/pod name).
 </Warning>
 
+The default journal is **plaintext JSON** (`input.json`, step results). The SDK does not invent encryption or step-token keys.
+
 <Warning>
-**`a.Close()` cancels in-flight local runs — this is not the same as a crash.** `Close` closes the durable-go engine it owns, which cancels every in-flight run on that engine (not just the calling agent's) and waits for that cancellation to be journaled before returning. Those runs become terminal (not resumable) — `GetAgentStream` / `GetAgentRun` return `ErrRunAlreadyCompleted` for them afterward, the same as a run that finished normally. On Temporal/Restate, closing the client does **not** affect server-side runs. Practically: a graceful shutdown handler that calls `a.Close()` while runs are in flight finalizes them; only an unclean process exit that skips `Close` (`kill -9`, OOM, panic before `defer` runs) leaves a run genuinely resumable via reconnect on the next process start.
+**`a.Close()` cancels in-flight local runs — this is not the same as a crash.** `Close` closes the durable-go engine it **owns**, which cancels every in-flight run on that engine (not just the calling agent's) and waits for that cancellation to be journaled before returning. Those runs become terminal (not resumable) — `GetAgentStream` / `GetAgentRun` return `ErrRunAlreadyCompleted` for them afterward, the same as a run that finished normally. On Temporal/Restate, closing the client does **not** affect server-side runs. Practically: a graceful shutdown handler that calls `a.Close()` while runs are in flight finalizes them; only an unclean process exit that skips `Close` (`kill -9`, OOM, panic before `defer` runs) leaves a run genuinely resumable via reconnect on the next process start.
 </Warning>
+
+### Caller-owned Engine (payload codec, journal MAC, step-token key)
+
+Use when you need at-rest encryption, a tamper-evident journal, or approval tokens that survive a process restart. You create and own the durable-go engine — the same pattern as Temporal Cloud / TLS via `WithTemporalClient`:
+
+```go
+import (
+    "encoding/hex"
+    "os"
+    "time"
+
+    "github.com/agenticenv/agent-sdk-go/pkg/agent"
+    "github.com/agenticenv/agent-sdk-go/pkg/agent/runtime/local"
+    durable "github.com/agenticenv/durable-go"
+)
+
+payloadKey, err := hex.DecodeString(os.Getenv("DURABLE_PAYLOAD_KEY"))
+if err != nil {
+    return err
+}
+codec, err := durable.NewAESGCMCodec(payloadKey)
+if err != nil {
+    return err
+}
+macKey, err := hex.DecodeString(os.Getenv("DURABLE_JOURNAL_MAC_KEY"))
+if err != nil {
+    return err
+}
+tokenKey, err := hex.DecodeString(os.Getenv("DURABLE_STEP_TOKEN_KEY"))
+if err != nil {
+    return err
+}
+
+engine, err := durable.NewEngine(ctx, "./agent_data/my-agent",
+    durable.WithPayloadCodec(codec),
+    durable.WithJournalMACKey(macKey),
+    durable.WithStepTokenKey(tokenKey), // required for CompleteStep after a restart
+    durable.WithDefaultStepTokenTTL(24*time.Hour),
+    durable.WithAutoPurge(7*24*time.Hour),
+)
+if err != nil {
+    return err
+}
+defer engine.Close()
+
+a, err := agent.NewAgent(
+    agent.WithLLMClient(llmClient),
+    agent.WithSystemPrompt("You are a helpful assistant."),
+    local.WithLocalConfig(&local.LocalConfig{Engine: engine}),
+)
+```
+
+<Warning>
+The agent does **not** close a caller-supplied `Engine` — you own its lifecycle and must call `engine.Close()` yourself. `DataDir`, `AutoPurgeAge`, `Timeout`, `LockTimeout`, and the other knobs are ignored when `Engine` is set (set them on `NewEngine` instead). Use the same codec and journal MAC key (or none) every time you open that directory — turning them on later against an existing plaintext tree is not a migrate. Step IDs, errors, and panic traces stay plaintext even with a codec. See [durable-go data privacy](https://github.com/agenticenv/durable-go#data-privacy--sensitive-payloads).
+</Warning>
+
+See [Durable Engine example](/examples/durable-engine) for the full pattern.
 
 ## Limitations
 

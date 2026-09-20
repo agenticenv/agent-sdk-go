@@ -130,6 +130,7 @@
             "pages": [
               "examples/simple-agent",
               "examples/temporal-client",
+              "examples/durable-engine",
               "examples/nonblocking-run",
               "examples/concurrent-runs",
               "examples/json-response",

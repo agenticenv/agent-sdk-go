@@ -24,7 +24,7 @@ Examples use `LLM_APIKEY`, `LLM_PROVIDER`, and `LLM_MODEL` from `examples/.env` 
 | **Temporal** | `AGENT_RUNTIME=temporal` | `task infra:temporal:up` and `task infra:temporal:wait` |
 | **Restate** | `AGENT_RUNTIME=restate` | `task infra:restate:up` and `task infra:restate:wait` |
 
-Most examples accept all three via `config.RuntimeOption`. Local is durable by default — no extra config or infrastructure; see the zero-infrastructure lab `durable_agent/local`. Temporal labs (`durable_agent/temporal`, `agent_with_worker`, `agent_with_temporal_client`) use Temporal-specific APIs (`WithTemporalClient`, `NewAgentWorker`). Durable reconnect with `WithOffset` (`agent_with_reconnect`) works on Temporal or Restate only — local reconnect has no offset. Restate durability lab: `durable_agent/restate`. See [Restate runtime](/runtimes/restate) and [restate-setup.md](https://github.com/agenticenv/agent-sdk-go/blob/main/restate-setup.md).
+Most examples accept all three via `config.RuntimeOption`. Local is durable by default — no extra config or infrastructure; see the zero-infrastructure lab `durable_agent/local`. Temporal labs (`durable_agent/temporal`, `agent_with_worker`, `agent_with_temporal_client`) use Temporal-specific APIs (`WithTemporalClient`, `NewAgentWorker`). The caller-owned durable-go engine lab (`agent_with_durable_engine`) is local only. Durable reconnect with `WithOffset` (`agent_with_reconnect`) works on Temporal or Restate only — local reconnect has no offset. Restate durability lab: `durable_agent/restate`. See [Restate runtime](/runtimes/restate) and [restate-setup.md](https://github.com/agenticenv/agent-sdk-go/blob/main/restate-setup.md).
 
 ## Example index
 
@@ -32,6 +32,7 @@ Most examples accept all three via `config.RuntimeOption`. Local is durable by d
 |---|---|---|---|
 | [Simple Agent](/examples/simple-agent) | [Quickstart](/getting-started/quickstart) | Local, Temporal, Restate | — |
 | [Temporal Client](/examples/temporal-client) | [Temporal](/runtimes/temporal) | Temporal | Temporal |
+| [Durable Engine](/examples/durable-engine) | [In-Process](/runtimes/in-process) | Local | — |
 | [Non-blocking Run](/examples/nonblocking-run) | [Run](/getting-started/run) | Local, Temporal, Restate | — |
 | [JSON Response](/examples/json-response) | [Response format](/features/response-format) | Local, Temporal, Restate | — |
 | [Reasoning](/examples/reasoning) | [Reasoning](/features/reasoning) | Local, Temporal, Restate | — |
@@ -69,7 +70,7 @@ Most examples accept all three via `config.RuntimeOption`. Local is durable by d
 
 **Stateful agents** — [Conversation](/examples/conversation) → [Memory](/examples/memory) or [Retrieval](/examples/retrieval)
 
-**Production patterns** — [Durable Agent (Local)](/examples/durable-agent-local) → [Temporal Client](/examples/temporal-client) → [Agent Worker](/examples/agent-worker) → [Durable Agent (Temporal)](/examples/durable-agent) → [Durable Agent (Restate)](/examples/durable-agent-restate) → [Agent Chat](/reference-apps/agent-chat)
+**Production patterns** — [Durable Agent (Local)](/examples/durable-agent-local) → [Durable Engine](/examples/durable-engine) → [Temporal Client](/examples/temporal-client) → [Agent Worker](/examples/agent-worker) → [Durable Agent (Temporal)](/examples/durable-agent) → [Durable Agent (Restate)](/examples/durable-agent-restate) → [Agent Chat](/reference-apps/agent-chat)
 
 **Integrations** — [MCP Config](/examples/mcp-config) → [A2A Server](/examples/a2a-server) → [AG-UI](/examples/agui)
 

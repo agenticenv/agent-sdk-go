@@ -434,6 +434,42 @@ transparently; with it off, the work started by the killed process is simply gon
 
 ---
 
+## Production engine (caller-owned)
+
+This lab uses the **SDK-built** engine (plaintext journal, ephemeral step-token key).
+For production — at-rest encryption, journal MAC, or approval tokens that survive a
+restart — build a [durable-go](https://github.com/agenticenv/durable-go) engine yourself
+and pass it as `LocalConfig.Engine`. Same split as Temporal
+`WithTemporalConfig` vs `WithTemporalClient`. You own `engine.Close()`; `a.Close()`
+does not close a supplied engine.
+
+Keys from the environment (hex). Do not turn codec/MAC on later against an existing
+plaintext `dataDir` — use a new directory.
+
+```go
+payloadKey, err := hex.DecodeString(os.Getenv("DURABLE_PAYLOAD_KEY"))
+codec, err := durable.NewAESGCMCodec(payloadKey)
+macKey, err := hex.DecodeString(os.Getenv("DURABLE_JOURNAL_MAC_KEY"))
+tokenKey, err := hex.DecodeString(os.Getenv("DURABLE_STEP_TOKEN_KEY"))
+
+engine, err := durable.NewEngine(ctx, "./agent_data/my-agent",
+    durable.WithPayloadCodec(codec),
+    durable.WithJournalMACKey(macKey),
+    durable.WithStepTokenKey(tokenKey),
+    durable.WithAutoPurge(7*24*time.Hour),
+)
+defer engine.Close()
+
+a, err := agent.NewAgent(
+    agent.WithLLMClient(llmClient),
+    local.WithLocalConfig(&local.LocalConfig{Engine: engine}),
+)
+```
+
+Runnable example: [`../../agent_with_durable_engine/`](../../agent_with_durable_engine/).
+Full options and caveats: [In-Process durability](https://docs.agenticenv.ai/runtimes/in-process#caller-owned-engine-payload-codec-journal-mac-step-token-key)
+and [durable-go data privacy](https://github.com/agenticenv/durable-go#data-privacy--sensitive-payloads).
+
 ## Notes
 
 - Topology is a single process, no server, no worker — `./agent_data/local-durable-agent`
