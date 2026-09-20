@@ -8,8 +8,8 @@ github.com/a2aproject/a2a-go/v2 v2.5.0 h1:ZdcFoxv+nZTUV0i2ue5hES76YCANFPG9vjqd7v
 github.com/a2aproject/a2a-go/v2 v2.5.0/go.mod h1:NcRp/ZHxgMzDj12/BteIC2gOjljuEBKaGRfEdJ2lNSI=
 github.com/adrg/xdg v0.5.3 h1:xRnxJXne7+oWDatRhR1JLnvuccuIeCoBu2rtuLqQB78=
 github.com/adrg/xdg v0.5.3/go.mod h1:nlTsY+NNiCBGCK2tpm09vRqfVzrc2fLmXGpBLF0zlTQ=
-github.com/agenticenv/durable-go v0.1.4 h1:IB69bvRSR4vwvJhVeeinvgj8fmao75Ya/wsG2on/ldQ=
-github.com/agenticenv/durable-go v0.1.4/go.mod h1:cbmVngGZc0wCxVBJxiZyylQSzUtUnRPUeFcviVFkZoM=
+github.com/agenticenv/durable-go v0.1.5 h1:pHbgbgt0UzN9Kwcpk4lGtG58LcUHj70K4RdIFUUiovM=
+github.com/agenticenv/durable-go v0.1.5/go.mod h1:v5qFyYz91OGyHSt1zNi1LL4Cjjf7gPGDggQk96phQoY=
 github.com/alecthomas/assert/v2 v2.11.0 h1:2Q9r3ki8+JYXvGsDyBXwH3LcJ+WK5D0gc5E8vS6K3D0=
 github.com/alecthomas/assert/v2 v2.11.0/go.mod h1:Bze95FyfUr7x34QZrjL+XP+0qgp/zg8yS+TtBj1WA3k=
 github.com/alecthomas/kong v1.16.1 h1:ixhCt93XkJ98kGposQ54+bl0IK6XwqB40AsMynU7Z8E=

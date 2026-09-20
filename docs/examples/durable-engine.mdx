@@ -1,0 +1,69 @@
+---
+title: "Durable Engine"
+description: "Build a caller-owned durable-go engine for payload encryption, journal MAC, and stable step-token keys"
+---
+
+Uses `local.WithLocalConfig(&local.LocalConfig{Engine: engine})` instead of the SDK-built default engine. You create and own the [durable-go](https://github.com/agenticenv/durable-go) engine — required for AES-GCM payload encryption, journal MAC, and a step-token key that survives a process restart. Same split as [`temporal.WithTemporalClient`](/examples/temporal-client).
+
+Source: [`examples/agent_with_durable_engine/`](https://github.com/agenticenv/agent-sdk-go/tree/main/examples/agent_with_durable_engine)
+
+## What it demonstrates
+
+- `durable.NewEngine` with `WithPayloadCodec`, `WithJournalMACKey`, `WithStepTokenKey`
+- `local.WithLocalConfig(&local.LocalConfig{Engine: engine})` on `NewAgent`
+- Caller-owned engine lifecycle (`defer engine.Close()` — `a.Close()` does not close it)
+
+## Run
+
+From `examples/` (local runtime only — no Temporal or Restate):
+
+```bash
+go run ./agent_with_durable_engine "Hello, what can you do?"
+```
+
+Optional env (hex). If unset, the example generates random keys and a temp `dataDir`:
+
+| Variable | Purpose |
+|---|---|
+| `DURABLE_PAYLOAD_KEY` | AES-GCM key (16/24/32 bytes hex) |
+| `DURABLE_JOURNAL_MAC_KEY` | Journal HMAC key |
+| `DURABLE_STEP_TOKEN_KEY` | Approval token key (survives restart) |
+| `DURABLE_DATA_DIR` | Journal directory (default: temp dir, deleted on exit) |
+
+## Key code
+
+```go
+engine, err := durable.NewEngine(ctx, dataDir,
+    durable.WithPayloadCodec(codec),
+    durable.WithJournalMACKey(macKey),
+    durable.WithStepTokenKey(tokenKey),
+)
+defer engine.Close()
+
+a, err := agent.NewAgent(
+    local.WithLocalConfig(&local.LocalConfig{Engine: engine}),
+    agent.WithLLMClient(llmClient),
+)
+```
+
+For simple local dev without encryption or a stable token key, omit `Engine` — see [In-Process runtime](/runtimes/in-process).
+
+## Expected output
+
+```
+I'm a helpful assistant powered by an LLM. I can answer questions, help with tasks,
+and have multi-turn conversations. What would you like to explore?
+```
+
+The response is identical to the simple-agent — the difference is the journal (encrypted + MAC-signed) and caller-owned engine lifecycle.
+
+## Learn more
+
+<CardGroup cols={2}>
+  <Card title="In-Process Runtime" icon="laptop" href="/runtimes/in-process" horizontal>
+    SDK-built knobs vs caller-owned Engine
+  </Card>
+  <Card title="Temporal Client" icon="server" href="/examples/temporal-client" horizontal>
+    Same ownership pattern for Temporal
+  </Card>
+</CardGroup>

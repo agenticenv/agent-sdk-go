@@ -14,6 +14,7 @@ import (
 	"github.com/agenticenv/agent-sdk-go/internal/runtime/base"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
+	"github.com/agenticenv/agent-sdk-go/pkg/logger"
 	durable "github.com/agenticenv/durable-go"
 )
 
@@ -24,6 +25,16 @@ const (
 	defaultAutoPurgeAge      = 7 * 24 * time.Hour
 	defaultAutoPurgeInterval = time.Hour
 )
+
+// slogFromLogger returns the underlying *slog.Logger when l is a [logger.SlogLogger].
+// Nil or a non-slog Logger yields nil so durable.WithLogger is omitted (discard default).
+func slogFromLogger(l logger.Logger) *slog.Logger {
+	sl, ok := l.(*logger.SlogLogger)
+	if !ok {
+		return nil
+	}
+	return sl.Slog()
+}
 
 // durableRunInput is the JSON resume DTO durable-go persists to input.json on first
 // start. Everything a resumed Task.Exec needs that IS serializable lives here; anything
@@ -89,10 +100,10 @@ func (rt *LocalRuntime) setupDurability() error {
 			dataDir = defaultDataDir(rt.AgentSpec.Name)
 		}
 
-		opts := []durable.EngineOption{durable.WithAutoPurge(defaultAutoPurgeAge, defaultAutoPurgeInterval)}
+		opts := []durable.Option{durable.WithAutoPurge(defaultAutoPurgeAge, defaultAutoPurgeInterval)}
 		if cfg != nil {
 			if cfg.AutoPurgeAge < 0 {
-				opts = nil // negative disables auto-purge: omit the option (durable-go default is off)
+				opts = nil // negative disables age-based purge; max-run/max-byte caps below still apply
 			} else if cfg.AutoPurgeAge > 0 || cfg.AutoPurgeInterval > 0 {
 				age := cfg.AutoPurgeAge
 				if age <= 0 {
@@ -102,7 +113,13 @@ func (rt *LocalRuntime) setupDurability() error {
 				if interval <= 0 {
 					interval = defaultAutoPurgeInterval
 				}
-				opts = []durable.EngineOption{durable.WithAutoPurge(age, interval)}
+				opts = []durable.Option{durable.WithAutoPurge(age, interval)}
+			}
+			if cfg.AutoPurgeMaxRuns > 0 {
+				opts = append(opts, durable.WithAutoPurgeMaxRuns(cfg.AutoPurgeMaxRuns))
+			}
+			if cfg.AutoPurgeMaxBytes > 0 {
+				opts = append(opts, durable.WithAutoPurgeMaxBytes(cfg.AutoPurgeMaxBytes))
 			}
 			if cfg.MaxRetries > 0 {
 				opts = append(opts, durable.WithMaxRetries(cfg.MaxRetries))
@@ -113,6 +130,9 @@ func (rt *LocalRuntime) setupDurability() error {
 			if cfg.LockTimeout > 0 {
 				opts = append(opts, durable.WithLockTimeout(cfg.LockTimeout))
 			}
+		}
+		if l := slogFromLogger(rt.logger); l != nil {
+			opts = append(opts, durable.WithLogger(l))
 		}
 
 		engine, err := durable.NewEngine(context.Background(), dataDir, opts...)

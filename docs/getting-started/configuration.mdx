@@ -35,6 +35,7 @@ A Temporal or Restate connection is **optional**. Omit Temporal and Restate opti
 
 | Option | Description |
 |---|---|
+| `local.WithLocalConfig(cfg)` | In-process durable-go knobs (`DataDir`, purge, timeout). Omit for defaults. Set `Engine` for payload codec, journal MAC, or a stable step-token key — you own that engine's lifecycle. See [In-Process durability](/runtimes/in-process#durability) |
 | `temporal.WithTemporalConfig(cfg)` | Simple Temporal connection — host, port, namespace, task queue. Agent manages client lifecycle |
 | `temporal.WithTemporalClient(tc, taskQueue)` | Pre-built Temporal client — use for TLS, API keys, Temporal Cloud. You own the client lifecycle. Mutually exclusive with `WithTemporalConfig` |
 | `restate.WithRestateConfig(cfg)` | Restate ingress + embedded SDK endpoint. Mutually exclusive with Temporal options |
@@ -42,11 +43,31 @@ A Temporal or Restate connection is **optional**. Omit Temporal and Restate opti
 | `DisableLocalWorker()` | Temporal — agent process does not poll the task queue; pair with `NewAgentWorker` |
 | `WithDisableFingerprintCheck(disable)` | Skip agent config fingerprint check — break-glass option, not for production use |
 
-See [Runtimes](/runtimes/overview), [Temporal runtime](/runtimes/temporal), and [Restate runtime](/runtimes/restate) for connection details.
+See [Runtimes](/runtimes/overview), [In-Process](/runtimes/in-process), [Temporal runtime](/runtimes/temporal), and [Restate runtime](/runtimes/restate) for connection details.
 
 <Warning>
 Provide **either** Temporal options **or** `restate.WithRestateConfig`, not both.
 </Warning>
+
+### LocalConfig fields
+
+Omit `local.WithLocalConfig` for durable-by-default with SDK-built engine defaults. Knobs are the simple path; `Engine` is the production/security path (same idea as `WithTemporalConfig` vs `WithTemporalClient`):
+
+```go
+local.WithLocalConfig(&local.LocalConfig{
+    DataDir:      "./agent_data/my-agent",
+    AutoPurgeAge: 24 * time.Hour,
+    Timeout:      2 * time.Minute,
+})
+```
+
+```go
+engine, err := durable.NewEngine(ctx, dataDir, durable.WithPayloadCodec(codec) /* ... */)
+// you own engine.Close()
+local.WithLocalConfig(&local.LocalConfig{Engine: engine})
+```
+
+Incompatible with Temporal or Restate options — those runtimes do not use LocalRuntime.
 
 ### TemporalConfig fields
 

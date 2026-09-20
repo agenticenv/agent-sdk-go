@@ -117,6 +117,14 @@ These examples run with `AGENT_RUNTIME=local` (default), `AGENT_RUNTIME=temporal
 | `agent_with_workflows` | Deterministic workflow execution via `run_workflow` tool — `WorkflowRunner` interface; `inprocess_runner.go` (default, no infra) and `temporal_runner.go` (`ORCHESTRATION_ENGINE=temporal`) | `infra:temporal:up`, `infra:temporal:wait` (Temporal engine only) |
 | `agent_with_code_execution` | Sandboxed code execution via `execute_code` tool — `SandboxRuntime` interface; `local_runner.go` (default, needs Python/Node) and `docker_runner.go` (`SANDBOX_ENV=docker`) | Docker (Docker runner only) |
 
+### Local only
+
+These use local-runtime-only APIs. Do not set `AGENT_RUNTIME=temporal` or `restate`.
+
+| Example | What it demonstrates | Infra (Task, from `examples/`) |
+|---------|---------------------|--------------------------------|
+| `agent_with_durable_engine` | Caller-owned durable-go engine — `local.WithLocalConfig{Engine}`; payload codec, journal MAC, step-token key | — |
+
 ### Durable runtimes (Temporal or Restate)
 
 Requires **`AGENT_RUNTIME=temporal`** or **`AGENT_RUNTIME=restate`** (not local — no stream offsets). Same reconnect APIs on both; single process by default.
@@ -149,7 +157,7 @@ Index: **[durable_agent/README.md](durable_agent/README.md)**.
 
 For **`.env`** and credentials, see [Configuration](#configuration) first. Add **`EMBEDDING_OPENAI_APIKEY`** there when running pgvector or embedding-backed memory/retriever examples.
 
-**Task** — not installed by default; install via **[Task installation](https://taskfile.dev/installation/)** (platform-specific). Not needed for **`go run ./<example>`** when the overview table has no infra. Compose infra also needs **Docker**. From **`examples/`**: **`task infra:status`**, **`infra:deps:up`** / **`down`**, **`infra:*:up`** / **`down`**. From **repo root**: **`task examples:local`**, **`task examples:temporal`**, **`task examples:restate`**, **`task examples:all`**. Contributors: run **`task examples:all`** before any PR to catch regressions across local, Temporal, and Restate runtimes. New examples that can run non-interactively (one-shot, no REPL) should be listed in **`taskfiles/examples.yml`** (`EXAMPLES`, `EXAMPLES_WITH_PROMPTS`, `EXAMPLES_TEMPORAL`, or `EXAMPLES_RESTATE` as appropriate). **`task --dry`** only prints commands (no report file). To preview the report layout without running examples or infra, use **`task examples:local:plan`**, **`task examples:temporal:plan`**, **`task examples:restate:plan`**, or **`task examples:all:plan`**.
+**Task** — not installed by default; install via **[Task installation](https://taskfile.dev/installation/)** (platform-specific). Not needed for **`go run ./<example>`** when the overview table has no infra. Compose infra also needs **Docker**. From **`examples/`**: **`task infra:status`**, **`infra:deps:up`** / **`down`**, **`infra:*:up`** / **`down`**. From **repo root**: **`task examples:local`**, **`task examples:temporal`**, **`task examples:restate`**, **`task examples:all`**. Contributors: run **`task examples:all`** before any PR to catch regressions across local, Temporal, and Restate runtimes. New examples that can run non-interactively (one-shot, no REPL) should be listed in **`taskfiles/examples.yml`** (`EXAMPLES`, `EXAMPLES_WITH_PROMPTS`, `EXAMPLES_LOCAL`, `EXAMPLES_TEMPORAL`, or `EXAMPLES_RESTATE` as appropriate). **`task --dry`** only prints commands (no report file). To preview the report layout without running examples or infra, use **`task examples:local:plan`**, **`task examples:temporal:plan`**, **`task examples:restate:plan`**, or **`task examples:all:plan`**.
 
 ## Run examples
 
@@ -157,6 +165,12 @@ For **`.env`** and credentials, see [Configuration](#configuration) first. Add *
 
 ```bash
 go run ./simple_agent "Hello, what can you do?"
+```
+
+### Caller-owned durable-go engine (local only)
+
+```bash
+go run ./agent_with_durable_engine "Hello, what can you do?"
 ```
 
 ### Agent with conversation (multi-turn)

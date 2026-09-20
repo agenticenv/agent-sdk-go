@@ -1278,6 +1278,8 @@ func (rt *LocalRuntime) awaitBudgetApprovalStatus(ctx context.Context, input Age
 //
 // On resume, a cache hit replays the previously-approved/rejected status without emitting
 // ev again; a step still Waiting resumes waiting under a fresh deadline.
+// WithStepTokenTTL uses the same duration as WithStepTimeout so an HMAC token cannot
+// expire (durable-go default 24h) while the SDK approval wait is still open.
 func (rt *LocalRuntime) durableApprovalWait(
 	ctx context.Context,
 	input AgentLoopInput,
@@ -1302,7 +1304,7 @@ func (rt *LocalRuntime) durableApprovalWait(
 			}()
 		}
 		return types.ApprovalStatusNone, durable.ErrStepPending
-	}, durable.WithStepTimeout(timeout))
+	}, durable.WithStepTimeout(timeout), durable.WithStepTokenTTL(timeout))
 	if err != nil && errors.Is(err, context.DeadlineExceeded) && stepToken != "" {
 		// fn ran (this attempt was not a replay of an already-terminal step) and then hit
 		// the step deadline: waitForSignal leaves the step's disk record at

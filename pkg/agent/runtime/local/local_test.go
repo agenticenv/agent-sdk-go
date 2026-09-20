@@ -54,6 +54,32 @@ func TestWithLocalConfig_DurableByDefault(t *testing.T) {
 	}
 }
 
+func TestWithLocalConfig_AutoPurgeCaps(t *testing.T) {
+	dataDir := filepath.Join(t.TempDir(), "data")
+
+	a, err := agent.NewAgent(
+		agent.WithName("local-purge-caps"),
+		agent.WithLLMClient(stubLLM{}),
+		agentlocal.WithLocalConfig(&agentlocal.LocalConfig{
+			DataDir:           dataDir,
+			AutoPurgeMaxRuns:  10,
+			AutoPurgeMaxBytes: 1 << 20,
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewAgent: %v", err)
+	}
+	defer a.Close()
+
+	run, err := a.Run(context.Background(), "hi", nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if _, err := run.Get(context.Background()); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+}
+
 // TestWithLocalConfig_DurabilityOff confirms DurabilityOff() restores the pre-durability
 // in-memory path: no journal directory is created.
 func TestWithLocalConfig_DurabilityOff(t *testing.T) {

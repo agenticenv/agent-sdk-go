@@ -89,6 +89,7 @@ See [Timeouts & Modes](/advanced/timeouts-and-modes) for the full failure behavi
 ## Secrets and data handling
 
 - **Credentials** — Keep LLM API keys and Temporal credentials in environment variables or a secrets manager — not in source control.
+- **Local durable-go journal** — Default persist is plaintext JSON under `DataDir` (prompts, LLM content, tool args/results). Do not store secrets or raw PII in I/O or errors. For at-rest encryption, journal MAC, or approval tokens that survive a restart, build a [`durable.Engine`](/runtimes/in-process#caller-owned-engine-payload-codec-journal-mac-step-token-key) and pass it as `local.LocalConfig.Engine` (you own `Close`). Distinct `DataDir` per replica.
 - **Untrusted I/O** — Treat tool arguments and model output as untrusted at your application boundary.
 - **Prompt safety** — Validate and sanitize prompts, tool args, and model output in your integration layer. Consider [Hooks](/features/hooks) for guardrails and PII scrubbing.
 - **Conversation and memory** — You own `Clear` on conversation and memory stores. Scope memory with tenant and user context — see [Memory](/features/memory).
@@ -134,6 +135,7 @@ See [Distributed Execution](/advanced/distributed-execution) and [Multiple Agent
 | Conversation | Redis or distributed store if split processes |
 | Observability | OTLP on agent and worker; collector tested; alerts configured |
 | Secrets | No keys in repo; env/secrets manager in place |
+| Local journal | Distinct `DataDir` per replica; plaintext unless a caller-owned `Engine` sets codec / journal MAC / step-token key |
 | SDK upgrade | Workflow replay tested after module bump |
 
 ## Validate before deploy

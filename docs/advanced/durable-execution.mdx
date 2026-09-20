@@ -55,6 +55,8 @@ This is automatic on every runtime — durable by default on local, no SDK chang
 | **Temporal** | Workflow history + activities | Any worker polling the task queue |
 | **Restate** | Durable Restate steps / awakeables | Any registered SDK endpoint deployment |
 
+The local journal is **plaintext JSON** by default (user prompt, LLM content, tool args and results). Do not put secrets or raw PII in prompts, tool I/O, or errors. For at-rest encryption, a journal MAC, or approval tokens that survive a restart, pass a caller-owned [`durable.Engine`](/runtimes/in-process#caller-owned-engine-payload-codec-journal-mac-step-token-key) on `local.LocalConfig.Engine` — same pattern as Temporal Cloud / TLS via `WithTemporalClient`. See [durable-go data privacy](https://github.com/agenticenv/durable-go#data-privacy--sensitive-payloads).
+
 ### Step retry and streaming
 
 When an LLM step retries (after a transient error or process crash), the LLM call restarts on the new attempt. The SDK detects this and signals any connected subscribers to discard token events from the failed attempt. Subscribers transparently receive clean token delivery from the new attempt — no duplicate or garbled output.
