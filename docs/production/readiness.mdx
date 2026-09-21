@@ -56,13 +56,13 @@ See [Timeouts & Modes](/advanced/timeouts-and-modes) for the full failure behavi
 
 - **Distributed execution** — When using [`DisableLocalWorker`](/advanced/distributed-execution), run [`NewAgentWorker`](/advanced/distributed-execution) with **matching configuration** on a separate process. Streaming and approvals work across processes with no extra option — the agent subscribes to the run's event stream directly through the Temporal client.
 - **Distributed conversation** — Use Redis (not in-memory) for conversation when client and worker are split. Same config on both processes.
-- **Config fingerprint** — Keep task queue, tools, MCP/A2A setup, memory, hooks, and observability config aligned. Avoid [`WithDisableFingerprintCheck`](/getting-started/configuration) in production.
+- **Config fingerprint** — Keep task queue, tools, MCP/A2A setup, memory, hooks, named LLM clients, error-control (hook slots, fallback name, breaker thresholds), and observability config aligned. Avoid [`WithDisableFingerprintCheck`](/getting-started/configuration) in production.
 - **Integration tests** — Exercise approval and streaming paths with split processes before deploy.
 - **Workflow replay** — After upgrading the SDK module, confirm existing workflows still replay in your Temporal environment.
 
 ## Rate limiting awareness
 
-- **LLM provider rate limits** — Most providers enforce requests-per-minute (RPM) and tokens-per-minute (TPM) limits. A `429` from the provider surfaces as an LLM activity error in Temporal (which retries it) or a run error in-process (which does not retry by default).
+- **LLM provider rate limits** — Most providers enforce requests-per-minute (RPM) and tokens-per-minute (TPM) limits. A `429` from the provider is classified as `LLMReasonRateLimit`. Policy retries run first (`WithLLMExecutionConfig`); then [`OnLLMFailure`](/features/error-control) can swap to a named fallback for the rest of the run, or abort.
 - **Implement exponential backoff** — In your `LLMClient` wrapper, catch `429` responses and back off before retrying. Do not let unbounded retries exhaust your Temporal workflow timeout.
 - **Track token usage** — Monitor `agent.llm.tokens.input` and `agent.llm.tokens.output` OTLP metrics. Set alerts when per-minute token totals approach your provider limit. See [Metrics](/observability/metrics).
 - **Cap concurrent runs** — A burst of concurrent `Run` calls multiplies LLM load. Use a semaphore or rate limiter in your API layer before calling the agent.
@@ -72,7 +72,8 @@ See [Timeouts & Modes](/advanced/timeouts-and-modes) for the full failure behavi
 
 - **Budget** — Use [`WithBudget`](/features/budget) to set hard token and cost limits on each run. The SDK enforces them automatically across all runtimes and includes sub-agent usage in the total. Choose `BudgetStopRun` to halt on breach or `BudgetWaitForApproval` for human-in-the-loop control. See [Budget](/features/budget).
 - **Token budget per run** — Set `WithLLMSampling(&LLMSampling{MaxTokens: N})` to cap completion tokens per LLM call. Prevents runaway costs from unexpectedly long responses.
-- **Cap iteration count** — `WithMaxIterations` (default 5) directly caps how many LLM calls a single run makes. Reduce it for cost-sensitive workloads.
+- **Cap iteration count** — `WithMaxIterations` (default 5) directly caps how many LLM calls a single run makes. Reduce it for cost-sensitive workloads. [`OnMaxIterationsExceeded`](/features/error-control) can grant extra rounds **once**, hard-capped at the original max.
+- **Tool doom loops** — Use [`CircuitBreaker`](/features/error-control) to skip a tool that keeps failing with the same args (or an A-B-A-B pattern). Trip skips that tool and continues the run.
 - **Monitor token usage** — Read `result.LLMUsage.TotalTokens` on every run and aggregate by user/tenant. See [Token Usage](/features/token-usage).
 - **OTLP token metrics** — `agent.llm.tokens.input` and `agent.llm.tokens.output` histograms let you alert on token spend in dashboards. See [Metrics](/observability/metrics).
 - **Sub-agent token multiplication** — Each sub-agent delegation triggers its own LLM calls. Monitor sub-agent trees carefully — a 3-level deep tree with 3 tools per level can multiply token spend significantly. Use `WithBudget` to cap total usage across the whole tree.

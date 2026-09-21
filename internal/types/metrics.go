@@ -56,6 +56,12 @@ const (
 	MetricToolCallStarted   = "agent.tool.call.started"
 	MetricToolCallCompleted = "agent.tool.call.completed"
 	MetricToolCallFailed    = "agent.tool.call.failed"
+	// MetricToolCallUnknown fires when the LLM names a tool that is not registered.
+	// The run continues with a synthetic tool-role message; no error hook runs.
+	MetricToolCallUnknown = "agent.tool.call.unknown"
+	// MetricToolCallCircuitOpen fires when the circuit breaker skips a tool for the rest of the run
+	// (or until ResetAfter). The run continues with a synthetic tool-role warning; no trip hook.
+	MetricToolCallCircuitOpen = "agent.tool.call.circuit_open"
 
 	// Runtime — tool wall-clock latency.
 	MetricToolLatencyMs = "agent.tool.latency_ms"

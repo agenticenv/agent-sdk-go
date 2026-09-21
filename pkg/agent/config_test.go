@@ -56,6 +56,8 @@ func agentConfigFingerprintTools(c *agentConfig, tools []interfaces.Tool) string
 		c.agentToolExecutionMode,
 		retrieverConfigFingerprint(c.retrieverMode, c.retrievers),
 		hookGroupsFingerprint(c.hooks),
+		namedLLMClientsFingerprint(c.namedLLMClients),
+		errorControlFingerprint(c.errorControl),
 	))
 }
 

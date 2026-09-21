@@ -5,6 +5,8 @@ description: "Implement middleware hooks at LLM, tool, retrieval, and memory lif
 
 Hooks let you register middleware callbacks that fire at key points in the agent execution lifecycle. Register once with [`WithHooks`](/getting-started/configuration) — the SDK calls your functions automatically across `Run` and `Stream`.
 
+Lifecycle hooks inspect, mutate, or abort an operation. They are **not** error-control. For model fallback after LLM retries, extra iterations, or skipping a looping tool, use [`WithErrorControl`](/features/error-control).
+
 Every hook can **inspect**, **mutate**, or **abort** the operation it wraps. Return an error from any hook to abort the run immediately.
 
 ## Register hooks
@@ -135,7 +137,7 @@ agent.WithHooks("cost", agent.AgentHooks{
 })
 ```
 
-**Hooks:** `BeforeLLM` (cache read / short-circuit), `AfterLLM` (per-call tracking, cache write, model fallback)
+**Hooks:** `BeforeLLM` (cache read / short-circuit), `AfterLLM` (per-call tracking, cache write). Model fallback after a failed Generate is [`OnLLMFailure`](/features/error-control), not `AfterLLM`.
 
 ### Tenant isolation for memory
 
@@ -231,7 +233,7 @@ agent.WithHooks("retrieval", agent.AgentHooks{
 | Per-run token/cost cap | [`WithBudget`](/features/budget) (not a hook) |
 | Custom token accounting (per-user / multi-run) | `AfterLLM` |
 | LLM response caching | `BeforeLLM` (read), `AfterLLM` (write) |
-| Model fallback on error | `AfterLLM` |
+| Model fallback on LLM error | [`OnLLMFailure`](/features/error-control) (not `AfterLLM`) |
 | Tool rate limiting | `BeforeTool` |
 | Tool input validation / authorization | `BeforeTool` |
 | Log all operations | `BeforeLLM`, `AfterLLM`, `BeforeTool`, `AfterTool`, `BeforeRetrieve`, `AfterRetrieve`, `AfterMemoryLoad`, `AfterMemoryStore` |
@@ -249,6 +251,9 @@ agent.WithHooks("retrieval", agent.AgentHooks{
   <Card title="Hooks" icon="play" href="/examples/hooks" horizontal>
     PII scrubbing, retrieval filtering, memory tenant isolation — every hook point registered
   </Card>
+  <Card title="Error Control" icon="play" href="/examples/error-control" horizontal>
+    Fallback, extend iterations, breaker — separate from WithHooks
+  </Card>
 </CardGroup>
 
 ## Related
@@ -265,5 +270,9 @@ agent.WithHooks("retrieval", agent.AgentHooks{
 
   <Card title="Budget" icon="gauge" href="/features/budget" horizontal>
     Built-in token and cost limits without AfterLLM
+  </Card>
+
+  <Card title="Error Control" icon="shield-halved" href="/features/error-control" horizontal>
+    Fallback, extend iterations, and circuit breaker — after retries
   </Card>
 </CardGroup>

@@ -45,6 +45,7 @@ Go 1.26+. OpenAI API key required for the example above; Anthropic and Gemini ar
 - **Concurrent by default** — one `Agent` instance handles parallel `Run` and `Stream` calls; every runtime issues each a unique run automatically.
 - **Protocol-native integrations** — MCP tool servers, A2A agent-to-agent delegation, and AG-UI streaming events are first-class, not adapters bolted on after the fact.
 - **Middleware hooks** — intercept LLM calls, tool use, retrieval, and memory at any lifecycle point for logging, PII scrubbing, and guardrails without touching agent logic.
+- **Error control** — after retries, swap to a fallback model, grant more iterations, or skip a looping tool. See [Error Control](/features/error-control).
 - **Cache-aware requests** — LLM requests are structured for provider caching, with Anthropic prompt-cache breakpoints to reduce cost on multi-turn runs.
 
 ## Runtimes

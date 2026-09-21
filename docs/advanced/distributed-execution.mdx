@@ -95,7 +95,9 @@ Both processes must share **identical agent configuration**:
 | MCP, A2A, sub-agent setup | Same tool surface for the LLM |
 | Conversation backend | Redis (not in-memory) for remote workers |
 | Memory config | Same store and scope settings |
-| Hook group names | Fingerprint includes hook group names |
+| Hook group names | Fingerprint includes lifecycle hook group names |
+| Named LLM clients | Extra clients: names plus each client's model and provider |
+| Error control | Hook slots (not bodies), `FallbackLLMClient` name, breaker thresholds |
 | Observability config | Same OTLP endpoint on both processes |
 
 The SDK uses a **fingerprint** check to detect config drift between the client that started a run and the worker that executes it. Mismatches fail the run with a clear error.

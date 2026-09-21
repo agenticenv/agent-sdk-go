@@ -1,0 +1,66 @@
+---
+title: "Error Control"
+description: "LLM fallback, extra iterations, and a per-tool circuit breaker"
+---
+
+Walks through [`WithErrorControl`](/features/error-control) on one agent: fallback after an LLM error, one extra iteration, and a circuit breaker that skips a tool that keeps failing.
+
+Source: [`examples/agent_with_error_control/`](https://github.com/agenticenv/agent-sdk-go/tree/main/examples/agent_with_error_control)
+
+The sample uses stub LLM clients and a stub tool so you can run it without a provider key. Set `AGENT_RUNTIME=temporal` or `restate` in `examples/.env` to exercise those runtimes.
+
+These callbacks are [error control](/features/error-control), not lifecycle [`WithHooks`](/features/hooks).
+
+## What you will see
+
+| Scenario | What happens |
+|---|---|
+| FallbackModel | Primary Generate returns `*LLMError` (`rate_limit`). The hook switches to the named client `"cheap"`. |
+| ExtendIterations | `MaxIterations` is 1 and the stub still requests a tool. The hook grants one extra round; the next LLM call returns text. |
+| Circuit breaker | The stub tool always fails with the same args. After two failures the third call is skipped. |
+
+## Run
+
+From `examples/`:
+
+```bash
+go run ./agent_with_error_control
+```
+
+## Expected output
+
+```
+=== Scenario 1: OnLLMFailure FallbackModel ===
+[error-control] OnLLMFailure: reason=rate_limit → FallbackModel
+assistant: fallback model answered after rate limit
+
+=== Scenario 2: OnMaxIterationsExceeded ExtendIterations ===
+[error-control] OnMaxIterationsExceeded: last=fail_once → ExtendIterations extra=1
+assistant: finished after extra iteration
+
+=== Scenario 3: Circuit breaker skip ===
+assistant: stopped looping
+tools: total=3 failed=2
+```
+
+Hook lines go to **stderr**. Scenario 3's third tool call is skipped, so `failed` stays 2.
+
+## Temporal and Restate
+
+Pass the same `WithNamedLLMClients` and `WithErrorControl` on the agent that starts the run and on the worker. The SDK fingerprints hook **slots** (not bodies), the fallback name, named-client model/provider, and breaker thresholds.
+
+On Restate, the hooks run in the process that serves the embedded endpoint.
+
+## Learn more
+
+<CardGroup cols={2}>
+
+  <Card title="Error Control" icon="shield-halved" href="/features/error-control" horizontal>
+    How to configure fallback, extra iterations, and the breaker
+  </Card>
+
+  <Card title="Hooks" icon="code-branch" href="/features/hooks" horizontal>
+    Lifecycle middleware — a different API
+  </Card>
+
+</CardGroup>

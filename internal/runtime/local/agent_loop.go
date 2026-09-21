@@ -17,6 +17,7 @@ import (
 	"github.com/agenticenv/agent-sdk-go/internal/runtime/base"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
+	"github.com/agenticenv/agent-sdk-go/pkg/logger"
 	durable "github.com/agenticenv/durable-go"
 	"github.com/google/uuid"
 )
@@ -80,6 +81,12 @@ type AgentLoopInput struct {
 	// the parent's or a sibling delegation's: see the "subagent-<iter>-<idx>/" prefix
 	// built in executeSingleTool.
 	stepPrefix string
+	// circuitBreaker is the per-run same-args / A-B-A-B tracker. Shared with nested sub-agent
+	// loops. Nil when WithErrorControl has no CircuitBreaker.
+	circuitBreaker *base.CircuitBreaker
+	// circuitNow is the runtime-safe clock for this iteration (durable step / time.Now).
+	circuitNow time.Time
+
 	// budgetApprovalSeq disambiguates budget-approval step IDs across an entire run tree
 	// (including sub-agents, which share one BudgetTracker). A plain iteration/phase key
 	// is not always unique — a tight budget can breach more than once without the
@@ -164,9 +171,12 @@ func (rt *LocalRuntime) executeAgentLoop(ctx context.Context, input AgentLoopInp
 	tools := input.Tools
 	policies := rt.executionPolicies()
 
-	maxIter := rt.AgentConfig.Limits.MaxIterations
-	if maxIter <= 0 {
-		maxIter = 10
+	maxIter := base.EffectiveMaxIterations(rt.AgentConfig.Limits.MaxIterations)
+	originalMaxIter := maxIter
+	useFallback := false
+	iterationsExtended := false
+	if input.circuitBreaker == nil {
+		input.circuitBreaker = base.NewCircuitBreaker(rt.AgentConfig.ErrorControl)
 	}
 
 	toolExecMode := rt.ToolExecutionMode
@@ -279,14 +289,20 @@ func (rt *LocalRuntime) executeAgentLoop(ctx context.Context, input AgentLoopInp
 	var llmUsage *interfaces.LLMUsage
 
 	for iter := 0; iter < maxIter; iter++ {
+		if input.circuitBreaker != nil {
+			now, nowErr := runStep(ctx, input.stepRunner, fmt.Sprintf("%scb-now-%d", input.stepPrefix, iter),
+				func(context.Context) (time.Time, error) { return time.Now(), nil })
+			if nowErr != nil {
+				return nil, nowErr
+			}
+			input.circuitNow = now
+		}
 		messageID := uuid.New().String()
 		log.Debug(ctx, "local: LLM call started",
 			slog.String("scope", "loop"),
 			slog.Int("iteration", iter),
 			slog.Int("messageCount", len(messages)))
 
-		var llmResult *base.LLMResult
-		var err error
 		executeLLMInput := base.ExecuteLLMInput{
 			Logger:           log,
 			AgentName:        agentName,
@@ -301,18 +317,12 @@ func (rt *LocalRuntime) executeAgentLoop(ctx context.Context, input AgentLoopInp
 			Emit:             emit,
 		}
 		llmStepID := fmt.Sprintf("%sllm-%d", input.stepPrefix, iter)
-		llmResult, err = runStep(ctx, input.stepRunner, llmStepID, func(stepCtx context.Context) (*base.LLMResult, error) {
-			if input.StreamingEnabled {
-				return executeWithPolicy(stepCtx, policies.LLM, func(attemptCtx context.Context) (*base.LLMResult, error) {
-					return rt.ExecuteLLMStream(attemptCtx, executeLLMInput)
-				})
-			}
-			return executeWithPolicy(stepCtx, policies.LLM, func(attemptCtx context.Context) (*base.LLMResult, error) {
-				return rt.ExecuteLLM(attemptCtx, executeLLMInput)
-			})
-		})
+		llmResult, usedFB, err := rt.invokeLLMWithErrorControl(ctx, input, executeLLMInput, llmStepID, useFallback, policies, log)
 		if err != nil {
 			return nil, fmt.Errorf("llm call (iter %d): %w", iter, err)
+		}
+		if usedFB {
+			useFallback = true
 		}
 
 		telemetry.Run.TotalLLMCalls++
@@ -331,51 +341,66 @@ func (rt *LocalRuntime) executeAgentLoop(ctx context.Context, input AgentLoopInp
 			break
 		}
 
-		// Max iterations: re-run without tools for a final answer.
+		// Max iterations: hook may grant more rounds; default is a final no-tools LLM call.
 		if iter == maxIter-1 {
-			log.Info(ctx, "local: max iterations reached, forcing final LLM call without tools",
-				slog.String("scope", "loop"),
-				slog.Int("iteration", iter))
-			finalMessageID := uuid.New().String()
-			executeLLMInput := base.ExecuteLLMInput{
-				Logger:           log,
-				AgentName:        agentName,
-				MessageID:        finalMessageID,
-				RunID:            input.RunID,
-				Iteration:        iter,
-				Messages:         messages,
-				SkipTools:        true,
-				MemoryContext:    memoryContext,
-				RetrieverContext: retrieverContext,
-				Tools:            tools,
-				Emit:             emit,
+			names := make([]string, len(llmResult.ToolCalls))
+			for i, tc := range llmResult.ToolCalls {
+				names[i] = tc.ToolName
 			}
-			finalLLMStepID := fmt.Sprintf("%sllm-final-%d", input.stepPrefix, iter)
-			llmResult, err = runStep(ctx, input.stepRunner, finalLLMStepID, func(stepCtx context.Context) (*base.LLMResult, error) {
-				if input.StreamingEnabled {
-					return executeWithPolicy(stepCtx, policies.LLM, func(attemptCtx context.Context) (*base.LLMResult, error) {
-						return rt.ExecuteLLMStream(attemptCtx, executeLLMInput)
-					})
-				}
-				return executeWithPolicy(stepCtx, policies.LLM, func(attemptCtx context.Context) (*base.LLMResult, error) {
-					return rt.ExecuteLLM(attemptCtx, executeLLMInput)
+			dec, decErr := runStep(ctx, input.stepRunner, fmt.Sprintf("%smax-iter-%d", input.stepPrefix, iter),
+				func(stepCtx context.Context) (types.ErrorControlDecision, error) {
+					return rt.DecideMaxIterations(stepCtx, types.MaxIterationsInfo{
+						IterationCount: iter + 1,
+						MaxIterations:  originalMaxIter,
+						LastAction:     base.LastToolAction(names),
+					}, iterationsExtended, log), nil
 				})
-			})
-			if err != nil {
-				return nil, fmt.Errorf("llm final call (iter %d): %w", iter, err)
+			if decErr != nil {
+				return nil, decErr
 			}
-			llmUsage = base.MergeLLMUsage(llmUsage, llmResult.Usage)
-			if budgetErr := rt.checkBudget(ctx, input, telemetry, llmResult.Usage, iter, "llm-final"); budgetErr != nil {
-				return &AgentLoopResult{Content: lastContent, LLMUsage: llmUsage, Telemetry: telemetry}, budgetErr
+			if dec.Action == types.ErrorControlExtendIterations {
+				maxIter += dec.ExtraIterations
+				iterationsExtended = true
+				log.Info(ctx, "local: max iterations extended",
+					slog.String("scope", "loop"),
+					slog.Int("extra", dec.ExtraIterations),
+					slog.Int("maxIterations", maxIter))
+			} else {
+				log.Info(ctx, "local: max iterations reached, forcing final LLM call without tools",
+					slog.String("scope", "loop"),
+					slog.Int("iteration", iter))
+				finalMessageID := uuid.New().String()
+				executeLLMInput := base.ExecuteLLMInput{
+					Logger:           log,
+					AgentName:        agentName,
+					MessageID:        finalMessageID,
+					RunID:            input.RunID,
+					Iteration:        iter,
+					Messages:         messages,
+					SkipTools:        true,
+					MemoryContext:    memoryContext,
+					RetrieverContext: retrieverContext,
+					Tools:            tools,
+					Emit:             emit,
+				}
+				finalLLMStepID := fmt.Sprintf("%sllm-final-%d", input.stepPrefix, iter)
+				llmResult, _, err = rt.invokeLLMWithErrorControl(ctx, input, executeLLMInput, finalLLMStepID, useFallback, policies, log)
+				if err != nil {
+					return nil, fmt.Errorf("llm final call (iter %d): %w", iter, err)
+				}
+				llmUsage = base.MergeLLMUsage(llmUsage, llmResult.Usage)
+				if budgetErr := rt.checkBudget(ctx, input, telemetry, llmResult.Usage, iter, "llm-final"); budgetErr != nil {
+					return &AgentLoopResult{Content: lastContent, LLMUsage: llmUsage, Telemetry: telemetry}, budgetErr
+				}
+				messages = append(messages, interfaces.Message{
+					Role:    interfaces.MessageRoleAssistant,
+					Content: llmResult.Content,
+				})
+				lastContent = llmResult.Content
+				telemetry.Run.TotalLLMCalls++
+				telemetry.Run.FinishReason = types.FinishReasonMaxIterations
+				break
 			}
-			messages = append(messages, interfaces.Message{
-				Role:    interfaces.MessageRoleAssistant,
-				Content: llmResult.Content,
-			})
-			lastContent = llmResult.Content
-			telemetry.Run.TotalLLMCalls++
-			telemetry.Run.FinishReason = types.FinishReasonMaxIterations
-			break
 		}
 
 		// Append assistant message with tool call metadata for next iteration.
@@ -413,9 +438,10 @@ func (rt *LocalRuntime) executeAgentLoop(ctx context.Context, input AgentLoopInp
 		for idx, result := range toolResults {
 			messages = append(messages, result.message)
 			tc := llmResult.ToolCalls[idx]
-			if tc.ToolKind.CountsTowardToolTelemetry() {
+			if !tc.Unknown && tc.ToolKind.CountsTowardToolTelemetry() {
 				telemetry.Tools.Record(tc.ToolName, result.failed)
 			}
+			base.ApplyToolCircuitResult(input.circuitBreaker, tc.Unknown, tc.ToolKind, tc.ToolName, tc.Args, result.failed, input.circuitNow)
 			if tc.ToolKind == types.ToolKindRetriever {
 				telemetry.Storage.TotalRetrieverSearches++
 				telemetry.Storage.AgenticSearches++
@@ -430,6 +456,16 @@ func (rt *LocalRuntime) executeAgentLoop(ctx context.Context, input AgentLoopInp
 					telemetry.Storage.TotalMemoryStores++
 				}
 			}
+		}
+		if input.circuitBreaker != nil {
+			snap, snapErr := runStep(ctx, input.stepRunner, fmt.Sprintf("%scb-%d", input.stepPrefix, iter),
+				func(context.Context) (base.CircuitBreakerState, error) {
+					return input.circuitBreaker.State(), nil
+				})
+			if snapErr != nil {
+				return nil, snapErr
+			}
+			input.circuitBreaker.Restore(snap)
 		}
 
 		// Nested sub-agents accumulate into the shared tracker during their run.
@@ -599,6 +635,39 @@ func (rt *LocalRuntime) executeSingleTool(
 		if s != "" && s != "null" && s != "{}" {
 			emit(events.NewAgentToolCallArgsEvent(tc.ToolCallID, s))
 		}
+	}
+
+	if base.IsUnknownTool(tc, tools) {
+		if !tc.Unknown {
+			rt.NoteUnknownTool(ctx, log, tc.ToolName)
+		}
+		content := base.UnknownToolMessage(tc.ToolName)
+		emitToolEndThenResult(tc.ToolCallID, content)
+		return toolResult{
+			message: interfaces.Message{
+				Role:       interfaces.MessageRoleTool,
+				Content:    content,
+				ToolName:   tc.ToolName,
+				ToolCallID: tc.ToolCallID,
+			},
+			failed: false,
+		}, nil
+	}
+
+	if input.circuitBreaker != nil && base.CountsTowardCircuitBreaker(tc.Unknown, tc.ToolKind) &&
+		input.circuitBreaker.IsTripped(tc.ToolName, input.circuitNow) {
+		rt.NoteCircuitSkip(ctx, log, tc.ToolName)
+		content := base.CircuitBreakerSkippedMessage(tc.ToolName)
+		emitToolEndThenResult(tc.ToolCallID, content)
+		return toolResult{
+			message: interfaces.Message{
+				Role:       interfaces.MessageRoleTool,
+				Content:    content,
+				ToolName:   tc.ToolName,
+				ToolCallID: tc.ToolCallID,
+			},
+			failed: false,
+		}, nil
 	}
 
 	// Authorization check.
@@ -834,6 +903,7 @@ func (rt *LocalRuntime) executeSingleTool(
 						stepRunner:        input.stepRunner,
 						stepPrefix:        fmt.Sprintf("%ssubagent-%d-%d/", input.stepPrefix, iteration, idx),
 						budgetApprovalSeq: input.budgetApprovalSeq,
+						circuitBreaker:    input.circuitBreaker,
 					})
 				})
 				emit(events.NewAgentStepFinishedEvent(delegationName))
@@ -999,6 +1069,69 @@ func executeWithPolicyErr(ctx context.Context, policy sdkruntime.ExecutionPolicy
 		return struct{}{}, operation(ctx)
 	})
 	return err
+}
+
+func (rt *LocalRuntime) invokeLLM(
+	ctx context.Context,
+	input AgentLoopInput,
+	in base.ExecuteLLMInput,
+	stepID string,
+	useFallback bool,
+	policies sdkruntime.ExecutionPolicies,
+) (*base.LLMResult, error) {
+	if useFallback {
+		client, err := rt.ResolveLLMClient(true)
+		if err != nil {
+			return nil, err
+		}
+		in.Client = client
+	}
+	return runStep(ctx, input.stepRunner, stepID, func(stepCtx context.Context) (*base.LLMResult, error) {
+		if input.StreamingEnabled {
+			return executeWithPolicy(stepCtx, policies.LLM, func(attemptCtx context.Context) (*base.LLMResult, error) {
+				return rt.ExecuteLLMStream(attemptCtx, in)
+			})
+		}
+		return executeWithPolicy(stepCtx, policies.LLM, func(attemptCtx context.Context) (*base.LLMResult, error) {
+			return rt.ExecuteLLM(attemptCtx, in)
+		})
+	})
+}
+
+func (rt *LocalRuntime) invokeLLMWithErrorControl(
+	ctx context.Context,
+	input AgentLoopInput,
+	in base.ExecuteLLMInput,
+	stepID string,
+	useFallback bool,
+	policies sdkruntime.ExecutionPolicies,
+	log logger.Logger,
+) (*base.LLMResult, bool, error) {
+	result, err := rt.invokeLLM(ctx, input, in, stepID, useFallback, policies)
+	if err == nil {
+		return result, useFallback, nil
+	}
+	if useFallback {
+		return nil, true, err
+	}
+	useFB, recErr := runStep(ctx, input.stepRunner, stepID+"-failure", func(stepCtx context.Context) (bool, error) {
+		dec := rt.DecideLLMFailure(stepCtx, types.LLMFailureInfo{
+			Attempt: base.LLMPolicyAttempts(policies.LLM.MaxAttempts),
+			Err:     err,
+		}, log)
+		if dec.Action != types.ErrorControlFallbackModel {
+			return false, err
+		}
+		return true, nil
+	})
+	if recErr != nil {
+		return nil, false, recErr
+	}
+	result, err = rt.invokeLLM(ctx, input, in, stepID+"-fallback", true, policies)
+	if err != nil {
+		return nil, true, err
+	}
+	return result, useFB, nil
 }
 
 // executionPolicies merges the agent's ExecutionConfig overrides onto SDK defaults and converts them to

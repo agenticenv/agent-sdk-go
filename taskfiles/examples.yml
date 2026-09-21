@@ -222,6 +222,7 @@ tasks:
         - NAME: agent_with_stream
         - NAME: agent_with_reasoning
         - NAME: agent_with_budget
+        - NAME: agent_with_error_control
         - NAME: multiple_agents
         - NAME: agent_with_mcp_config
         - NAME: agent_with_mcp_client

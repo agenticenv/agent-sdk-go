@@ -26,6 +26,7 @@ A Temporal or Restate connection is **optional**. Omit Temporal and Restate opti
 | `WithDescription(desc)` | Agent description — used in A2A agent card |
 | `WithSystemPrompt(prompt)` | System message prepended to every LLM call |
 | `WithLLMClient(client)` | LLM client — **required**. See [LLM Providers](/getting-started/llm-providers) |
+| `WithNamedLLMClients(clients)` | Extra LLM clients by name. See [Error Control](/features/error-control) |
 | `WithLLMSampling(s)` | Temperature, max tokens, top-p/top-k, reasoning. See [Reasoning](/features/reasoning) |
 | `WithResponseFormat(rf)` | Text or JSON schema output. See [Response Format](/features/response-format) |
 | `WithLogger(l)` | Custom structured logger |
@@ -135,6 +136,7 @@ Use the same `WithAgentToolExecutionMode` on `NewAgent`, `NewAgentWorker`, and a
 | `WithA2ADefaultServer()` / `WithA2AServer(cfg)` | [A2A server](/features/a2a) |
 | `WithSubAgents(agents...)` + `WithMaxSubAgentDepth(n)` | [Sub-agents](/features/sub-agents) |
 | `WithHooks(name, hooks)` | [Hooks](/features/hooks) |
+| `WithErrorControl(cfg)` | [Error Control](/features/error-control) |
 
 ## Observability
 
@@ -181,7 +183,7 @@ See [Dynamic capabilities](/advanced/dynamic-capabilities).
 
 ## Agent and worker alignment
 
-When splitting client and worker across processes, `NewAgent` and `NewAgentWorker` must share identical configuration — the SDK validates this with a fingerprint check at activity entry. See [Distributed execution](/advanced/distributed-execution).
+When splitting client and worker across processes, `NewAgent` and `NewAgentWorker` must share identical configuration — the SDK validates this with a fingerprint check at activity entry (including named LLM clients and error-control slots). See [Distributed execution](/advanced/distributed-execution).
 
 ## Token usage
 

@@ -138,6 +138,40 @@ func TestExecuteAgentLoop_SimpleText(t *testing.T) {
 	require.Equal(t, "hello world", result.Content)
 }
 
+func TestRestateRuntime_DecideLLMFailure_UsesSharedHelper(t *testing.T) {
+	rt := testRestateRuntime("loop-agent")
+	rt.AgentConfig.NamedLLMClients = map[string]interfaces.LLMClient{
+		"cheap": &seqLLM{responses: []*interfaces.LLMResponse{{Content: "fb"}}},
+	}
+	rt.AgentConfig.ErrorControl = &types.ErrorControlConfig{
+		FallbackLLMClient: "cheap",
+		Hooks: types.AgentErrorHooks{
+			OnLLMFailure: func(context.Context, types.LLMFailureInfo) types.ErrorControlDecision {
+				return types.ErrorControlDecision{Action: types.ErrorControlFallbackModel}
+			},
+		},
+	}
+	d := rt.DecideLLMFailure(context.Background(), types.LLMFailureInfo{Err: errors.New("x")}, rt.logger)
+	require.Equal(t, types.ErrorControlFallbackModel, d.Action)
+}
+
+func TestRestateRuntime_DecideMaxIterations_UsesSharedHelper(t *testing.T) {
+	rt := testRestateRuntime("loop-agent")
+	rt.AgentConfig.ErrorControl = &types.ErrorControlConfig{
+		Hooks: types.AgentErrorHooks{
+			OnMaxIterationsExceeded: func(context.Context, types.MaxIterationsInfo) types.ErrorControlDecision {
+				return types.ErrorControlDecision{Action: types.ErrorControlExtendIterations, ExtraIterations: 100}
+			},
+		},
+	}
+	d := rt.DecideMaxIterations(context.Background(), types.MaxIterationsInfo{MaxIterations: 3}, false, rt.logger)
+	require.Equal(t, types.ErrorControlExtendIterations, d.Action)
+	require.Equal(t, 3, d.ExtraIterations)
+
+	d = rt.DecideMaxIterations(context.Background(), types.MaxIterationsInfo{MaxIterations: 3}, true, rt.logger)
+	require.Equal(t, types.ErrorControlContinueWithFinalCall, d.Action)
+}
+
 func TestEmitEvent_Filtered(t *testing.T) {
 	rt := testRestateRuntime("a")
 	ctx := mocks.NewMockContext(t)
@@ -197,15 +231,36 @@ func TestExecuteWithPolicyErr(t *testing.T) {
 		func(restatesdk.RunContext) error { return nil }))
 }
 
-func TestExecuteSingleTool_Unauthorized(t *testing.T) {
+func TestExecuteSingleTool_UnknownToolContinues(t *testing.T) {
 	rt := testRestateRuntime("a")
 	ctx := mocks.NewMockContext(t)
-	expectRunExecutes(ctx, 6).Once() // tool-auth default policy
 	res, err := rt.executeSingleTool(restatesdk.WithMockContext(ctx), AgentLoopInput{agentLoopCore: agentLoopCore{RunID: "r"}}, "mid", 0,
 		base.ToolCallRequest{ToolCallID: "tc", ToolName: "missing", ToolKind: types.ToolKindNative},
 		sdkruntime.ResolveExecutionPolicies(sdkruntime.ExecutionConfigs{}), func(events.AgentEvent) {})
 	require.NoError(t, err)
-	require.Contains(t, res.message.Content, msgToolUnauthorized)
+	require.Equal(t, base.UnknownToolMessage("missing"), res.message.Content)
+	require.False(t, res.failed)
+}
+
+func TestExecuteSingleTool_CircuitBreakerSkip(t *testing.T) {
+	rt := testRestateRuntime("a")
+	now := time.Now()
+	cb := base.NewCircuitBreaker(&types.ErrorControlConfig{
+		CircuitBreaker: &types.CircuitBreakerConfig{MaxConsecutiveSameArgs: 1},
+	})
+	require.True(t, cb.RecordFailure("echo", map[string]any{"n": 1}, now))
+	ctx := mocks.NewMockContext(t)
+	res, err := rt.executeSingleTool(restatesdk.WithMockContext(ctx), AgentLoopInput{
+		agentLoopCore:  agentLoopCore{RunID: "r"},
+		Tools:          []interfaces.Tool{cbSkipTool{}},
+		circuitBreaker: cb,
+		circuitNow:     now,
+	}, "mid", 0,
+		base.ToolCallRequest{ToolCallID: "tc", ToolName: "echo", ToolKind: types.ToolKindNative, Args: map[string]any{"n": 1}},
+		sdkruntime.ResolveExecutionPolicies(sdkruntime.ExecutionConfigs{}), func(events.AgentEvent) {})
+	require.NoError(t, err)
+	require.Equal(t, base.CircuitBreakerSkippedMessage("echo"), res.message.Content)
+	require.False(t, res.failed)
 }
 
 func TestExecuteToolsParallel_Empty(t *testing.T) {
@@ -442,4 +497,14 @@ func TestTerminalLoopError(t *testing.T) {
 	require.Equal(t, other, terminalLoopError(other))
 	already := restatesdk.ToTerminalError(types.ErrBudgetExceeded)
 	require.Equal(t, already, terminalLoopError(already))
+}
+
+type cbSkipTool struct{}
+
+func (cbSkipTool) Name() string                      { return "echo" }
+func (cbSkipTool) DisplayName() string               { return "echo" }
+func (cbSkipTool) Description() string               { return "" }
+func (cbSkipTool) Parameters() interfaces.JSONSchema { return nil }
+func (cbSkipTool) Execute(context.Context, map[string]any) (any, error) {
+	return nil, errors.New("should not execute")
 }

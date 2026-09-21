@@ -3,6 +3,7 @@ package gemini
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"iter"
 	"strings"
 	"sync"
@@ -156,7 +157,7 @@ func (c *Client) Generate(ctx context.Context, req *interfaces.LLMRequest) (*int
 
 	resp, err := c.client.Models.GenerateContent(ctx, c.Model, contents, config)
 	if err != nil {
-		return nil, err
+		return nil, wrapLLM(err)
 	}
 
 	content := geminiResponseText(resp)
@@ -273,7 +274,18 @@ func (a *geminiStreamAdapter) Current() *interfaces.LLMStreamChunk {
 func (a *geminiStreamAdapter) Err() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.err
+	return wrapLLM(a.err)
+}
+
+func wrapLLM(err error) error {
+	if err == nil {
+		return nil
+	}
+	var api genai.APIError
+	if errors.As(err, &api) {
+		return llm.Classify(err, api.Code, 0, api.Message, api.Status)
+	}
+	return llm.Classify(err, 0, 0)
 }
 
 func (a *geminiStreamAdapter) GetResult() *interfaces.LLMResponse {

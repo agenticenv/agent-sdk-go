@@ -2,6 +2,7 @@ package deepseek
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
@@ -257,5 +258,13 @@ func TestBuildCompletionParams(t *testing.T) {
 	}
 	if params.ResponseFormat.OfJSONObject == nil {
 		t.Fatal("response format should be json_object")
+	}
+}
+
+func TestWrapLLM_DeepSeekError(t *testing.T) {
+	err := wrapLLM(&openai.Error{StatusCode: 400, Message: "context_length_exceeded"})
+	var llmErr *interfaces.LLMError
+	if !errors.As(err, &llmErr) || llmErr.Reason != interfaces.LLMReasonContextExceeded {
+		t.Fatalf("got %v", err)
 	}
 }

@@ -31,7 +31,7 @@ AGENT_RUNTIME=restate go run ./agent_with_reconnect "What time is it?"
 **What happens**
 
 1. **Phase A** — `Stream` starts; `runID` is taken from `agentStream.ID()` before events are consumed. The example tracks each event’s `Offset()`, then cancels the Events context after the first `TEXT_MESSAGE_CONTENT` chunk (simulated crash) and **leaves Phase A immediately** (does not wait for the channel to drain).
-2. **Phase B** — `GetAgentStream(ctx, runID)` + `Events(ctx, WithOffset(lastOffset))` resumes from that offset while the run is still live; remaining events print until `RUN_FINISHED`.
+2. **Phase B** — `GetAgentStream(ctx, runID)` + `Events(ctx, WithOffset(lastOffset))` resumes from that offset while the run is still live; remaining events print until `RUN_FINISHED`. If the run finishes first (`ErrRunAlreadyCompleted`), the example prints that and exits 0.
 
 ```go
 agentStream, err := a.Stream(ctx, prompt, nil)

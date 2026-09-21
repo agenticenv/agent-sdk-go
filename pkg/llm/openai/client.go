@@ -3,6 +3,7 @@ package openai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
@@ -139,7 +140,7 @@ func (c *Client) Generate(ctx context.Context, req *interfaces.LLMRequest) (*int
 		slog.Bool("hasSystemMessage", req.SystemMessage != ""))
 	resp, err := c.client.Chat.Completions.New(ctx, params)
 	if err != nil {
-		return nil, err
+		return nil, wrapLLM(err)
 	}
 	var contentLen int
 	var toolNames []string
@@ -183,7 +184,18 @@ type openAIStreamAdapter struct {
 }
 
 func (a *openAIStreamAdapter) Next() bool { return a.stream.Next() }
-func (a *openAIStreamAdapter) Err() error { return a.stream.Err() }
+func (a *openAIStreamAdapter) Err() error { return wrapLLM(a.stream.Err()) }
+
+func wrapLLM(err error) error {
+	if err == nil {
+		return nil
+	}
+	var api *openai.Error
+	if errors.As(err, &api) {
+		return llm.Classify(err, api.StatusCode, llm.RetryAfterFromResponse(api.Response), api.Type, api.Code, api.Message)
+	}
+	return llm.Classify(err, 0, 0)
+}
 func (a *openAIStreamAdapter) Current() *interfaces.LLMStreamChunk {
 	chunk := a.stream.Current()
 	a.acc.AddChunk(chunk)

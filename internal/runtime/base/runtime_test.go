@@ -241,10 +241,15 @@ func TestFetchConversationMessages_Error(t *testing.T) {
 // --- ExecuteTool ---
 
 func TestExecuteTool_UnknownTool(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	metrics := ifmocks.NewMockMetrics(ctrl)
+	metrics.EXPECT().IncrementCounter(gomock.Any(), types.MetricToolCallUnknown, gomock.Any()).Times(1)
+
 	rt := newTestRuntime(sdkruntime.AgentConfig{})
-	_, err := rt.ExecuteTool(context.Background(), ExecuteToolInput{Logger: noopLog(), ToolName: "missing"}, interfaces.MemoryScope{})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "unknown tool")
+	rt.Metrics = metrics
+	got, err := rt.ExecuteTool(context.Background(), ExecuteToolInput{Logger: noopLog(), ToolName: "missing"}, interfaces.MemoryScope{})
+	require.NoError(t, err)
+	require.Equal(t, UnknownToolMessage("missing"), got)
 }
 
 func TestExecuteTool_Success(t *testing.T) {
@@ -921,7 +926,14 @@ func TestExecuteLLM_NilEmitDoesNotPanic(t *testing.T) {
 	})
 }
 
-func TestExecuteLLM_UnknownToolCallReturnsError(t *testing.T) {
+func TestExecuteLLM_UnknownToolCallContinues(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	metrics := ifmocks.NewMockMetrics(ctrl)
+	metrics.EXPECT().IncrementCounter(gomock.Any(), types.MetricLLMCallStarted, gomock.Any()).Times(1)
+	metrics.EXPECT().IncrementCounter(gomock.Any(), types.MetricLLMCallCompleted, gomock.Any()).Times(1)
+	metrics.EXPECT().RecordHistogram(gomock.Any(), types.MetricLLMLatencyMs, gomock.Any(), gomock.Any()).Times(1)
+	metrics.EXPECT().IncrementCounter(gomock.Any(), types.MetricToolCallUnknown, gomock.Any()).Times(1)
+
 	rt := newTestRuntime(sdkruntime.AgentConfig{
 		LLM: sdkruntime.AgentLLM{Client: stubLLMClient{
 			resp: &interfaces.LLMResponse{
@@ -932,6 +944,7 @@ func TestExecuteLLM_UnknownToolCallReturnsError(t *testing.T) {
 			},
 		}},
 	})
+	rt.Metrics = metrics
 	input := ExecuteLLMInput{
 		Logger:           noopLog(),
 		AgentName:        "a",
@@ -942,9 +955,12 @@ func TestExecuteLLM_UnknownToolCallReturnsError(t *testing.T) {
 		Tools:            nil,
 		Emit:             nil,
 	}
-	_, err := rt.ExecuteLLM(context.Background(), input)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "unknown tool")
+	got, err := rt.ExecuteLLM(context.Background(), input)
+	require.NoError(t, err)
+	require.Len(t, got.ToolCalls, 1)
+	require.True(t, got.ToolCalls[0].Unknown)
+	require.Equal(t, "nonexistent", got.ToolCalls[0].ToolName)
+	require.False(t, got.ToolCalls[0].NeedsApproval)
 }
 
 func TestExecuteLLM_WithUsageMetrics(t *testing.T) {
@@ -2323,7 +2339,7 @@ func TestExecuteLLMStream_FallbackGenerate_WithUsage(t *testing.T) {
 	require.EqualValues(t, 5, result.Usage.PromptTokens)
 }
 
-func TestExecuteLLMStream_FallbackGenerate_UnknownToolCallError(t *testing.T) {
+func TestExecuteLLMStream_FallbackGenerate_UnknownToolCallContinues(t *testing.T) {
 	rt := newTestRuntime(sdkruntime.AgentConfig{
 		LLM: sdkruntime.AgentLLM{Client: stubLLMClient{
 			resp: &interfaces.LLMResponse{
@@ -2341,12 +2357,14 @@ func TestExecuteLLMStream_FallbackGenerate_UnknownToolCallError(t *testing.T) {
 		Tools:            nil,
 		Emit:             nil,
 	}
-	_, err := rt.ExecuteLLMStream(context.Background(), input)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "unknown tool")
+	got, err := rt.ExecuteLLMStream(context.Background(), input)
+	require.NoError(t, err)
+	require.Len(t, got.ToolCalls, 1)
+	require.True(t, got.ToolCalls[0].Unknown)
+	require.Equal(t, "ghost", got.ToolCalls[0].ToolName)
 }
 
-func TestExecuteLLMStream_Stream_UnknownToolCallError(t *testing.T) {
+func TestExecuteLLMStream_Stream_UnknownToolCallContinues(t *testing.T) {
 	s := newFixedStream(nil, &interfaces.LLMResponse{
 		ToolCalls: []*interfaces.ToolCall{{ToolCallID: "1", ToolName: "ghost"}},
 	})
@@ -2363,9 +2381,11 @@ func TestExecuteLLMStream_Stream_UnknownToolCallError(t *testing.T) {
 		Tools:            nil,
 		Emit:             nil,
 	}
-	_, err := rt.ExecuteLLMStream(context.Background(), input)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "unknown tool")
+	got, err := rt.ExecuteLLMStream(context.Background(), input)
+	require.NoError(t, err)
+	require.Len(t, got.ToolCalls, 1)
+	require.True(t, got.ToolCalls[0].Unknown)
+	require.Equal(t, "ghost", got.ToolCalls[0].ToolName)
 }
 
 func TestExecuteRetrievers_EmptyDocsSkipped(t *testing.T) {

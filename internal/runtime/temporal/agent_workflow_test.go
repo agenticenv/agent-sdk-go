@@ -214,6 +214,208 @@ func TestAgentWorkflow_MaxIterations_SkipToolsUsesDistinctMessageID(t *testing.T
 		"SkipTools final round must use a distinct MessageID from the tool-calls round")
 }
 
+func TestAgentWorkflow_OnMaxIterations_ExtendIterations(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	rt := testRuntimeForWorkflow(t)
+	rt.AgentConfig.Limits.MaxIterations = 1
+	rt.AgentConfig.ErrorControl = &types.ErrorControlConfig{
+		Hooks: types.AgentErrorHooks{
+			OnMaxIterationsExceeded: func(context.Context, types.MaxIterationsInfo) types.ErrorControlDecision {
+				return types.ErrorControlDecision{Action: types.ErrorControlExtendIterations, ExtraIterations: 1}
+			},
+		},
+	}
+
+	var llmCalls int
+	var executed bool
+	env.RegisterWorkflow(rt.AgentWorkflow)
+	env.OnActivity(rt.AgentLLMActivity, mock.Anything, mock.Anything).Return(func(ctx context.Context, in AgentLLMInput) (*AgentLLMResult, error) {
+		llmCalls++
+		if llmCalls == 1 {
+			return &AgentLLMResult{
+				Content:   "use tool",
+				ToolCalls: []ToolCallRequest{testWorkflowToolCall("tc-ext", "echo", types.ToolKindNative, nil)},
+			}, nil
+		}
+		return &AgentLLMResult{Content: "after extend"}, nil
+	})
+	env.OnActivity(rt.AgentMaxIterationsDecisionActivity, mock.Anything, mock.Anything).Return(
+		types.ErrorControlDecision{Action: types.ErrorControlExtendIterations, ExtraIterations: 1}, nil)
+	env.OnActivity(rt.AgentToolAuthorizeActivity, mock.Anything, mock.Anything).Return(AgentToolAuthorizeResult{Allowed: true}, nil)
+	env.OnActivity(rt.AgentToolExecuteActivity, mock.Anything, mock.Anything).Return(func(ctx context.Context, in AgentToolExecuteInput) (string, error) {
+		executed = true
+		return "ok", nil
+	})
+
+	env.ExecuteWorkflow(rt.AgentWorkflow, AgentWorkflowInput{UserPrompt: "run"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	var result types.AgentRunResult
+	require.NoError(t, env.GetWorkflowResult(&result))
+	require.Equal(t, "after extend", result.Content)
+	require.Equal(t, 2, llmCalls)
+	require.True(t, executed)
+}
+
+func TestAgentWorkflow_OnMaxIterations_SecondGrantCapped(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	rt := testRuntimeForWorkflow(t)
+	rt.AgentConfig.Limits.MaxIterations = 1
+	rt.AgentConfig.ErrorControl = &types.ErrorControlConfig{
+		Hooks: types.AgentErrorHooks{
+			OnMaxIterationsExceeded: func(context.Context, types.MaxIterationsInfo) types.ErrorControlDecision {
+				return types.ErrorControlDecision{Action: types.ErrorControlExtendIterations, ExtraIterations: 1}
+			},
+		},
+	}
+
+	var llmCalls int
+	var decisions int
+	env.RegisterWorkflow(rt.AgentWorkflow)
+	env.OnActivity(rt.AgentLLMActivity, mock.Anything, mock.Anything).Return(func(ctx context.Context, in AgentLLMInput) (*AgentLLMResult, error) {
+		llmCalls++
+		if in.SkipTools {
+			return &AgentLLMResult{Content: "capped final"}, nil
+		}
+		return &AgentLLMResult{
+			Content:   "again",
+			ToolCalls: []ToolCallRequest{testWorkflowToolCall("tc-cap", "echo", types.ToolKindNative, nil)},
+		}, nil
+	})
+	env.OnActivity(rt.AgentMaxIterationsDecisionActivity, mock.Anything, mock.Anything).Return(
+		func(ctx context.Context, in AgentMaxIterationsDecisionInput) (types.ErrorControlDecision, error) {
+			decisions++
+			if in.AlreadyExtended {
+				return types.ErrorControlDecision{Action: types.ErrorControlContinueWithFinalCall}, nil
+			}
+			return types.ErrorControlDecision{Action: types.ErrorControlExtendIterations, ExtraIterations: 1}, nil
+		})
+	env.OnActivity(rt.AgentToolAuthorizeActivity, mock.Anything, mock.Anything).Return(AgentToolAuthorizeResult{Allowed: true}, nil)
+	env.OnActivity(rt.AgentToolExecuteActivity, mock.Anything, mock.Anything).Return("ok", nil)
+
+	env.ExecuteWorkflow(rt.AgentWorkflow, AgentWorkflowInput{UserPrompt: "run"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	var result types.AgentRunResult
+	require.NoError(t, env.GetWorkflowResult(&result))
+	require.Equal(t, "capped final", result.Content)
+	require.Equal(t, types.FinishReasonMaxIterations, result.Telemetry.Run.FinishReason)
+	require.Equal(t, 2, decisions)
+	require.GreaterOrEqual(t, llmCalls, 3)
+}
+
+func TestAgentWorkflow_UseFallbackPersistsAcrossIterations(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	rt := testRuntimeForWorkflow(t)
+
+	var sawFallback bool
+	env.RegisterWorkflow(rt.AgentWorkflow)
+	env.OnActivity(rt.AgentLLMActivity, mock.Anything, mock.Anything).Return(func(ctx context.Context, in AgentLLMInput) (*AgentLLMResult, error) {
+		if in.UseFallback {
+			sawFallback = true
+			return &AgentLLMResult{Content: "kept fallback", UsedFallback: true}, nil
+		}
+		return &AgentLLMResult{
+			Content:      "switched",
+			UsedFallback: true,
+			ToolCalls:    []ToolCallRequest{testWorkflowToolCall("tc-fb", "echo", types.ToolKindNative, nil)},
+		}, nil
+	})
+	env.OnActivity(rt.AgentToolAuthorizeActivity, mock.Anything, mock.Anything).Return(AgentToolAuthorizeResult{Allowed: true}, nil)
+	env.OnActivity(rt.AgentToolExecuteActivity, mock.Anything, mock.Anything).Return("ok", nil)
+
+	env.ExecuteWorkflow(rt.AgentWorkflow, AgentWorkflowInput{UserPrompt: "run"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	var result types.AgentRunResult
+	require.NoError(t, env.GetWorkflowResult(&result))
+	require.Equal(t, "kept fallback", result.Content)
+	require.True(t, sawFallback)
+}
+
+func TestAgentWorkflow_CircuitBreaker_SkipsAfterConsecutiveFailures(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	rt := testRuntimeForWorkflow(t)
+	rt.AgentConfig.ErrorControl = &types.ErrorControlConfig{
+		CircuitBreaker: &types.CircuitBreakerConfig{MaxConsecutiveSameArgs: 2},
+	}
+
+	var llmCalls int
+	var authorizes int
+	env.RegisterWorkflow(rt.AgentWorkflow)
+	env.OnActivity(rt.AgentLLMActivity, mock.Anything, mock.Anything).Return(func(ctx context.Context, in AgentLLMInput) (*AgentLLMResult, error) {
+		llmCalls++
+		if llmCalls <= 3 {
+			return &AgentLLMResult{
+				Content:   "again",
+				ToolCalls: []ToolCallRequest{testWorkflowToolCall("tc-cb", "echo", types.ToolKindNative, map[string]any{"n": 1})},
+			}, nil
+		}
+		return &AgentLLMResult{Content: "stopped looping"}, nil
+	})
+	env.OnActivity(rt.AgentToolAuthorizeActivity, mock.Anything, mock.Anything).Return(func(ctx context.Context, in AgentToolAuthorizeInput) (AgentToolAuthorizeResult, error) {
+		authorizes++
+		return AgentToolAuthorizeResult{Allowed: true}, nil
+	})
+	env.OnActivity(rt.AgentToolExecuteActivity, mock.Anything, mock.Anything).Return("", errors.New("always"))
+
+	env.ExecuteWorkflow(rt.AgentWorkflow, AgentWorkflowInput{UserPrompt: "run"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	var result types.AgentRunResult
+	require.NoError(t, env.GetWorkflowResult(&result))
+	require.Equal(t, "stopped looping", result.Content)
+	require.Equal(t, 2, authorizes)
+}
+
+func TestAgentWorkflow_CircuitBreaker_RestoredStateSkips(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	rt := testRuntimeForWorkflow(t)
+	rt.AgentConfig.ErrorControl = &types.ErrorControlConfig{
+		CircuitBreaker: &types.CircuitBreakerConfig{MaxConsecutiveSameArgs: 2},
+	}
+
+	var authorizes int
+	env.RegisterWorkflow(rt.AgentWorkflow)
+	env.OnActivity(rt.AgentLLMActivity, mock.Anything, mock.Anything).Return(func(ctx context.Context, in AgentLLMInput) (*AgentLLMResult, error) {
+		if in.Messages[len(in.Messages)-1].Role != interfaces.MessageRoleTool {
+			return &AgentLLMResult{
+				Content:   "again",
+				ToolCalls: []ToolCallRequest{testWorkflowToolCall("tc-cb", "echo", types.ToolKindNative, map[string]any{"n": 1})},
+			}, nil
+		}
+		return &AgentLLMResult{Content: "after skip"}, nil
+	})
+	env.OnActivity(rt.AgentToolAuthorizeActivity, mock.Anything, mock.Anything).Return(func(ctx context.Context, in AgentToolAuthorizeInput) (AgentToolAuthorizeResult, error) {
+		authorizes++
+		return AgentToolAuthorizeResult{Allowed: true}, nil
+	})
+	env.OnActivity(rt.AgentToolExecuteActivity, mock.Anything, mock.Anything).Return("should-not-run", nil)
+
+	env.ExecuteWorkflow(rt.AgentWorkflow, AgentWorkflowInput{
+		UserPrompt: "run",
+		State: &AgentWorkflowState{
+			Messages: []interfaces.Message{{Role: interfaces.MessageRoleUser, Content: "run"}},
+			CircuitBreaker: &base.CircuitBreakerState{
+				Tools: map[string]base.CircuitBreakerToolState{
+					"echo": {Tripped: true, Consecutive: 2},
+				},
+			},
+		},
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	var result types.AgentRunResult
+	require.NoError(t, env.GetWorkflowResult(&result))
+	require.Equal(t, "after skip", result.Content)
+	require.Equal(t, 0, authorizes)
+}
+
 func TestAgentWorkflow_ToolTelemetry_ExecError(t *testing.T) {
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()
@@ -348,6 +550,43 @@ func TestAgentWorkflow_ToolAuthorizationDenied_SkipsExecute(t *testing.T) {
 	require.Equal(t, 2, llmCalls)
 }
 
+func TestAgentWorkflow_UnknownTool_ContinuesWithoutAuthorizeOrExecute(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	rt := testRuntimeForWorkflow(t)
+
+	var llmCalls int
+	env.RegisterWorkflow(rt.AgentWorkflow)
+	env.OnActivity(rt.AgentLLMActivity, mock.Anything, mock.Anything).Return(func(ctx context.Context, in AgentLLMInput) (*AgentLLMResult, error) {
+		llmCalls++
+		if llmCalls == 1 {
+			tc := testWorkflowToolCall("tc-unknown", "ghost", types.ToolKindNative, nil)
+			tc.Unknown = true
+			return &AgentLLMResult{
+				Content:   "calling ghost",
+				ToolCalls: []ToolCallRequest{tc},
+			}, nil
+		}
+		return &AgentLLMResult{Content: "after unknown", ToolCalls: nil}, nil
+	})
+	env.OnActivity(rt.AgentToolAuthorizeActivity, mock.Anything, mock.Anything).Return(func(ctx context.Context, in AgentToolAuthorizeInput) (AgentToolAuthorizeResult, error) {
+		t.Errorf("authorize must not run for unknown tool %q", in.ToolName)
+		return AgentToolAuthorizeResult{}, fmt.Errorf("authorize must not run")
+	})
+	env.OnActivity(rt.AgentToolExecuteActivity, mock.Anything, mock.Anything).Return(func(ctx context.Context, in AgentToolExecuteInput) (string, error) {
+		t.Errorf("execute must not run for unknown tool %q", in.ToolName)
+		return "", fmt.Errorf("execute must not run")
+	})
+
+	env.ExecuteWorkflow(rt.AgentWorkflow, AgentWorkflowInput{UserPrompt: "run"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	var result types.AgentRunResult
+	require.NoError(t, env.GetWorkflowResult(&result))
+	require.Equal(t, "after unknown", result.Content)
+	require.Equal(t, 2, llmCalls)
+}
+
 func TestAgentLLMActivity_MockLLM_TextOnly(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -383,6 +622,98 @@ func TestAgentLLMActivity_MockLLM_TextOnly(t *testing.T) {
 	require.NoError(t, val.Get(&got))
 	require.Equal(t, "final", got.Content)
 	require.Empty(t, got.ToolCalls)
+}
+
+func TestAgentLLMActivity_OnLLMFailure_FallbackModel(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	primary := mocks.NewMockLLMClient(ctrl)
+	primary.EXPECT().GetModel().Return("primary").AnyTimes()
+	primary.EXPECT().GetProvider().Return(interfaces.LLMProviderOpenAI).AnyTimes()
+	primary.EXPECT().Generate(gomock.Any(), gomock.Any()).Return(nil, errors.New("primary down"))
+
+	fallback := mocks.NewMockLLMClient(ctrl)
+	fallback.EXPECT().GetModel().Return("cheap").AnyTimes()
+	fallback.EXPECT().GetProvider().Return(interfaces.LLMProviderAnthropic).AnyTimes()
+	fallback.EXPECT().Generate(gomock.Any(), gomock.Any()).Return(&interfaces.LLMResponse{Content: "from fallback"}, nil)
+
+	rt := &TemporalRuntime{
+		Runtime: base.Runtime{
+			AgentSpec: sdkruntime.AgentSpec{Name: "ActTest"},
+			AgentConfig: sdkruntime.AgentConfig{
+				LLM: sdkruntime.AgentLLM{Client: primary},
+				ExecutionConfigs: sdkruntime.ExecutionConfigs{
+					LLM: sdkruntime.ExecutionConfig{MaxAttempts: 1},
+				},
+				NamedLLMClients: map[string]interfaces.LLMClient{"cheap": fallback},
+				ErrorControl: &types.ErrorControlConfig{
+					FallbackLLMClient: "cheap",
+					Hooks: types.AgentErrorHooks{
+						OnLLMFailure: func(context.Context, types.LLMFailureInfo) types.ErrorControlDecision {
+							return types.ErrorControlDecision{Action: types.ErrorControlFallbackModel}
+						},
+					},
+				},
+			},
+			Tracer:  observability.DefaultNoopTracer,
+			Metrics: observability.DefaultNoopMetrics,
+		},
+		logger: logger.NoopLogger(),
+	}
+	wireTestToolsResolver(rt, nil)
+
+	actEnv := newActivityTestEnv(t)
+	actEnv.RegisterActivity(rt.AgentLLMActivity)
+	val, err := actEnv.ExecuteActivity(rt.AgentLLMActivity, AgentLLMInput{
+		Messages: []interfaces.Message{{Role: interfaces.MessageRoleUser, Content: "hi"}},
+	})
+	require.NoError(t, err)
+	var got AgentLLMResult
+	require.NoError(t, val.Get(&got))
+	require.Equal(t, "from fallback", got.Content)
+	require.True(t, got.UsedFallback)
+}
+
+func TestAgentLLMActivity_OnLLMFailure_MissingFallbackAborts(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	primary := mocks.NewMockLLMClient(ctrl)
+	primary.EXPECT().GetModel().Return("primary").AnyTimes()
+	primary.EXPECT().GetProvider().Return(interfaces.LLMProviderOpenAI).AnyTimes()
+	primary.EXPECT().Generate(gomock.Any(), gomock.Any()).Return(nil, errors.New("primary down"))
+
+	rt := &TemporalRuntime{
+		Runtime: base.Runtime{
+			AgentSpec: sdkruntime.AgentSpec{Name: "ActTest"},
+			AgentConfig: sdkruntime.AgentConfig{
+				LLM: sdkruntime.AgentLLM{Client: primary},
+				ExecutionConfigs: sdkruntime.ExecutionConfigs{
+					LLM: sdkruntime.ExecutionConfig{MaxAttempts: 1},
+				},
+				ErrorControl: &types.ErrorControlConfig{
+					Hooks: types.AgentErrorHooks{
+						OnLLMFailure: func(context.Context, types.LLMFailureInfo) types.ErrorControlDecision {
+							return types.ErrorControlDecision{Action: types.ErrorControlFallbackModel}
+						},
+					},
+				},
+			},
+			Tracer:  observability.DefaultNoopTracer,
+			Metrics: observability.DefaultNoopMetrics,
+		},
+		logger: logger.NoopLogger(),
+	}
+	wireTestToolsResolver(rt, nil)
+
+	actEnv := newActivityTestEnv(t)
+	actEnv.RegisterActivity(rt.AgentLLMActivity)
+	_, err := actEnv.ExecuteActivity(rt.AgentLLMActivity, AgentLLMInput{
+		Messages: []interfaces.Message{{Role: interfaces.MessageRoleUser, Content: "hi"}},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "primary down")
 }
 
 func TestAgentLLMActivity_MockLLM_ToolCalls(t *testing.T) {
@@ -440,7 +771,7 @@ func TestAgentLLMActivity_MockLLM_ToolCalls(t *testing.T) {
 	require.False(t, got.ToolCalls[0].NeedsApproval)
 }
 
-func TestAgentLLMActivity_MockLLM_UnknownToolError(t *testing.T) {
+func TestAgentLLMActivity_MockLLM_UnknownToolContinues(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -470,11 +801,16 @@ func TestAgentLLMActivity_MockLLM_UnknownToolError(t *testing.T) {
 
 	actEnv := newActivityTestEnv(t)
 	actEnv.RegisterActivity(rt.AgentLLMActivity)
-	_, err := actEnv.ExecuteActivity(rt.AgentLLMActivity, AgentLLMInput{
+	val, err := actEnv.ExecuteActivity(rt.AgentLLMActivity, AgentLLMInput{
 		Messages: []interfaces.Message{{Role: interfaces.MessageRoleUser, Content: "q"}},
 	})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "unknown tool")
+	require.NoError(t, err)
+	var got AgentLLMResult
+	require.NoError(t, val.Get(&got))
+	require.Len(t, got.ToolCalls, 1)
+	require.True(t, got.ToolCalls[0].Unknown)
+	require.Equal(t, "not_registered", got.ToolCalls[0].ToolName)
+	require.False(t, got.ToolCalls[0].NeedsApproval)
 }
 
 func TestAgentLLMActivity_MockConversationAndLLM(t *testing.T) {

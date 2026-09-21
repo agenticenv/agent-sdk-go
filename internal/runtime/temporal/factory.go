@@ -69,6 +69,8 @@ func (f *RuntimeFactory) Build(params *agentruntime.RuntimeParams, remoteWorker 
 		WithToolExecutionMode(params.ToolExecutionMode),
 		WithRetrieverFingerprint(params.RetrieverFingerprint),
 		WithHooksFingerprint(params.HooksFingerprint),
+		WithNamedLLMFingerprint(params.NamedLLMFingerprint),
+		WithErrorControlFingerprint(params.ErrorControlFingerprint),
 		WithDisableLocalWorker(params.DisableLocalWorker),
 		// Never allow fingerprint bypass on remote worker runtime.
 		WithDisableFingerprintCheck(params.DisableFingerprintCheck && !remoteWorker),

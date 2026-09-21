@@ -3,6 +3,7 @@ package openai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"testing"
 
@@ -371,5 +372,16 @@ func TestGenerateStream(t *testing.T) {
 	result := stream.GetResult()
 	if result == nil || result.Content == "" {
 		t.Error("expected non-empty content from GetResult")
+	}
+}
+
+func TestWrapLLM_OpenAIError(t *testing.T) {
+	err := wrapLLM(&openai.Error{StatusCode: 429, Type: "rate_limit_exceeded", Message: "slow down"})
+	var llmErr *interfaces.LLMError
+	if !errors.As(err, &llmErr) || llmErr.Reason != interfaces.LLMReasonRateLimit || llmErr.StatusCode != 429 {
+		t.Fatalf("got %v", err)
+	}
+	if wrapLLM(nil) != nil {
+		t.Fatal("nil")
 	}
 }

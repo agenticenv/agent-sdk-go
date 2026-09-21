@@ -87,6 +87,9 @@ type AgentLoopInput struct {
 	IsStreamHandler bool
 	// Tools is the resolved tool list for this run (not on the Restate wire payload).
 	Tools []interfaces.Tool
+	// circuitBreaker is the per-run tracker (not on the Restate wire). Persisted via durable Run steps.
+	circuitBreaker *base.CircuitBreaker
+	circuitNow     time.Time
 }
 
 // AgentLoopResult is the outcome of a completed durable agent run.
@@ -322,9 +325,12 @@ func (rt *RestateRuntime) executeAgentLoop(ctx restatesdk.Context, input AgentLo
 	ctx = restatesdk.WrapContext(ctx, otelCtx)
 
 	policies := rt.executionPolicies()
-	maxIter := rt.AgentConfig.Limits.MaxIterations
-	if maxIter <= 0 {
-		maxIter = 10
+	maxIter := base.EffectiveMaxIterations(rt.AgentConfig.Limits.MaxIterations)
+	originalMaxIter := maxIter
+	useFallback := false
+	iterationsExtended := false
+	if input.circuitBreaker == nil {
+		input.circuitBreaker = base.NewCircuitBreaker(rt.AgentConfig.ErrorControl)
 	}
 
 	topic := strings.TrimSpace(input.EventTopic)
@@ -410,6 +416,15 @@ func (rt *RestateRuntime) executeAgentLoop(ctx restatesdk.Context, input AgentLo
 	var llmUsage *interfaces.LLMUsage
 
 	for iter := 0; iter < maxIter; iter++ {
+		if input.circuitBreaker != nil {
+			now, nowErr := executeWithPolicy(ctx, fmt.Sprintf("cb-now-%d", iter),
+				sdkruntime.ExecutionPolicy{MaxAttempts: 1},
+				func(restatesdk.RunContext) (time.Time, error) { return time.Now(), nil })
+			if nowErr != nil {
+				return nil, nowErr
+			}
+			input.circuitNow = now
+		}
 		messageID, err := executeWithPolicy(ctx, fmt.Sprintf("message-id-%d", iter),
 			sdkruntime.ExecutionPolicy{MaxAttempts: 1},
 			func(restatesdk.RunContext) (string, error) { return uuid.New().String(), nil })
@@ -417,7 +432,7 @@ func (rt *RestateRuntime) executeAgentLoop(ctx restatesdk.Context, input AgentLo
 			return nil, err
 		}
 
-		llmResult, err := rt.executeLLMStep(ctx, input, policies.LLM, base.ExecuteLLMInput{
+		llmResult, usedFB, err := rt.executeLLMStepWithErrorControl(ctx, input, policies.LLM, base.ExecuteLLMInput{
 			Logger:           log,
 			AgentName:        agentName,
 			MessageID:        messageID,
@@ -428,9 +443,12 @@ func (rt *RestateRuntime) executeAgentLoop(ctx restatesdk.Context, input AgentLo
 			MemoryContext:    memoryContext,
 			RetrieverContext: retrieverContext,
 			Tools:            input.Tools,
-		}, iter)
+		}, iter, "", useFallback)
 		if err != nil {
 			return nil, err
+		}
+		if usedFB {
+			useFallback = true
 		}
 		telemetry.Run.TotalLLMCalls++
 		llmUsage = base.MergeLLMUsage(llmUsage, llmResult.Usage)
@@ -445,36 +463,57 @@ func (rt *RestateRuntime) executeAgentLoop(ctx restatesdk.Context, input AgentLo
 		}
 
 		if iter == maxIter-1 {
-			finalMsgID, idErr := executeWithPolicy(ctx, fmt.Sprintf("message-id-final-%d", iter),
+			names := make([]string, len(llmResult.ToolCalls))
+			for i, tc := range llmResult.ToolCalls {
+				names[i] = tc.ToolName
+			}
+			dec, decErr := executeWithPolicy(ctx, fmt.Sprintf("max-iter-%d", iter),
 				sdkruntime.ExecutionPolicy{MaxAttempts: 1},
-				func(restatesdk.RunContext) (string, error) { return uuid.New().String(), nil })
-			if idErr != nil {
-				return nil, idErr
+				func(runCtx restatesdk.RunContext) (types.ErrorControlDecision, error) {
+					return rt.DecideMaxIterations(runCtx, types.MaxIterationsInfo{
+						IterationCount: iter + 1,
+						MaxIterations:  originalMaxIter,
+						LastAction:     base.LastToolAction(names),
+					}, iterationsExtended, log), nil
+				})
+			if decErr != nil {
+				return nil, decErr
 			}
-			llmResult, err = rt.executeLLMStep(ctx, input, policies.LLM, base.ExecuteLLMInput{
-				Logger:           log,
-				AgentName:        agentName,
-				MessageID:        finalMsgID,
-				RunID:            input.RunID,
-				Iteration:        iter,
-				Messages:         messages,
-				SkipTools:        true,
-				MemoryContext:    memoryContext,
-				RetrieverContext: retrieverContext,
-				Tools:            input.Tools,
-			}, iter)
-			if err != nil {
-				return nil, fmt.Errorf("llm final call (iter %d): %w", iter, err)
+			if dec.Action == types.ErrorControlExtendIterations {
+				maxIter += dec.ExtraIterations
+				iterationsExtended = true
+			} else {
+				finalMsgID, idErr := executeWithPolicy(ctx, fmt.Sprintf("message-id-final-%d", iter),
+					sdkruntime.ExecutionPolicy{MaxAttempts: 1},
+					func(restatesdk.RunContext) (string, error) { return uuid.New().String(), nil })
+				if idErr != nil {
+					return nil, idErr
+				}
+				llmResult, _, err = rt.executeLLMStepWithErrorControl(ctx, input, policies.LLM, base.ExecuteLLMInput{
+					Logger:           log,
+					AgentName:        agentName,
+					MessageID:        finalMsgID,
+					RunID:            input.RunID,
+					Iteration:        iter,
+					Messages:         messages,
+					SkipTools:        true,
+					MemoryContext:    memoryContext,
+					RetrieverContext: retrieverContext,
+					Tools:            input.Tools,
+				}, iter, "final-", useFallback)
+				if err != nil {
+					return nil, fmt.Errorf("llm final call (iter %d): %w", iter, err)
+				}
+				llmUsage = base.MergeLLMUsage(llmUsage, llmResult.Usage)
+				if budgetErr := rt.checkBudget(ctx, budgetTracker, enforceBudget, telemetry, llmResult.Usage, emit); budgetErr != nil {
+					return &AgentLoopResult{Content: lastContent, LLMUsage: llmUsage, Telemetry: telemetry}, budgetErr
+				}
+				messages = append(messages, interfaces.Message{Role: interfaces.MessageRoleAssistant, Content: llmResult.Content})
+				lastContent = llmResult.Content
+				telemetry.Run.TotalLLMCalls++
+				telemetry.Run.FinishReason = types.FinishReasonMaxIterations
+				break
 			}
-			llmUsage = base.MergeLLMUsage(llmUsage, llmResult.Usage)
-			if budgetErr := rt.checkBudget(ctx, budgetTracker, enforceBudget, telemetry, llmResult.Usage, emit); budgetErr != nil {
-				return &AgentLoopResult{Content: lastContent, LLMUsage: llmUsage, Telemetry: telemetry}, budgetErr
-			}
-			messages = append(messages, interfaces.Message{Role: interfaces.MessageRoleAssistant, Content: llmResult.Content})
-			lastContent = llmResult.Content
-			telemetry.Run.TotalLLMCalls++
-			telemetry.Run.FinishReason = types.FinishReasonMaxIterations
-			break
 		}
 
 		assistantMsg := interfaces.Message{
@@ -512,9 +551,10 @@ func (rt *RestateRuntime) executeAgentLoop(ctx restatesdk.Context, input AgentLo
 		for idx, res := range toolResults {
 			messages = append(messages, res.message)
 			tc := llmResult.ToolCalls[idx]
-			if tc.ToolKind.CountsTowardToolTelemetry() {
+			if !tc.Unknown && tc.ToolKind.CountsTowardToolTelemetry() {
 				telemetry.Tools.Record(tc.ToolName, res.failed)
 			}
+			base.ApplyToolCircuitResult(input.circuitBreaker, tc.Unknown, tc.ToolKind, tc.ToolName, tc.Args, res.failed, input.circuitNow)
 			if tc.ToolKind == types.ToolKindRetriever {
 				telemetry.Storage.TotalRetrieverSearches++
 				telemetry.Storage.AgenticSearches++
@@ -535,6 +575,17 @@ func (rt *RestateRuntime) executeAgentLoop(ctx restatesdk.Context, input AgentLo
 					return &AgentLoopResult{Content: lastContent, LLMUsage: llmUsage, Telemetry: telemetry}, budgetErr
 				}
 			}
+		}
+		if input.circuitBreaker != nil {
+			snap, snapErr := executeWithPolicy(ctx, fmt.Sprintf("cb-%d", iter),
+				sdkruntime.ExecutionPolicy{MaxAttempts: 1},
+				func(restatesdk.RunContext) (base.CircuitBreakerState, error) {
+					return input.circuitBreaker.State(), nil
+				})
+			if snapErr != nil {
+				return nil, snapErr
+			}
+			input.circuitBreaker.Restore(snap)
 		}
 
 		if rt.conversationMemoryEnabled(input) && rt.AgentConfig.Session.ConversationSaveOnIteration && len(messages) > persistedCount {
@@ -585,8 +636,18 @@ func (rt *RestateRuntime) executeLLMStep(
 	policy sdkruntime.ExecutionPolicy,
 	llmIn base.ExecuteLLMInput,
 	iter int,
+	stepPrefix string,
+	useFallback bool,
 ) (*base.LLMResult, error) {
-	return executeWithPolicy(ctx, fmt.Sprintf("llm-%d", iter), policy, func(runCtx restatesdk.RunContext) (*base.LLMResult, error) {
+	if useFallback {
+		client, err := rt.ResolveLLMClient(true)
+		if err != nil {
+			return nil, err
+		}
+		llmIn.Client = client
+	}
+	name := fmt.Sprintf("llm-%s%d", stepPrefix, iter)
+	return executeWithPolicy(ctx, name, policy, func(runCtx restatesdk.RunContext) (*base.LLMResult, error) {
 		in := llmIn
 		if input.StreamingEnabled {
 			topic := strings.TrimSpace(input.EventTopic)
@@ -604,6 +665,44 @@ func (rt *RestateRuntime) executeLLMStep(
 		}
 		return rt.ExecuteLLM(runCtx, in)
 	})
+}
+
+func (rt *RestateRuntime) executeLLMStepWithErrorControl(
+	ctx restatesdk.Context,
+	input AgentLoopInput,
+	policy sdkruntime.ExecutionPolicy,
+	llmIn base.ExecuteLLMInput,
+	iter int,
+	stepPrefix string,
+	useFallback bool,
+) (*base.LLMResult, bool, error) {
+	result, err := rt.executeLLMStep(ctx, input, policy, llmIn, iter, stepPrefix, useFallback)
+	if err == nil {
+		return result, useFallback, nil
+	}
+	if useFallback {
+		return nil, true, err
+	}
+	useFB, recErr := executeWithPolicy(ctx, fmt.Sprintf("llm-failure-%s%d", stepPrefix, iter),
+		sdkruntime.ExecutionPolicy{MaxAttempts: 1},
+		func(runCtx restatesdk.RunContext) (bool, error) {
+			dec := rt.DecideLLMFailure(runCtx, types.LLMFailureInfo{
+				Attempt: base.LLMPolicyAttempts(policy.MaxAttempts),
+				Err:     err,
+			}, rt.logger)
+			if dec.Action != types.ErrorControlFallbackModel {
+				return false, err
+			}
+			return true, nil
+		})
+	if recErr != nil {
+		return nil, false, recErr
+	}
+	result, err = rt.executeLLMStep(ctx, input, policy, llmIn, iter, stepPrefix+"fallback-", true)
+	if err != nil {
+		return nil, true, err
+	}
+	return result, useFB, nil
 }
 
 // ─── Tool execution ───────────────────────────────────────────────────────────
@@ -702,15 +801,46 @@ func (rt *RestateRuntime) executeToolsParallel(
 		}
 	}
 
-	// Step 2: Authorise all tools in parallel via RunAsync, then collect results.
+	// Step 2: Unknown names continue with a synthetic tool message (no authorize/execute).
+	for i := range states {
+		tc := states[i].tc
+		if !base.IsUnknownTool(tc, input.Tools) {
+			continue
+		}
+		if !tc.Unknown {
+			rt.NoteUnknownTool(context.Background(), rt.logger, tc.ToolName)
+		}
+		writeResult(i, base.UnknownToolMessage(tc.ToolName), false)
+	}
+
+	for i := range states {
+		if states[i].done {
+			continue
+		}
+		tc := states[i].tc
+		if input.circuitBreaker == nil || !base.CountsTowardCircuitBreaker(tc.Unknown, tc.ToolKind) ||
+			!input.circuitBreaker.IsTripped(tc.ToolName, input.circuitNow) {
+			continue
+		}
+		rt.NoteCircuitSkip(context.Background(), rt.logger, tc.ToolName)
+		writeResult(i, base.CircuitBreakerSkippedMessage(tc.ToolName), false)
+	}
+
+	// Step 3: Authorise remaining tools in parallel via RunAsync, then collect results.
 	authFuts := make([]restatesdk.RunAsyncFuture[base.AuthorizeResult], n)
 	for i := range states {
+		if states[i].done {
+			continue
+		}
 		tc := states[i].tc
 		authFuts[i] = restatesdk.RunAsync(ctx, func(runCtx restatesdk.RunContext) (base.AuthorizeResult, error) {
 			return rt.AuthorizeTool(runCtx, rt.logger, input.Tools, tc.ToolName, tc.Args)
 		}, policyToRunOpts("tool-auth-"+tc.ToolCallID, policies.ToolAuth)...)
 	}
 	for i := range states {
+		if states[i].done {
+			continue
+		}
 		authResult, err := authFuts[i].Result()
 		if err != nil {
 			writeResult(i, "Tool execution failed: "+err.Error(), true)
@@ -725,7 +855,7 @@ func (rt *RestateRuntime) executeToolsParallel(
 		}
 	}
 
-	// Step 3: Create approval awakeables for all pending approvals (overlapped creation gives
+	// Step 4: Create approval awakeables for all pending approvals (overlapped creation gives
 	// effective parallelism), then wait for each in order.
 	var approvals []pendingApproval
 	for i := range states {
@@ -761,7 +891,7 @@ func (rt *RestateRuntime) executeToolsParallel(
 		states[p.index].approval = status
 	}
 
-	// Step 4: Dispatch native tools in parallel via RunAsync; queue sub-agents for after.
+	// Step 5: Dispatch native tools in parallel via RunAsync; queue sub-agents for after.
 	var execFuts []parallelExecFuture
 	var subAgentIdxs []int
 	for i := range states {
@@ -844,6 +974,29 @@ func (rt *RestateRuntime) executeSingleTool(
 		if s := string(argsJSON); s != "" && s != "null" && s != "{}" {
 			emit(events.NewAgentToolCallArgsEvent(tc.ToolCallID, s))
 		}
+	}
+
+	if base.IsUnknownTool(tc, input.Tools) {
+		if !tc.Unknown {
+			rt.NoteUnknownTool(context.Background(), rt.logger, tc.ToolName)
+		}
+		content := base.UnknownToolMessage(tc.ToolName)
+		emitToolComplete(emit, messageID, tc.ToolCallID, content)
+		return toolResult{message: interfaces.Message{
+			Role: interfaces.MessageRoleTool, Content: content,
+			ToolName: tc.ToolName, ToolCallID: tc.ToolCallID,
+		}}, nil
+	}
+
+	if input.circuitBreaker != nil && base.CountsTowardCircuitBreaker(tc.Unknown, tc.ToolKind) &&
+		input.circuitBreaker.IsTripped(tc.ToolName, input.circuitNow) {
+		rt.NoteCircuitSkip(context.Background(), rt.logger, tc.ToolName)
+		content := base.CircuitBreakerSkippedMessage(tc.ToolName)
+		emitToolComplete(emit, messageID, tc.ToolCallID, content)
+		return toolResult{message: interfaces.Message{
+			Role: interfaces.MessageRoleTool, Content: content,
+			ToolName: tc.ToolName, ToolCallID: tc.ToolCallID,
+		}}, nil
 	}
 
 	authResult, err := executeWithPolicy(ctx, "tool-auth-"+tc.ToolCallID, policies.ToolAuth, func(runCtx restatesdk.RunContext) (base.AuthorizeResult, error) {

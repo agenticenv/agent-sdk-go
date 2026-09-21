@@ -47,6 +47,8 @@ flowchart LR
 
 **Hooks** — middleware callbacks that fire before and after LLM calls, tool execution, retrieval, and memory operations. Use them for logging, PII scrubbing, guardrails, and cost tracking without modifying agent logic. See [Hooks](/features/hooks).
 
+**Error control** — post-retry decisions: fallback LLM, extra iterations, and a per-tool circuit breaker. Separate from lifecycle hooks. See [Error Control](/features/error-control).
+
 ## Request lifecycle
 
 What happens from the moment your code calls `a.Run(ctx, prompt, nil)`:

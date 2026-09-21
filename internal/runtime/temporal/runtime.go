@@ -74,9 +74,11 @@ type TemporalRuntime struct {
 	a2aFingerprint           string
 	observabilityFingerprint string
 	// agentMode is the string form of [types.AgentMode] (e.g. "interactive", "autonomous").
-	agentMode            string
-	retrieverFingerprint string
-	hooksFingerprint     string
+	agentMode               string
+	retrieverFingerprint    string
+	hooksFingerprint        string
+	namedLLMFingerprint     string
+	errorControlFingerprint string
 
 	// disableLocalWorker mirrors pkg/agent DisableLocalWorker: when false, the client embeds a worker
 	// so Execute/ExecuteStream skip DescribeTaskQueue poller checks.
@@ -177,6 +179,7 @@ func (rt *TemporalRuntime) Start(ctx context.Context) error {
 	w.RegisterWorkflowWithOptions(rt.AgentWorkflow, workflow.RegisterOptions{Name: "AgentWorkflow"})
 	w.RegisterActivityWithOptions(rt.AgentLLMActivity, activity.RegisterOptions{Name: "AgentLLMActivity"})
 	w.RegisterActivityWithOptions(rt.AgentLLMStreamActivity, activity.RegisterOptions{Name: "AgentLLMStreamActivity"})
+	w.RegisterActivityWithOptions(rt.AgentMaxIterationsDecisionActivity, activity.RegisterOptions{Name: "AgentMaxIterationsDecisionActivity"})
 	w.RegisterActivityWithOptions(rt.AgentRetrieverActivity, activity.RegisterOptions{Name: "AgentRetrieverActivity"})
 	w.RegisterActivityWithOptions(rt.AgentMemoryRecallActivity, activity.RegisterOptions{Name: "AgentMemoryRecallActivity"})
 	w.RegisterActivityWithOptions(rt.AgentMemoryStoreActivity, activity.RegisterOptions{Name: "AgentMemoryStoreActivity"})

@@ -2,6 +2,7 @@ package ollama
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
@@ -311,5 +312,13 @@ func TestBuildCompletionParams(t *testing.T) {
 	}
 	if params.ResponseFormat.OfJSONObject == nil {
 		t.Fatal("response format should be json_object")
+	}
+}
+
+func TestWrapLLM_OllamaError(t *testing.T) {
+	err := wrapLLM(&openai.Error{StatusCode: 500, Message: "backend"})
+	var llmErr *interfaces.LLMError
+	if !errors.As(err, &llmErr) || llmErr.Reason != interfaces.LLMReasonProvider || llmErr.StatusCode != 500 {
+		t.Fatalf("got %v", err)
 	}
 }

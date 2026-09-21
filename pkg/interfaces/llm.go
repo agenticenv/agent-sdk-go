@@ -2,6 +2,8 @@ package interfaces
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	"github.com/agenticenv/agent-sdk-go/internal/types"
 )
@@ -99,4 +101,41 @@ type ResponseFormat struct {
 	Type   ResponseFormatType
 	Name   string
 	Schema JSONSchema
+}
+
+// LLMFailureReason classifies a Generate / stream failure. LLM clients should wrap vendor
+// errors with this reason so callers can branch. Unwrapped errors are [LLMReasonUnknown].
+type LLMFailureReason string
+
+const (
+	LLMReasonUnknown         LLMFailureReason = "unknown"
+	LLMReasonRateLimit       LLMFailureReason = "rate_limit"
+	LLMReasonContextExceeded LLMFailureReason = "context_exceeded"
+	LLMReasonProvider        LLMFailureReason = "provider"
+)
+
+// LLMError is a classified Generate / stream failure. Clients wrap the vendor error;
+// callers use errors.As and switch on [LLMError.Reason].
+type LLMError struct {
+	Reason     LLMFailureReason
+	StatusCode int
+	RetryAfter time.Duration
+	Err        error
+}
+
+func (e *LLMError) Error() string {
+	if e == nil {
+		return "llm: <nil>"
+	}
+	if e.Err != nil {
+		return fmt.Sprintf("llm: %s: %v", e.Reason, e.Err)
+	}
+	return fmt.Sprintf("llm: %s", e.Reason)
+}
+
+func (e *LLMError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
 }

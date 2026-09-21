@@ -232,7 +232,7 @@ See [Reconnect example](/examples/reconnect) for the stream protocol, [Durable E
 
 ## Configuration alignment
 
-Client and worker processes must share identical configuration — task queue, tools, memory, conversation backend, approval policy, and hook groups. The SDK validates this with a fingerprint check at activity entry; a mismatch aborts the run with a clear error.
+Client and worker processes must share identical configuration — task queue, tools, memory, conversation backend, approval policy, hook groups, named LLM clients, and error-control (hook slots, fallback name, breaker thresholds). The SDK validates this with a fingerprint check at activity entry; a mismatch aborts the run with a clear error.
 
 See [Distributed execution](/advanced/distributed-execution) for the full list and production setup guide.
 
