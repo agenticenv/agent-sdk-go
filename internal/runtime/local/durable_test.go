@@ -2,11 +2,14 @@ package local
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/agenticenv/agent-sdk-go/internal/events"
 	sdkruntime "github.com/agenticenv/agent-sdk-go/internal/runtime"
+	"github.com/agenticenv/agent-sdk-go/internal/runtime/base"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
@@ -577,4 +580,48 @@ func TestDurable_ToolsResolver_UsedOnReattach(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "used resolver", result.Content)
 	require.Equal(t, 0, resolverCalls, "a live run must use req.Tools, not the resolver")
+}
+
+func TestDurable_CircuitBreaker_PersistsTrippedState(t *testing.T) {
+	client := &seqLLMClient{
+		responses: []*interfaces.LLMResponse{
+			{ToolCalls: []*interfaces.ToolCall{{ToolCallID: "c1", ToolName: "boom", Args: map[string]any{"n": 1}}}},
+			{ToolCalls: []*interfaces.ToolCall{{ToolCallID: "c2", ToolName: "boom", Args: map[string]any{"n": 1}}}},
+			{ToolCalls: []*interfaces.ToolCall{{ToolCallID: "c3", ToolName: "boom", Args: map[string]any{"n": 1}}}},
+			{Content: "stopped looping"},
+		},
+	}
+	tool := stubTool{name: "boom", execErr: errors.New("always")}
+	rt, err := NewLocalRuntime(
+		WithLogger(logger.NoopLogger()),
+		WithAgentSpec(sdkruntime.AgentSpec{Name: "cb-journal-agent", SystemPrompt: "sys"}),
+		WithAgentConfig(sdkruntime.AgentConfig{
+			LLM:    sdkruntime.AgentLLM{Client: client},
+			Limits: sdkruntime.AgentLimits{MaxIterations: 5, Timeout: 30 * time.Second},
+			ErrorControl: &types.ErrorControlConfig{
+				CircuitBreaker: &types.CircuitBreakerConfig{MaxConsecutiveSameArgs: 2},
+			},
+		}),
+		WithLocalConfig(&LocalConfig{DataDir: t.TempDir()}),
+	)
+	require.NoError(t, err)
+	t.Cleanup(rt.Close)
+
+	handle, err := rt.Run(context.Background(), &sdkruntime.RunRequest{
+		UserPrompt: "go",
+		Tools:      []interfaces.Tool{tool},
+	})
+	require.NoError(t, err)
+	result, err := handle.Get(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "stopped looping", result.Content)
+	require.Equal(t, int64(2), result.Telemetry.Tools.FailedCalls)
+
+	rec, ok, err := rt.engine.GetStep(context.Background(), rt.taskID, handle.ID(), "cb-1")
+	require.NoError(t, err)
+	require.True(t, ok, "durable journal must persist cb-1")
+	var snap base.CircuitBreakerState
+	require.NoError(t, json.Unmarshal(rec.Result, &snap))
+	restored := base.NewCircuitBreakerFromState(rt.AgentConfig.ErrorControl, snap)
+	require.True(t, restored.IsTripped("boom", time.Now()), "replayed breaker state must stay tripped")
 }

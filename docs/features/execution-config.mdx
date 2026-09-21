@@ -100,6 +100,10 @@ agent.WithToolAuthExecutionConfig(agent.ExecutionConfig{
 
 A single LLM call timing out after `Timeout` does not end the run — it counts as a failed attempt and may be retried until `MaxAttempts` is exhausted. The run ends only if the agent run timeout fires or all attempts are exhausted.
 
+## Relationship to error control
+
+[`WithErrorControl`](/features/error-control) hooks run **after** these retries. Do not stack a hook-level retry on top of `MaxAttempts`. `OnLLMFailure` sees the error from the last attempt; `OnMaxIterationsExceeded` is independent of per-operation retries.
+
 ## Works with both runtimes
 
 Execution config applies to the in-process, Temporal, and Restate runtimes with the same semantics.
@@ -130,6 +134,10 @@ Execution config applies to the in-process, Temporal, and Restate runtimes with 
 
   <Card title="MCP" icon="plug" href="/features/mcp" horizontal>
     MCP integration
+  </Card>
+
+  <Card title="Error Control" icon="shield-halved" href="/features/error-control" horizontal>
+    Fallback and extend-iterations after retries exhaust
   </Card>
 
 </CardGroup>

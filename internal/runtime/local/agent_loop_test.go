@@ -231,6 +231,65 @@ func TestExecuteAgentLoop_LLMError(t *testing.T) {
 	require.Contains(t, err.Error(), "llm fail")
 }
 
+func TestExecuteAgentLoop_OnLLMFailure_FallbackModel(t *testing.T) {
+	primary := &seqLLMClient{errs: []error{errors.New("primary down")}}
+	fallback := &seqLLMClient{responses: []*interfaces.LLMResponse{{Content: "from fallback"}}}
+	rt, err := NewLocalRuntime(
+		testNoDurability(),
+		WithLogger(logger.NoopLogger()),
+		WithAgentSpec(sdkruntime.AgentSpec{Name: "loop-agent", SystemPrompt: "sys"}),
+		WithAgentConfig(sdkruntime.AgentConfig{
+			LLM:    sdkruntime.AgentLLM{Client: primary},
+			Limits: sdkruntime.AgentLimits{MaxIterations: 3, Timeout: 10 * time.Second},
+			ExecutionConfigs: sdkruntime.ExecutionConfigs{
+				LLM: sdkruntime.ExecutionConfig{MaxAttempts: 1},
+			},
+			NamedLLMClients: map[string]interfaces.LLMClient{"cheap": fallback},
+			ErrorControl: &types.ErrorControlConfig{
+				FallbackLLMClient: "cheap",
+				Hooks: types.AgentErrorHooks{
+					OnLLMFailure: func(context.Context, types.LLMFailureInfo) types.ErrorControlDecision {
+						return types.ErrorControlDecision{Action: types.ErrorControlFallbackModel}
+					},
+				},
+			},
+		}),
+	)
+	require.NoError(t, err)
+
+	result, err := runLoop(context.Background(), rt, nil, AgentLoopInput{UserPrompt: "hi"})
+	require.NoError(t, err)
+	require.Equal(t, "from fallback", result.Content)
+}
+
+func TestExecuteAgentLoop_OnLLMFailure_FallbackMissingAborts(t *testing.T) {
+	primary := &seqLLMClient{errs: []error{errors.New("primary down")}}
+	rt, err := NewLocalRuntime(
+		testNoDurability(),
+		WithLogger(logger.NoopLogger()),
+		WithAgentSpec(sdkruntime.AgentSpec{Name: "loop-agent", SystemPrompt: "sys"}),
+		WithAgentConfig(sdkruntime.AgentConfig{
+			LLM:    sdkruntime.AgentLLM{Client: primary},
+			Limits: sdkruntime.AgentLimits{MaxIterations: 3, Timeout: 10 * time.Second},
+			ExecutionConfigs: sdkruntime.ExecutionConfigs{
+				LLM: sdkruntime.ExecutionConfig{MaxAttempts: 1},
+			},
+			ErrorControl: &types.ErrorControlConfig{
+				Hooks: types.AgentErrorHooks{
+					OnLLMFailure: func(context.Context, types.LLMFailureInfo) types.ErrorControlDecision {
+						return types.ErrorControlDecision{Action: types.ErrorControlFallbackModel}
+					},
+				},
+			},
+		}),
+	)
+	require.NoError(t, err)
+
+	_, err = runLoop(context.Background(), rt, nil, AgentLoopInput{UserPrompt: "hi"})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "primary down")
+}
+
 func TestExecuteAgentLoop_DefaultMaxIterations(t *testing.T) {
 	// When MaxIterations = 0 the loop defaults to 10.
 	// The client returns a text response on the first call so it exits immediately.
@@ -334,6 +393,157 @@ func TestExecuteAgentLoop_MaxIterationsForcesFinalCall(t *testing.T) {
 	result, err := runLoop(context.Background(), rt, tools, AgentLoopInput{UserPrompt: "add"})
 	require.NoError(t, err)
 	require.Equal(t, "forced final answer", result.Content)
+}
+
+func TestExecuteAgentLoop_OnMaxIterations_ExtendIterations(t *testing.T) {
+	client := &seqLLMClient{
+		responses: []*interfaces.LLMResponse{
+			{ToolCalls: []*interfaces.ToolCall{{ToolCallID: "c1", ToolName: "add"}}},
+			{Content: "after extend"},
+		},
+	}
+	tool := stubTool{name: "add", result: "7"}
+	rt, tools := newLoopRT(t, 1, client, tool)
+	rt.AgentConfig.ErrorControl = &types.ErrorControlConfig{
+		Hooks: types.AgentErrorHooks{
+			OnMaxIterationsExceeded: func(_ context.Context, info types.MaxIterationsInfo) types.ErrorControlDecision {
+				require.Equal(t, 1, info.MaxIterations)
+				require.Equal(t, "add", info.LastAction)
+				return types.ErrorControlDecision{Action: types.ErrorControlExtendIterations, ExtraIterations: 1}
+			},
+		},
+	}
+
+	result, err := runLoop(context.Background(), rt, tools, AgentLoopInput{UserPrompt: "add"})
+	require.NoError(t, err)
+	require.Equal(t, "after extend", result.Content)
+	require.Equal(t, int64(1), result.Telemetry.Tools.TotalCalls)
+}
+
+func TestExecuteAgentLoop_OnMaxIterations_SecondGrantCapped(t *testing.T) {
+	var hookCalls int
+	client := &seqLLMClient{
+		responses: []*interfaces.LLMResponse{
+			{ToolCalls: []*interfaces.ToolCall{{ToolCallID: "c1", ToolName: "add"}}},
+			{ToolCalls: []*interfaces.ToolCall{{ToolCallID: "c2", ToolName: "add"}}},
+			{Content: "capped final"},
+		},
+	}
+	tool := stubTool{name: "add", result: "7"}
+	rt, tools := newLoopRT(t, 1, client, tool)
+	rt.AgentConfig.ErrorControl = &types.ErrorControlConfig{
+		Hooks: types.AgentErrorHooks{
+			OnMaxIterationsExceeded: func(context.Context, types.MaxIterationsInfo) types.ErrorControlDecision {
+				hookCalls++
+				return types.ErrorControlDecision{Action: types.ErrorControlExtendIterations, ExtraIterations: 1}
+			},
+		},
+	}
+
+	result, err := runLoop(context.Background(), rt, tools, AgentLoopInput{UserPrompt: "add"})
+	require.NoError(t, err)
+	require.Equal(t, "capped final", result.Content)
+	require.Equal(t, 1, hookCalls)
+	require.Equal(t, types.FinishReasonMaxIterations, result.Telemetry.Run.FinishReason)
+}
+
+func TestExecuteAgentLoop_CircuitBreaker_SkipsAfterConsecutiveFailures(t *testing.T) {
+	client := &seqLLMClient{
+		responses: []*interfaces.LLMResponse{
+			{ToolCalls: []*interfaces.ToolCall{{ToolCallID: "c1", ToolName: "boom", Args: map[string]any{"n": 1}}}},
+			{ToolCalls: []*interfaces.ToolCall{{ToolCallID: "c2", ToolName: "boom", Args: map[string]any{"n": 1}}}},
+			{ToolCalls: []*interfaces.ToolCall{{ToolCallID: "c3", ToolName: "boom", Args: map[string]any{"n": 1}}}},
+			{Content: "stopped looping"},
+		},
+	}
+	tool := stubTool{name: "boom", execErr: errors.New("always")}
+	rt, tools := newLoopRT(t, 5, client, tool)
+	rt.AgentConfig.ErrorControl = &types.ErrorControlConfig{
+		CircuitBreaker: &types.CircuitBreakerConfig{MaxConsecutiveSameArgs: 2},
+	}
+
+	result, err := runLoop(context.Background(), rt, tools, AgentLoopInput{UserPrompt: "go"})
+	require.NoError(t, err)
+	require.Equal(t, "stopped looping", result.Content)
+	require.Equal(t, int64(3), result.Telemetry.Tools.TotalCalls)
+	require.Equal(t, int64(2), result.Telemetry.Tools.FailedCalls)
+}
+
+func TestExecuteAgentLoop_CircuitBreaker_UnderThresholdDoesNotSkip(t *testing.T) {
+	client := &seqLLMClient{
+		responses: []*interfaces.LLMResponse{
+			{ToolCalls: []*interfaces.ToolCall{{ToolCallID: "c1", ToolName: "boom", Args: map[string]any{"n": 1}}}},
+			{ToolCalls: []*interfaces.ToolCall{{ToolCallID: "c2", ToolName: "boom", Args: map[string]any{"n": 1}}}},
+			{Content: "still executing"},
+		},
+	}
+	tool := stubTool{name: "boom", execErr: errors.New("always")}
+	rt, tools := newLoopRT(t, 5, client, tool)
+	rt.AgentConfig.ErrorControl = &types.ErrorControlConfig{
+		CircuitBreaker: &types.CircuitBreakerConfig{MaxConsecutiveSameArgs: 3},
+	}
+
+	result, err := runLoop(context.Background(), rt, tools, AgentLoopInput{UserPrompt: "go"})
+	require.NoError(t, err)
+	require.Equal(t, "still executing", result.Content)
+	require.Equal(t, int64(2), result.Telemetry.Tools.TotalCalls)
+	require.Equal(t, int64(2), result.Telemetry.Tools.FailedCalls)
+}
+
+func TestExecuteAgentLoop_UnknownToolContinues(t *testing.T) {
+	client := &seqLLMClient{
+		responses: []*interfaces.LLMResponse{
+			{ToolCalls: []*interfaces.ToolCall{{ToolCallID: "c1", ToolName: "ghost"}}},
+			{Content: "continued"},
+		},
+	}
+	rt, tools := newLoopRT(t, 5, client)
+
+	result, err := runLoop(context.Background(), rt, tools, AgentLoopInput{UserPrompt: "go"})
+	require.NoError(t, err)
+	require.Equal(t, "continued", result.Content)
+	require.Equal(t, int64(0), result.Telemetry.Tools.TotalCalls)
+}
+
+func TestExecuteAgentLoop_OnLLMFailure_SeesReason(t *testing.T) {
+	rateErr := &interfaces.LLMError{
+		Reason:     interfaces.LLMReasonRateLimit,
+		StatusCode: 429,
+		Err:        errors.New("quota"),
+	}
+	var sawReason interfaces.LLMFailureReason
+	primary := &seqLLMClient{errs: []error{rateErr}}
+	fallback := &seqLLMClient{responses: []*interfaces.LLMResponse{{Content: "from fallback"}}}
+	rt, err := NewLocalRuntime(
+		testNoDurability(),
+		WithLogger(logger.NoopLogger()),
+		WithAgentSpec(sdkruntime.AgentSpec{Name: "loop-agent", SystemPrompt: "sys"}),
+		WithAgentConfig(sdkruntime.AgentConfig{
+			LLM:    sdkruntime.AgentLLM{Client: primary},
+			Limits: sdkruntime.AgentLimits{MaxIterations: 3, Timeout: 10 * time.Second},
+			ExecutionConfigs: sdkruntime.ExecutionConfigs{
+				LLM: sdkruntime.ExecutionConfig{MaxAttempts: 1},
+			},
+			NamedLLMClients: map[string]interfaces.LLMClient{"cheap": fallback},
+			ErrorControl: &types.ErrorControlConfig{
+				FallbackLLMClient: "cheap",
+				Hooks: types.AgentErrorHooks{
+					OnLLMFailure: func(_ context.Context, info types.LLMFailureInfo) types.ErrorControlDecision {
+						var llmErr *interfaces.LLMError
+						require.True(t, errors.As(info.Err, &llmErr))
+						sawReason = llmErr.Reason
+						return types.ErrorControlDecision{Action: types.ErrorControlFallbackModel}
+					},
+				},
+			},
+		}),
+	)
+	require.NoError(t, err)
+
+	result, err := runLoop(context.Background(), rt, nil, AgentLoopInput{UserPrompt: "hi"})
+	require.NoError(t, err)
+	require.Equal(t, "from fallback", result.Content)
+	require.Equal(t, interfaces.LLMReasonRateLimit, sawReason)
 }
 
 // ---------------------------------------------------------------------------
@@ -638,17 +848,16 @@ func TestExecuteToolsSequential_AllSucceed(t *testing.T) {
 	require.Equal(t, "v2", msgs[1].message.Content)
 }
 
-func TestExecuteToolsSequential_HardErrorOnContextCancel(t *testing.T) {
-	rt, _ := newLoopRT(t, 5, &seqLLMClient{})
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // pre-cancelled
+func TestExecuteToolsSequential_HardErrorBecomesSynthetic(t *testing.T) {
+	authTool := authorizerStubLocal{name: "err-tool", allow: false, authErr: errors.New("auth backend down")}
+	rt, tools := newLoopRT(t, 5, &seqLLMClient{}, authTool)
 
-	calls := []base.ToolCallRequest{testToolCall("c1", "missing-tool")}
-	results, err := rt.executeToolsSequential(ctx, AgentLoopInput{}, "msg", 0, calls, rt.executionPolicies(), noopEmit)
+	calls := []base.ToolCallRequest{testToolCall("c1", "err-tool")}
+	results, err := rt.executeToolsSequential(context.Background(), loopToolsInput(tools), "msg", 0, calls, rt.executionPolicies(), noopEmit)
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	require.True(t, results[0].failed)
-	require.Contains(t, results[0].message.Content, "missing-tool")
+	require.Contains(t, results[0].message.Content, "auth backend down")
 }
 
 // ---------------------------------------------------------------------------
@@ -685,13 +894,17 @@ func TestExecuteSingleTool_ToolExecError(t *testing.T) {
 	require.True(t, msg.failed)
 }
 
-func TestExecuteSingleTool_UnknownToolErrors(t *testing.T) {
+func TestExecuteSingleTool_UnknownToolContinues(t *testing.T) {
 	rt, _ := newLoopRT(t, 5, &seqLLMClient{}) // no tools registered
 
-	_, err := rt.executeSingleTool(context.Background(), AgentLoopInput{}, "msg", 0, 0,
+	msg, err := rt.executeSingleTool(context.Background(), AgentLoopInput{}, "msg", 0, 0,
 		testToolCall("c1", "ghost"), rt.executionPolicies(), noopEmit)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "ghost")
+	require.NoError(t, err)
+	require.Equal(t, base.UnknownToolMessage("ghost"), msg.message.Content)
+	require.False(t, msg.failed)
+	require.Equal(t, interfaces.MessageRoleTool, msg.message.Role)
+	require.Equal(t, "ghost", msg.message.ToolName)
+	require.Equal(t, "c1", msg.message.ToolCallID)
 }
 
 func TestExecuteSingleTool_AuthorizationDenied(t *testing.T) {

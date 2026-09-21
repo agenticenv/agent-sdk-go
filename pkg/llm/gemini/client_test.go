@@ -3,6 +3,7 @@ package gemini
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"testing"
 
@@ -411,5 +412,16 @@ func TestGenerateStream(t *testing.T) {
 	result := stream.GetResult()
 	if result == nil || result.Content == "" {
 		t.Error("expected non-empty content from GetResult")
+	}
+}
+
+func TestWrapLLM_GeminiError(t *testing.T) {
+	err := wrapLLM(genai.APIError{Code: 429, Message: "quota", Status: "RESOURCE_EXHAUSTED"})
+	var llmErr *interfaces.LLMError
+	if !errors.As(err, &llmErr) || llmErr.Reason != interfaces.LLMReasonRateLimit || llmErr.StatusCode != 429 {
+		t.Fatalf("got %v", err)
+	}
+	if wrapLLM(nil) != nil {
+		t.Fatal("nil")
 	}
 }

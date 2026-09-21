@@ -37,6 +37,21 @@ func TestFindToolByName_EmptyList(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestIsUnknownTool(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	tool := ifmocks.NewMockTool(ctrl)
+	tool.EXPECT().Name().Return("echo").AnyTimes()
+	tools := []interfaces.Tool{tool}
+
+	require.True(t, IsUnknownTool(ToolCallRequest{ToolName: "ghost"}, tools))
+	require.True(t, IsUnknownTool(ToolCallRequest{ToolName: "echo", Unknown: true}, tools))
+	require.False(t, IsUnknownTool(ToolCallRequest{ToolName: "echo"}, tools))
+}
+
+func TestUnknownToolMessage(t *testing.T) {
+	require.Equal(t, `Unknown tool "ghost". It is not registered on this agent.`, UnknownToolMessage("ghost"))
+}
+
 // --- FormatRetrieverDocs ---
 
 func TestFormatRetrieverDocs_Empty(t *testing.T) {

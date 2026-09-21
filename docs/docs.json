@@ -70,6 +70,7 @@
               "features/budget",
               "features/reasoning",
               "features/hooks",
+              "features/error-control",
               "features/ag-ui-protocol"
             ]
           },
@@ -141,7 +142,8 @@
             "group": "Configuration",
             "pages": [
               "examples/execution-config",
-              "examples/agent-with-budget"
+              "examples/agent-with-budget",
+              "examples/error-control"
             ]
           },
           {

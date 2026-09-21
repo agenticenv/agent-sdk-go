@@ -23,6 +23,8 @@ type LLMResult struct {
 // ToolCallRequest describes one tool call returned by the LLM.
 // NeedsApproval is pre-computed from the tool approval policy so orchestration loops
 // (local agent loop, temporal workflow) do not need to re-evaluate the policy.
+// Unknown is true when ToolName is not in the registered tools list; the run continues
+// with a synthetic tool-role message and does not authorize or execute the call.
 type ToolCallRequest struct {
 	ToolCallID      string
 	ToolName        string
@@ -30,6 +32,22 @@ type ToolCallRequest struct {
 	ToolKind        types.ToolKind
 	Args            map[string]any
 	NeedsApproval   bool
+	Unknown         bool
+}
+
+// UnknownToolMessage is the synthetic tool-role content when the LLM names a tool
+// that is not registered on the agent.
+func UnknownToolMessage(name string) string {
+	return fmt.Sprintf("Unknown tool %q. It is not registered on this agent.", name)
+}
+
+// IsUnknownTool reports whether tc should be skipped (synthetic message, no authorize/execute).
+func IsUnknownTool(tc ToolCallRequest, tools []interfaces.Tool) bool {
+	if tc.Unknown {
+		return true
+	}
+	_, ok := FindToolByName(tools, tc.ToolName)
+	return !ok
 }
 
 // AuthorizeResult is the outcome of a programmatic tool authorization check.

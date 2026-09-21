@@ -3,6 +3,7 @@ package anthropic
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 
 	"log/slog"
@@ -146,7 +147,7 @@ func (c *Client) Generate(ctx context.Context, req *interfaces.LLMRequest) (*int
 		slog.Bool("promptCaching", c.promptCaching))
 	msg, err := c.client.Messages.New(ctx, params)
 	if err != nil {
-		return nil, err
+		return nil, wrapLLM(err)
 	}
 	content, toolCalls := extractContentAndToolCalls(msg.Content)
 	toolNames := make([]string, 0, len(toolCalls))
@@ -192,7 +193,18 @@ type anthropicStreamAdapter struct {
 }
 
 func (a *anthropicStreamAdapter) Next() bool { return a.stream.Next() }
-func (a *anthropicStreamAdapter) Err() error { return a.stream.Err() }
+func (a *anthropicStreamAdapter) Err() error { return wrapLLM(a.stream.Err()) }
+
+func wrapLLM(err error) error {
+	if err == nil {
+		return nil
+	}
+	var api *anthropic.Error
+	if errors.As(err, &api) {
+		return llm.Classify(err, api.StatusCode, llm.RetryAfterFromResponse(api.Response), string(api.Type()))
+	}
+	return llm.Classify(err, 0, 0)
+}
 func (a *anthropicStreamAdapter) Current() *interfaces.LLMStreamChunk {
 	event := a.stream.Current()
 	out := &interfaces.LLMStreamChunk{}

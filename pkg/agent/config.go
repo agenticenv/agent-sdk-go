@@ -185,7 +185,8 @@ type ObservabilityConfig struct {
 //     WithMCPConfig, WithMCPClients, WithA2AConfig, WithA2AClients, WithRetrievers, WithRetrieverMode, WithAgentMode, WithDisableFingerprintCheck, WithAgentToolExecutionMode,
 //     WithLLMExecutionConfig, WithToolAuthExecutionConfig, WithToolExecutionConfig, WithMCPExecutionConfig, WithA2AExecutionConfig,
 //     WithRetrieverExecutionConfig, WithMemoryExecutionConfig, WithConversationExecutionConfig, WithSubAgentExecutionConfig,
-//     WithObservabilityConfig, WithTracer, WithMetrics, WithLogs, WithHooks
+//     WithObservabilityConfig, WithTracer, WithMetrics, WithLogs, WithHooks,
+//     WithNamedLLMClients, WithErrorControl
 //
 // When [WithObservabilityConfig] is set and a signal is not disabled, [buildAgentConfig] replaces
 // [WithTracer], [WithMetrics], and [WithLogs] for that signal with OTLP clients built from the config.
@@ -199,6 +200,7 @@ type agentConfig struct {
 	localConfig        *local.LocalConfig // durable-go config for the local runtime; nil = defaults (durable by default)
 	instanceId         string
 	LLMClient          interfaces.LLMClient
+	namedLLMClients    map[string]interfaces.LLMClient
 	tools              []interfaces.Tool // staging for [WithTools]; consumed when the agent is created
 	toolRegistry       ToolRegistry
 	mcpRegistry        MCPRegistry
@@ -271,6 +273,9 @@ type agentConfig struct {
 
 	// Hooks: named middleware hook groups for the agent execution lifecycle.
 	hooks []hooks.HookGroup
+
+	// errorControl is optional error-control wiring (hooks, FallbackLLMClient, circuit breaker). Nil = disabled.
+	errorControl *ErrorControlConfig
 }
 
 // Default Run/Stream deadlines when [WithTimeout] is unset: shorter for interactive sessions,
@@ -324,9 +329,38 @@ func WithAgentToolExecutionMode(mode AgentToolExecutionMode) Option {
 	return func(c *agentConfig) { c.agentToolExecutionMode = mode }
 }
 
-// WithLLMClient sets the LLM client. Applies to Agent and AgentWorker.
+// WithLLMClient sets the primary LLM client. Applies to Agent and AgentWorker.
 func WithLLMClient(client interfaces.LLMClient) Option {
 	return func(c *agentConfig) { c.LLMClient = client }
+}
+
+// WithNamedLLMClients registers extra LLM clients by name.
+// [ErrorControlConfig.FallbackLLMClient] looks up a client from this map.
+// Calls use the agent's [WithLLMSampling] and [WithResponseFormat].
+// Does not include the primary [WithLLMClient]. Last call replaces the map. Empty or nil is ignored.
+// Names and each client's model/provider are fingerprinted.
+func WithNamedLLMClients(clients map[string]interfaces.LLMClient) Option {
+	return func(c *agentConfig) {
+		if len(clients) == 0 {
+			return
+		}
+		c.namedLLMClients = cloneNamedLLMClients(clients)
+	}
+}
+
+// WithErrorControl configures post-retry behavior: LLM fallback, extra iterations, and an optional
+// circuit breaker. Separate from lifecycle [WithHooks]. Applies to Agent and AgentWorker.
+//
+// FallbackLLMClient is a [WithNamedLLMClients] name; NewAgent rejects an unknown name.
+// If a hook returns [ErrorControlFallbackModel] and that name is empty or missing, the run aborts.
+// In-process and Restate retry the fallback with the LLM execution policy. On Temporal, fallback is
+// one LLM call on the last activity attempt; if it fails, the activity may retry from the primary.
+// Temporal fingerprints hook slots (not bodies), the fallback name, and breaker thresholds.
+func WithErrorControl(cfg ErrorControlConfig) Option {
+	return func(c *agentConfig) {
+		cp := cfg
+		c.errorControl = &cp
+	}
 }
 
 // WithToolApprovalPolicy sets when tools can run without approval. Applies to Agent and AgentWorker.
@@ -871,6 +905,12 @@ func buildAgentConfig(opts []Option) (*agentConfig, error) {
 	if err := c.validateBudget(); err != nil {
 		return nil, err
 	}
+	if err := c.validateNamedLLMClients(); err != nil {
+		return nil, err
+	}
+	if err := c.validateErrorControl(); err != nil {
+		return nil, err
+	}
 
 	// Snapshot injected OTLP clients before observability may replace them (WithTracer / WithMetrics / WithLogs).
 	injectedTracerBeforeObs := c.tracer
@@ -1375,6 +1415,7 @@ func (c *agentConfig) runtimeAgentConfig() runtime.AgentConfig {
 		LLM: runtime.AgentLLM{
 			Client: c.LLMClient,
 		},
+		NamedLLMClients:    cloneNamedLLMClients(c.namedLLMClients),
 		ToolApprovalPolicy: c.toolApprovalPolicy,
 		Retrievers: runtime.AgentRetrievers{
 			Retrievers: c.retrievers,
@@ -1390,6 +1431,7 @@ func (c *agentConfig) runtimeAgentConfig() runtime.AgentConfig {
 		},
 		ExecutionConfigs: c.executionConfigs,
 		Hooks:            c.runtimeHookGroups(),
+		ErrorControl:     c.errorControl,
 	}
 	if c.llmSampling != nil {
 		d.LLM.Sampling = &runtime.LLMSampling{
@@ -1477,6 +1519,55 @@ func (c *agentConfig) validateBudget() error {
 	return nil
 }
 
+func cloneNamedLLMClients(in map[string]interfaces.LLMClient) map[string]interfaces.LLMClient {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]interfaces.LLMClient, len(in))
+	for name, client := range in {
+		out[name] = client
+	}
+	return out
+}
+
+func (c *agentConfig) validateNamedLLMClients() error {
+	for name, client := range c.namedLLMClients {
+		if strings.TrimSpace(name) == "" {
+			return fmt.Errorf("WithNamedLLMClients: name must not be empty")
+		}
+		if client == nil {
+			return fmt.Errorf("WithNamedLLMClients: %q is nil", name)
+		}
+	}
+	return nil
+}
+
+func (c *agentConfig) validateErrorControl() error {
+	if c.errorControl == nil {
+		return nil
+	}
+	if name := c.errorControl.FallbackLLMClient; name != "" {
+		client, ok := c.namedLLMClients[name]
+		if !ok || client == nil {
+			return fmt.Errorf("WithErrorControl: FallbackLLMClient %q is not in WithNamedLLMClients", name)
+		}
+	}
+	if c.errorControl.CircuitBreaker == nil {
+		return nil
+	}
+	cb := c.errorControl.CircuitBreaker
+	if cb.MaxConsecutiveSameArgs < 0 {
+		return fmt.Errorf("WithErrorControl: CircuitBreaker.MaxConsecutiveSameArgs must be >= 0")
+	}
+	if cb.PatternWindowSize < 0 {
+		return fmt.Errorf("WithErrorControl: CircuitBreaker.PatternWindowSize must be >= 0")
+	}
+	if cb.ResetAfter < 0 {
+		return fmt.Errorf("WithErrorControl: CircuitBreaker.ResetAfter must be >= 0")
+	}
+	return nil
+}
+
 // hookGroupsFingerprint returns a stable SHA-256 digest of configured hook group names for
 // [temporal.ComputeAgentFingerprint]. Names are sorted for stability. Returns "" when no hook
 // groups are configured. Hook implementations are not hashed — caller and worker must register
@@ -1491,6 +1582,78 @@ func hookGroupsFingerprint(groups []hooks.HookGroup) string {
 	}
 	sort.Strings(names)
 	b, err := json.Marshal(names)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
+type namedLLMFpShot struct {
+	Name     string `json:"name"`
+	Model    string `json:"model"`
+	Provider string `json:"provider"`
+}
+
+// namedLLMClientsFingerprint returns a stable digest of extra LLM clients (name, model, provider).
+// Empty when none are configured. Independent of [errorControlFingerprint].
+func namedLLMClientsFingerprint(named map[string]interfaces.LLMClient) string {
+	if len(named) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(named))
+	for name := range named {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	shot := make([]namedLLMFpShot, 0, len(names))
+	for _, name := range names {
+		entry := namedLLMFpShot{Name: name}
+		if client := named[name]; client != nil {
+			entry.Model = client.GetModel()
+			entry.Provider = string(client.GetProvider())
+		}
+		shot = append(shot, entry)
+	}
+	b, err := json.Marshal(shot)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
+type errorControlFpShot struct {
+	OnLLMFailure            bool   `json:"on_llm_failure,omitempty"`
+	OnMaxIterationsExceeded bool   `json:"on_max_iterations,omitempty"`
+	FallbackLLMClient       string `json:"fallback_llm_client,omitempty"`
+	MaxConsecutiveSameArgs  int    `json:"max_consecutive_same_args,omitempty"`
+	PatternWindowSize       int    `json:"pattern_window_size,omitempty"`
+	ResetAfterNs            int64  `json:"reset_after_ns,omitempty"`
+	HasCircuitBreaker       bool   `json:"has_circuit_breaker,omitempty"`
+}
+
+// errorControlFingerprint returns a stable digest of hook slots (not bodies),
+// FallbackLLMClient name, and circuit-breaker thresholds. Empty when none are configured.
+func errorControlFingerprint(cfg *ErrorControlConfig) string {
+	if cfg == nil {
+		return ""
+	}
+	shot := errorControlFpShot{
+		OnLLMFailure:            cfg.Hooks.OnLLMFailure != nil,
+		OnMaxIterationsExceeded: cfg.Hooks.OnMaxIterationsExceeded != nil,
+		FallbackLLMClient:       cfg.FallbackLLMClient,
+	}
+	if cfg.CircuitBreaker != nil {
+		shot.HasCircuitBreaker = true
+		shot.MaxConsecutiveSameArgs = cfg.CircuitBreaker.MaxConsecutiveSameArgs
+		shot.PatternWindowSize = cfg.CircuitBreaker.PatternWindowSize
+		shot.ResetAfterNs = cfg.CircuitBreaker.ResetAfter.Nanoseconds()
+	}
+	if !shot.OnLLMFailure && !shot.OnMaxIterationsExceeded && shot.FallbackLLMClient == "" && !shot.HasCircuitBreaker {
+		return ""
+	}
+	b, err := json.Marshal(shot)
 	if err != nil {
 		return ""
 	}

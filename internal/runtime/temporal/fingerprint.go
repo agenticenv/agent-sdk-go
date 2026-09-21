@@ -59,6 +59,16 @@ type AgentFingerprintPayload struct {
 	// Omitted when empty. Must match pkg/agent [hookGroupsFingerprint] on caller and worker.
 	HooksFingerprint string `json:"hooks_fingerprint,omitempty"`
 
+	// NamedLLMFingerprint is the pkg/agent digest of WithNamedLLMClients names plus each
+	// client's model/provider. Omitted when empty. Must match pkg/agent [namedLLMClientsFingerprint]
+	// on caller and worker.
+	NamedLLMFingerprint string `json:"named_llm_fingerprint,omitempty"`
+
+	// ErrorControlFingerprint is the pkg/agent digest of ErrorControlConfig hook slots,
+	// FallbackLLMClient name, and circuit-breaker thresholds. Omitted when empty. Must match
+	// pkg/agent [errorControlFingerprint] on caller and worker.
+	ErrorControlFingerprint string `json:"error_control_fingerprint,omitempty"`
+
 	Sampling *sdkruntime.LLMSampling `json:"sampling,omitempty"`
 
 	SessionSize int `json:"session_size"`
@@ -77,8 +87,8 @@ type AgentFingerprintPayload struct {
 }
 
 // ComputeAgentFingerprint returns a stable SHA-256 hex digest of the payload (identity, prompts, tools,
-// sampling, limits, policy, optional MCP, A2A, and observability wiring). Use the same digests
-// from pkg/agent on both the process that issues runs and the worker process.
+// sampling, limits, policy, optional MCP, A2A, observability, hooks, named LLM clients, and error-control wiring). Use the same
+// digests from pkg/agent on both the process that issues runs and the worker process.
 func ComputeAgentFingerprint(m AgentFingerprintPayload) string {
 	m.Version = agentFingerprintVersion
 	if m.ToolNames != nil {
@@ -107,6 +117,8 @@ func BuildAgentFingerprintPayload(
 	agentToolExecutionMode types.AgentToolExecutionMode,
 	retrieverFingerprint string,
 	hooksFingerprint string,
+	namedLLMFingerprint string,
+	errorControlFingerprint string,
 ) AgentFingerprintPayload {
 	names := append([]string(nil), toolNames...)
 	sort.Strings(names)
@@ -131,6 +143,8 @@ func BuildAgentFingerprintPayload(
 		AgentToolExecutionMode:   string(toolExecutionMode),
 		RetrieverFingerprint:     retrieverFingerprint,
 		HooksFingerprint:         hooksFingerprint,
+		NamedLLMFingerprint:      namedLLMFingerprint,
+		ErrorControlFingerprint:  errorControlFingerprint,
 		Sampling:                 cloneLLMSampling(sampling),
 		SessionSize:              sessionSize,
 		MaxIterations:            limits.MaxIterations,
@@ -219,6 +233,8 @@ func computeAgentFingerprintFromRuntime(rt *TemporalRuntime, tools []interfaces.
 		rt.ToolExecutionMode,
 		rt.retrieverFingerprint,
 		rt.hooksFingerprint,
+		rt.namedLLMFingerprint,
+		rt.errorControlFingerprint,
 	)
 	return ComputeAgentFingerprint(mat)
 }

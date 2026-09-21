@@ -96,6 +96,14 @@ type AgentWorkflowState struct {
 	// BudgetWatermarkTokens and BudgetWatermarkCostUSD carry the approval watermark.
 	BudgetWatermarkTokens  int64   `json:"budget_watermark_tokens,omitempty"`
 	BudgetWatermarkCostUSD float64 `json:"budget_watermark_cost_usd,omitempty"`
+	// UseFallbackLLM is true after OnLLMFailure selected FallbackModel; later LLM activities use the named client.
+	UseFallbackLLM bool `json:"use_fallback_llm,omitempty"`
+	// IterationsExtended is true after one OnMaxIterationsExceeded grant (hard cap).
+	IterationsExtended bool `json:"iterations_extended,omitempty"`
+	// ExtraIterations is the granted extra rounds so ContinueAsNew restores the raised bound.
+	ExtraIterations int `json:"extra_iterations,omitempty"`
+	// CircuitBreaker is the per-tool same-args / A-B-A-B tracker across ContinueAsNew.
+	CircuitBreaker *base.CircuitBreakerState `json:"circuit_breaker,omitempty"`
 }
 
 // AgentRetrieverInput is the input to AgentRetrieverActivity.
@@ -157,14 +165,16 @@ type AgentLLMInput struct {
 	RetrieverContext string               `json:"retriever_context,omitempty"`
 	RunID            string               `json:"run_id,omitempty"`
 	Iteration        int                  `json:"iteration,omitempty"`
+	UseFallback      bool                 `json:"use_fallback,omitempty"`
 }
 
 // AgentLLMResult is the return value of AgentLLMActivity. Workflow uses it to decide: return content or execute tools.
 type AgentLLMResult struct {
-	Content    string               `json:"content"`
-	ToolCalls  []ToolCallRequest    `json:"tool_calls"`
-	Usage      *interfaces.LLMUsage `json:"usage,omitempty"`
-	RetryCount int32                `json:"retry_count,omitempty"` // number of Temporal retries before this successful attempt (Attempt - 1)
+	Content      string               `json:"content"`
+	ToolCalls    []ToolCallRequest    `json:"tool_calls"`
+	Usage        *interfaces.LLMUsage `json:"usage,omitempty"`
+	RetryCount   int32                `json:"retry_count,omitempty"` // number of Temporal retries before this successful attempt (Attempt - 1)
+	UsedFallback bool                 `json:"used_fallback,omitempty"`
 }
 
 // baseLLMResultToActivity converts a [base.LLMResult] (no JSON tags) to an [AgentLLMResult]
@@ -183,12 +193,15 @@ func baseLLMResultToActivity(r *base.LLMResult) *AgentLLMResult {
 			ToolKind:        tc.ToolKind,
 			Args:            tc.Args,
 			NeedsApproval:   tc.NeedsApproval,
+			Unknown:         tc.Unknown,
 		})
 	}
 	return out
 }
 
 // ToolCallRequest is a tool invocation with approval flag. NeedsApproval is set by AgentLLMActivity.
+// Unknown is true when the LLM named a tool that is not registered; the workflow continues
+// with a synthetic tool-role message and does not authorize or execute the call.
 type ToolCallRequest struct {
 	ToolCallID      string         `json:"tool_call_id"` // from LLM; used to match tool results
 	ToolName        string         `json:"tool_name"`
@@ -196,6 +209,7 @@ type ToolCallRequest struct {
 	ToolKind        types.ToolKind `json:"tool_kind"`
 	Args            map[string]any `json:"args"`
 	NeedsApproval   bool           `json:"needs_approval"`
+	Unknown         bool           `json:"unknown,omitempty"`
 }
 
 // QueryIsApprovalPending is the workflow query name that reports whether a ToolCallID still has a
@@ -231,6 +245,8 @@ type agentToolCallInput struct {
 	executeActivityID   string // set once in newAgentToolCallInput
 	policies            agentrt.ExecutionPolicies
 	pendingApprovals    map[string]*pendingApproval // shared with AgentWorkflow; nil when not tracking
+	circuitBreaker      *base.CircuitBreaker
+	circuitNow          time.Time
 }
 
 // agentToolCallOutput is the output of executeAgentToolCall.
@@ -333,7 +349,8 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 
 	agentName := rt.AgentSpec.Name
 	model := rt.AgentConfig.LLM.Client.GetModel()
-	maxIter := rt.AgentConfig.Limits.MaxIterations
+	originalMaxIter := rt.AgentConfig.Limits.MaxIterations
+	maxIter := originalMaxIter
 	policies := rt.executionPolicies()
 
 	// isRoot indicates this is the top-level workflow that owns the WorkflowStream.
@@ -468,6 +485,17 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 		input.State.Telemetry = base.NewAgentTelemetry(workflow.Now(ctx))
 	}
 	telemetry := input.State.Telemetry
+	useFallback := input.State.UseFallbackLLM
+	iterationsExtended := input.State.IterationsExtended
+	if input.State.ExtraIterations > 0 {
+		maxIter += input.State.ExtraIterations
+	}
+	var circuitBreaker *base.CircuitBreaker
+	if input.State.CircuitBreaker != nil {
+		circuitBreaker = base.NewCircuitBreakerFromState(rt.AgentConfig.ErrorControl, *input.State.CircuitBreaker)
+	} else {
+		circuitBreaker = base.NewCircuitBreaker(rt.AgentConfig.ErrorControl)
+	}
 
 	llmUsage := input.State.LLMUsage
 
@@ -542,6 +570,7 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 	lastContent := ""
 	var llmResult AgentLLMResult
 	for iter := input.State.Iteration; iter < maxIter; iter++ {
+		circuitNow := workflow.Now(ctx)
 
 		messageID := uuid.New().String()
 
@@ -556,6 +585,7 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 			StreamWorkflowID: streamWorkflowID,
 			MemoryContext:    memoryContext,
 			RetrieverContext: retrieverContext,
+			UseFallback:      useFallback,
 		}
 
 		if useStreaming {
@@ -568,6 +598,9 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 				return nil, err
 			}
 			return nil, err
+		}
+		if llmResult.UsedFallback {
+			useFallback = true
 		}
 
 		telemetry.Run.TotalLLMCalls++
@@ -589,35 +622,70 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 		}
 
 		if iter == maxIter-1 {
-			logger.Info("workflow: max iterations reached, final LLM round without tools", "scope", "workflow", "iteration", iter)
-			// Fresh messageID so the final SkipTools round does not reuse the tool-calls
-			// round's ID (stream consumers / staleMessageIDs treat START after END as a new attempt).
-			llmInput.MessageID = uuid.New().String()
-			llmInput.SkipTools = true
-			if useStreaming {
-				err = workflow.ExecuteActivity(streamActCtx, rt.AgentLLMStreamActivity, llmInput).Get(streamActCtx, &llmResult)
-			} else {
-				err = workflow.ExecuteActivity(llmActCtx, rt.AgentLLMActivity, llmInput).Get(llmActCtx, &llmResult)
+			extend := false
+			extra := 0
+			if rt.hasMaxIterationsHook() {
+				names := make([]string, len(llmResult.ToolCalls))
+				for i, tc := range llmResult.ToolCalls {
+					names[i] = tc.ToolName
+				}
+				decCtx := workflow.WithActivityOptions(ctx, execActivityOptions(
+					agentrt.ExecutionPolicy{MaxAttempts: 1, Timeout: policies.LLM.Timeout},
+					fmt.Sprintf("AgentMaxIterationsDecisionActivity_%s_%d", activityIDSuffix, iter),
+					false))
+				var dec types.ErrorControlDecision
+				if decErr := workflow.ExecuteActivity(decCtx, rt.AgentMaxIterationsDecisionActivity, AgentMaxIterationsDecisionInput{
+					IterationCount:  iter + 1,
+					MaxIterations:   originalMaxIter,
+					LastAction:      base.LastToolAction(names),
+					AlreadyExtended: iterationsExtended,
+				}).Get(decCtx, &dec); decErr != nil {
+					if temporal.IsCanceledError(decErr) {
+						return nil, decErr
+					}
+					return nil, decErr
+				}
+				if dec.Action == types.ErrorControlExtendIterations {
+					extend = true
+					extra = dec.ExtraIterations
+				}
 			}
-			if err != nil {
-				if temporal.IsCanceledError(err) {
+			if extend {
+				maxIter += extra
+				iterationsExtended = true
+				logger.Info("workflow: max iterations extended", "scope", "workflow", "extra", extra, "maxIterations", maxIter)
+			} else {
+				logger.Info("workflow: max iterations reached, final LLM round without tools", "scope", "workflow", "iteration", iter)
+				// Fresh messageID so the final SkipTools round does not reuse the tool-calls
+				// round's ID (stream consumers / staleMessageIDs treat START after END as a new attempt).
+				llmInput.MessageID = uuid.New().String()
+				llmInput.SkipTools = true
+				llmInput.UseFallback = useFallback
+				if useStreaming {
+					err = workflow.ExecuteActivity(streamActCtx, rt.AgentLLMStreamActivity, llmInput).Get(streamActCtx, &llmResult)
+				} else {
+					err = workflow.ExecuteActivity(llmActCtx, rt.AgentLLMActivity, llmInput).Get(llmActCtx, &llmResult)
+				}
+				if err != nil {
+					if temporal.IsCanceledError(err) {
+						return nil, err
+					}
 					return nil, err
 				}
-				return nil, err
-			}
-			llmUsage = base.MergeLLMUsage(llmUsage, llmResult.Usage)
-			if enforceBudget {
-				if budgetErr := budgetTracker.Add(llmResult.Usage); budgetErr != nil {
-					if stopErr := rt.handleBudgetExceeded(ctx, input, budgetTracker, telemetry, budgetErr.Error(), activityIDSuffix, streamWorkflowID, emitAgentEvent); stopErr != nil {
-						return &types.AgentRunResult{LLMUsage: llmUsage, Telemetry: telemetry}, stopErr
+				llmUsage = base.MergeLLMUsage(llmUsage, llmResult.Usage)
+				if enforceBudget {
+					if budgetErr := budgetTracker.Add(llmResult.Usage); budgetErr != nil {
+						if stopErr := rt.handleBudgetExceeded(ctx, input, budgetTracker, telemetry, budgetErr.Error(), activityIDSuffix, streamWorkflowID, emitAgentEvent); stopErr != nil {
+							return &types.AgentRunResult{LLMUsage: llmUsage, Telemetry: telemetry}, stopErr
+						}
 					}
 				}
+				messages = append(messages, interfaces.Message{Role: interfaces.MessageRoleAssistant, Content: llmResult.Content})
+				lastContent = llmResult.Content
+				telemetry.Run.TotalLLMCalls++
+				telemetry.Run.FinishReason = types.FinishReasonMaxIterations
+				break
 			}
-			messages = append(messages, interfaces.Message{Role: interfaces.MessageRoleAssistant, Content: llmResult.Content})
-			lastContent = llmResult.Content
-			telemetry.Run.TotalLLMCalls++
-			telemetry.Run.FinishReason = types.FinishReasonMaxIterations
-			break
 		}
 
 		// Accumulate assistant message for next iteration
@@ -671,6 +739,8 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 						slot := strconv.Itoa(i)
 						parallelInput := rt.newAgentToolCallInput(gCtx, input, activityIDSuffix, messageID, iter, streamWorkflowID, emitAgentEvent, slot)
 						parallelInput.pendingApprovals = pendingApprovals
+						parallelInput.circuitBreaker = circuitBreaker
+						parallelInput.circuitNow = circuitNow
 						toolOutput, runErr := rt.executeAgentToolCall(parallelInput, tc)
 						if runErr != nil {
 							gLog.Debug("workflow: parallel tool branch finished with error",
@@ -735,6 +805,8 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 					"toolCount", len(llmResult.ToolCalls))
 				toolInput := rt.newAgentToolCallInput(ctx, input, activityIDSuffix, messageID, iter, streamWorkflowID, emitAgentEvent, "")
 				toolInput.pendingApprovals = pendingApprovals
+				toolInput.circuitBreaker = circuitBreaker
+				toolInput.circuitNow = circuitNow
 				toolResults = make([]agentToolResult, len(llmResult.ToolCalls))
 				for i, tc := range llmResult.ToolCalls {
 					logger.Debug("workflow: sequential tool executing",
@@ -780,9 +852,10 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 
 		for i, result := range toolResults {
 			tc := llmResult.ToolCalls[i]
-			if tc.ToolKind.CountsTowardToolTelemetry() {
+			if !tc.Unknown && tc.ToolKind.CountsTowardToolTelemetry() {
 				telemetry.Tools.Record(tc.ToolName, result.failed)
 			}
+			base.ApplyToolCircuitResult(circuitBreaker, tc.Unknown, tc.ToolKind, tc.ToolName, tc.Args, result.failed, circuitNow)
 			if tc.ToolKind == types.ToolKindRetriever {
 				telemetry.Storage.TotalRetrieverSearches++
 				telemetry.Storage.AgenticSearches++
@@ -859,6 +932,10 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 				bt, bc = budgetTracker.Totals()
 				bwt, bwc = budgetTracker.WatermarkTotals()
 			}
+			extraGranted := 0
+			if originalMaxIter > 0 && maxIter > originalMaxIter {
+				extraGranted = maxIter - originalMaxIter
+			}
 			input.State = &AgentWorkflowState{
 				Iteration:              iter + 1,
 				Messages:               messages,
@@ -868,6 +945,10 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 				BudgetCostUSD:          bc,
 				BudgetWatermarkTokens:  bwt,
 				BudgetWatermarkCostUSD: bwc,
+				UseFallbackLLM:         useFallback,
+				IterationsExtended:     iterationsExtended,
+				ExtraIterations:        extraGranted,
+				CircuitBreaker:         circuitBreakerStatePtr(circuitBreaker),
 			}
 			return nil, workflow.NewContinueAsNewError(ctx, rt.AgentWorkflow, input)
 		}
@@ -997,6 +1078,41 @@ func (rt *TemporalRuntime) executeAgentToolCall(input agentToolCallInput, tc Too
 				return nil, emitErr
 			}
 		}
+	}
+
+	if tc.Unknown {
+		logger.Warn("workflow: unknown tool, continuing",
+			"scope", "workflow", "toolName", tc.ToolName, "toolCallID", tc.ToolCallID)
+		content := base.UnknownToolMessage(tc.ToolName)
+		if emitErr := emitToolEndThenResult(tc.ToolCallID, content); emitErr != nil {
+			return nil, emitErr
+		}
+		return &agentToolCallOutput{
+			msg: interfaces.Message{
+				Role:       interfaces.MessageRoleTool,
+				Content:    content,
+				ToolName:   tc.ToolName,
+				ToolCallID: tc.ToolCallID,
+			},
+		}, nil
+	}
+
+	if input.circuitBreaker != nil && base.CountsTowardCircuitBreaker(tc.Unknown, tc.ToolKind) &&
+		input.circuitBreaker.IsTripped(tc.ToolName, input.circuitNow) {
+		logger.Warn("workflow: circuit breaker skipped tool",
+			"scope", "workflow", "toolName", tc.ToolName, "toolCallID", tc.ToolCallID)
+		content := base.CircuitBreakerSkippedMessage(tc.ToolName)
+		if emitErr := emitToolEndThenResult(tc.ToolCallID, content); emitErr != nil {
+			return nil, emitErr
+		}
+		return &agentToolCallOutput{
+			msg: interfaces.Message{
+				Role:       interfaces.MessageRoleTool,
+				Content:    content,
+				ToolName:   tc.ToolName,
+				ToolCallID: tc.ToolCallID,
+			},
+		}, nil
 	}
 
 	var authResult AgentToolAuthorizeResult
@@ -1250,15 +1366,7 @@ func (rt *TemporalRuntime) AgentLLMStreamActivity(ctx context.Context, input Age
 		Emit:             emit,
 	}
 
-	result, err := rt.ExecuteLLMStream(ctx, executeLLMInput)
-	if err != nil {
-		return nil, err
-	}
-	out := baseLLMResultToActivity(result)
-	if attempt := activity.GetInfo(ctx).Attempt; attempt > 1 {
-		out.RetryCount = attempt - 1
-	}
-	return out, nil
+	return rt.runLLMActivity(ctx, input, executeLLMInput, true)
 }
 
 // AgentRetrieverActivity runs all configured retrievers in parallel using input.UserPrompt as the query,
@@ -1383,15 +1491,96 @@ func (rt *TemporalRuntime) AgentLLMActivity(ctx context.Context, input AgentLLMI
 		Emit:             emit,
 	}
 
-	result, err := rt.ExecuteLLM(ctx, executeLLMInput)
+	return rt.runLLMActivity(ctx, input, executeLLMInput, false)
+}
+
+// AgentMaxIterationsDecisionInput is the input to AgentMaxIterationsDecisionActivity.
+type AgentMaxIterationsDecisionInput struct {
+	IterationCount  int    `json:"iteration_count"`
+	MaxIterations   int    `json:"max_iterations"`
+	LastAction      string `json:"last_action,omitempty"`
+	AlreadyExtended bool   `json:"already_extended,omitempty"`
+}
+
+// AgentMaxIterationsDecisionActivity runs OnMaxIterationsExceeded after policy retries (workflow-safe).
+func (rt *TemporalRuntime) AgentMaxIterationsDecisionActivity(ctx context.Context, input AgentMaxIterationsDecisionInput) (types.ErrorControlDecision, error) {
+	actLog := newActivityLogger(activity.GetLogger(ctx))
+	return rt.DecideMaxIterations(ctx, types.MaxIterationsInfo{
+		IterationCount: input.IterationCount,
+		MaxIterations:  input.MaxIterations,
+		LastAction:     input.LastAction,
+	}, input.AlreadyExtended, actLog), nil
+}
+
+func (rt *TemporalRuntime) runLLMActivity(ctx context.Context, input AgentLLMInput, executeLLMInput base.ExecuteLLMInput, stream bool) (*AgentLLMResult, error) {
+	client, err := rt.ResolveLLMClient(input.UseFallback)
 	if err != nil {
 		return nil, err
 	}
+	executeLLMInput.Client = client
+
+	var result *base.LLMResult
+	if stream {
+		result, err = rt.ExecuteLLMStream(ctx, executeLLMInput)
+	} else {
+		result, err = rt.ExecuteLLM(ctx, executeLLMInput)
+	}
+	if err == nil {
+		return rt.finishLLMActivityResult(ctx, result, input.UseFallback), nil
+	}
+	if input.UseFallback || !rt.llmActivityLastAttempt(ctx) {
+		return nil, err
+	}
+	dec := rt.DecideLLMFailure(ctx, types.LLMFailureInfo{
+		Attempt: int(activity.GetInfo(ctx).Attempt),
+		Err:     err,
+	}, executeLLMInput.Logger)
+	if dec.Action != types.ErrorControlFallbackModel {
+		return nil, err
+	}
+	fb, fbErr := rt.ResolveLLMClient(true)
+	if fbErr != nil {
+		return nil, err
+	}
+	executeLLMInput.Client = fb
+	if stream {
+		result, err = rt.ExecuteLLMStream(ctx, executeLLMInput)
+	} else {
+		result, err = rt.ExecuteLLM(ctx, executeLLMInput)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return rt.finishLLMActivityResult(ctx, result, true), nil
+}
+
+func (rt *TemporalRuntime) finishLLMActivityResult(ctx context.Context, result *base.LLMResult, usedFallback bool) *AgentLLMResult {
 	out := baseLLMResultToActivity(result)
+	out.UsedFallback = usedFallback
 	if attempt := activity.GetInfo(ctx).Attempt; attempt > 1 {
 		out.RetryCount = attempt - 1
 	}
-	return out, nil
+	return out
+}
+
+func (rt *TemporalRuntime) llmActivityLastAttempt(ctx context.Context) bool {
+	max := rt.executionPolicies().LLM.MaxAttempts
+	if max < 1 {
+		max = 1
+	}
+	return int(activity.GetInfo(ctx).Attempt) >= max
+}
+
+func (rt *TemporalRuntime) hasMaxIterationsHook() bool {
+	return rt.AgentConfig.ErrorControl != nil && rt.AgentConfig.ErrorControl.Hooks.OnMaxIterationsExceeded != nil
+}
+
+func circuitBreakerStatePtr(cb *base.CircuitBreaker) *base.CircuitBreakerState {
+	if cb == nil {
+		return nil
+	}
+	st := cb.State()
+	return &st
 }
 
 // AgentWorkflowCleanupActivity cancels leftover pending approval activities by ID.

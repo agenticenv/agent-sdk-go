@@ -20,6 +20,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -147,10 +148,18 @@ func main() {
 	// Step 3: GetAgentStream + Events(WithOffset).
 	agentStream, err = a.GetAgentStream(reconnectCtx, runID)
 	if err != nil {
+		if errors.Is(err, agent.ErrRunAlreadyCompleted) {
+			fmt.Println("run completed before reconnect; stream events are no longer available")
+			return
+		}
 		log.Fatalf("GetAgentStream failed: %v", err)
 	}
 	resumeCh, err := agentStream.Events(reconnectCtx, agent.WithOffset(lastOffset))
 	if err != nil {
+		if errors.Is(err, agent.ErrRunAlreadyCompleted) {
+			fmt.Println("run completed before reconnect; stream events are no longer available")
+			return
+		}
 		log.Fatalf("stream events: %v", err)
 	}
 

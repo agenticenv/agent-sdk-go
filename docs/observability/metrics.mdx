@@ -86,6 +86,8 @@ Emitted per LLM call, tool execution, retriever search, and memory operation on 
 | `agent.tool.call.started` | counter | Tool execute started |
 | `agent.tool.call.completed` | counter | Tool execute succeeded |
 | `agent.tool.call.failed` | counter | Tool execute failed |
+| `agent.tool.call.unknown` | counter | LLM named a tool that is not registered; run continues. In-process and Restate only — Temporal logs, no counter |
+| `agent.tool.call.circuit_open` | counter | Circuit breaker skipped the tool; run continues. In-process and Restate only — Temporal logs, no counter |
 | `agent.tool.latency_ms` | histogram | Tool wall-clock time in ms |
 
 ### Retriever

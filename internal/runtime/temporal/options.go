@@ -114,6 +114,18 @@ func WithHooksFingerprint(fp string) Option {
 	return func(rt *TemporalRuntime) { rt.hooksFingerprint = fp }
 }
 
+// WithNamedLLMFingerprint sets the named LLM clients digest used with [ComputeAgentFingerprint].
+// Must match pkg/agent [namedLLMClientsFingerprint] for the same WithNamedLLMClients wiring.
+func WithNamedLLMFingerprint(fp string) Option {
+	return func(rt *TemporalRuntime) { rt.namedLLMFingerprint = fp }
+}
+
+// WithErrorControlFingerprint sets the error-control digest used with [ComputeAgentFingerprint].
+// Must match pkg/agent [errorControlFingerprint] for the same WithErrorControl wiring.
+func WithErrorControlFingerprint(fp string) Option {
+	return func(rt *TemporalRuntime) { rt.errorControlFingerprint = fp }
+}
+
 // WithToolsResolver sets the callback that resolves tools at activity time on the worker runtime.
 func WithToolsResolver(fn ToolsResolver) Option {
 	return func(rt *TemporalRuntime) { rt.resolveToolsFn = fn }

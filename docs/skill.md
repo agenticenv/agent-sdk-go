@@ -21,6 +21,7 @@ Full documentation index: [llms.txt](https://docs.agenticenv.ai/llms.txt)
 - Add RAG retrievers (agentic, prefetch, hybrid modes)
 - Require human approval for tools and sub-agent delegation
 - Attach middleware hooks at LLM, tool, retrieval, and memory lifecycle points
+- Configure error control: fallback LLM after classified failure, one extra iteration grant, per-tool circuit breaker
 - Export OpenTelemetry traces, metrics, and logs
 - Execute in-process (durable by default via durable-go, no config needed), or on Temporal / Restate for distributed, horizontally-scaled execution
 
@@ -43,6 +44,13 @@ Example: [Simple Agent](https://docs.agenticenv.ai/examples/simple-agent.md)
 3. Set `WithToolApprovalPolicy(AutoToolApprovalPolicy())` for trusted automation
 4. Run: [Tools example](https://docs.agenticenv.ai/examples/tools.md)
 
+### Add error control
+
+1. Read [Error Control](https://docs.agenticenv.ai/features/error-control.md)
+2. Register extra models with `WithNamedLLMClients` and set `WithErrorControl` (hooks + optional `CircuitBreaker`)
+3. Branch `OnLLMFailure` with `errors.As(*interfaces.LLMError)` — do not parse `err.Error()`
+4. Example: [Error Control](https://docs.agenticenv.ai/examples/error-control.md)
+
 ### Stream to a UI
 
 1. Read [Streaming](https://docs.agenticenv.ai/getting-started/streaming.md)
@@ -63,7 +71,7 @@ Example: [Simple Agent](https://docs.agenticenv.ai/examples/simple-agent.md)
 1. Read [Temporal runtime](https://docs.agenticenv.ai/runtimes/temporal.md)
 2. Import `pkg/agent/runtime/temporal` and add `temporal.WithTemporalConfig` or `temporal.WithTemporalClient` — never both
 3. For production, split client and worker — [Distributed execution](https://docs.agenticenv.ai/advanced/distributed-execution.md)
-4. Align agent and worker configuration (fingerprint) — same name, LLM, tools, hooks group names, approval policy
+4. Align agent and worker configuration (fingerprint) — same name, LLM, tools, hooks group names, named LLM clients, error-control slots/fallback/breaker, approval policy
 5. Examples: [Temporal Client](https://docs.agenticenv.ai/examples/temporal-client.md) · [Agent Worker](https://docs.agenticenv.ai/examples/agent-worker.md) · [Durable Agent (Temporal)](https://docs.agenticenv.ai/examples/durable-agent.md) · [Durable Agent (Restate)](https://docs.agenticenv.ai/examples/durable-agent-restate.md)
 
 ### Switch to Restate (distributed execution)
@@ -111,6 +119,7 @@ Crash reconnect works on every runtime, including local (durable by default). Th
 - Default tool approval policy is **require-all** — set `AutoToolApprovalPolicy()` for unattended runs
 - `DisableLocalWorker()` works with streaming and approvals with no extra configuration
 - Hook group **names** participate in the Temporal agent fingerprint — register the same names on client and worker
+- Error-control fingerprint is hook **slots** (not bodies), `FallbackLLMClient` name, named-client model/provider, and breaker thresholds — see [Error Control](https://docs.agenticenv.ai/features/error-control.md)
 
 ## Documentation map
 
@@ -118,7 +127,7 @@ Crash reconnect works on every runtime, including local (durable by default). Th
 |---|---|
 | Overview | [Introduction](https://docs.agenticenv.ai/introduction.md) |
 | Getting started | [Quickstart](https://docs.agenticenv.ai/getting-started/quickstart.md) |
-| Features | [Tools](https://docs.agenticenv.ai/features/tools.md) |
+| Features | [Tools](https://docs.agenticenv.ai/features/tools.md) · [Error Control](https://docs.agenticenv.ai/features/error-control.md) |
 | Advanced | [Distributed execution](https://docs.agenticenv.ai/advanced/distributed-execution.md) |
 | Observability | [Telemetry](https://docs.agenticenv.ai/observability/telemetry.md) |
 | Examples | [Running Examples](https://docs.agenticenv.ai/examples/running-examples.md) |

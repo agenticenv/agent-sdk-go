@@ -45,6 +45,8 @@ type ExecuteLLMInput struct {
 	RetrieverContext string
 	Tools            []interfaces.Tool
 	Emit             func(events.AgentEvent)
+	// Client overrides AgentConfig.LLM.Client for this call (per-run fallback). Nil = primary.
+	Client interfaces.LLMClient
 }
 
 // BuildLLMRequest constructs an LLMRequest from the given messages and options.
@@ -128,8 +130,9 @@ func (rt *Runtime) FetchConversationMessages(ctx context.Context, log logger.Log
 }
 
 // llmResponseToResult converts an LLMResponse into an LLMResult, resolving tool metadata
-// (display name, approval flag) from the registered tools list.
-func (rt *Runtime) llmResponseToResult(resp *interfaces.LLMResponse, tools []interfaces.Tool) (*LLMResult, error) {
+// (display name, approval flag) from the registered tools list. Unknown tool names stay
+// on the result as Unknown calls; the run continues after a warn log and metric.
+func (rt *Runtime) llmResponseToResult(ctx context.Context, log logger.Logger, resp *interfaces.LLMResponse, tools []interfaces.Tool) *LLMResult {
 	result := &LLMResult{Content: resp.Content, Usage: CloneLLMUsage(resp.Usage)}
 	for _, tc := range resp.ToolCalls {
 		if tc == nil {
@@ -137,7 +140,15 @@ func (rt *Runtime) llmResponseToResult(resp *interfaces.LLMResponse, tools []int
 		}
 		tool, ok := FindToolByName(tools, tc.ToolName)
 		if !ok {
-			return nil, fmt.Errorf("unknown tool: %s", tc.ToolName)
+			rt.NoteUnknownTool(ctx, log, tc.ToolName)
+			result.ToolCalls = append(result.ToolCalls, ToolCallRequest{
+				ToolCallID:      tc.ToolCallID,
+				ToolName:        tc.ToolName,
+				ToolDisplayName: tc.ToolName,
+				Args:            tc.Args,
+				Unknown:         true,
+			})
+			continue
 		}
 		displayName := tool.DisplayName()
 		if displayName == "" {
@@ -152,7 +163,17 @@ func (rt *Runtime) llmResponseToResult(resp *interfaces.LLMResponse, tools []int
 			NeedsApproval:   rt.RequiresApproval(tool),
 		})
 	}
-	return result, nil
+	return result
+}
+
+// NoteUnknownTool logs a warning and increments [types.MetricToolCallUnknown].
+func (rt *Runtime) NoteUnknownTool(ctx context.Context, log logger.Logger, toolName string) {
+	if log != nil {
+		log.Warn(ctx, "runtime: unknown tool", slog.String("scope", "runtime"), slog.String("tool", toolName))
+	}
+	if rt.Metrics != nil {
+		rt.Metrics.IncrementCounter(ctx, types.MetricToolCallUnknown, interfaces.Attribute{Key: types.MetricAttrTool, Value: toolName})
+	}
 }
 
 // emitEvent calls fn safely; a nil fn is a no-op.
@@ -171,7 +192,10 @@ func (rt *Runtime) ExecuteLLM(ctx context.Context, input ExecuteLLMInput) (*LLMR
 		return nil, err
 	}
 
-	llmClient := rt.AgentConfig.LLM.Client
+	llmClient := input.Client
+	if llmClient == nil {
+		llmClient = rt.AgentConfig.LLM.Client
+	}
 	model := llmClient.GetModel()
 	provider := string(llmClient.GetProvider())
 	modelAttr := interfaces.Attribute{Key: types.MetricAttrModel, Value: model}
@@ -212,10 +236,7 @@ func (rt *Runtime) ExecuteLLM(ctx context.Context, input ExecuteLLMInput) (*LLMR
 
 	input.Logger.Debug(ctx, "runtime: LLM generate completed", slog.String("scope", "runtime"), slog.Int("messageCount", len(input.Messages)))
 
-	result, err := rt.llmResponseToResult(resp, input.Tools)
-	if err != nil {
-		return nil, err
-	}
+	result := rt.llmResponseToResult(ctx, input.Logger, resp, input.Tools)
 
 	emitEvent(input.Emit, events.NewAgentTextMessageStartEvent(input.MessageID, string(interfaces.MessageRoleAssistant)))
 	emitEvent(input.Emit, events.NewAgentTextMessageContentEvent(input.MessageID, result.Content))
@@ -233,7 +254,10 @@ func (rt *Runtime) ExecuteLLMStream(ctx context.Context, input ExecuteLLMInput) 
 		return nil, err
 	}
 
-	llmClient := rt.AgentConfig.LLM.Client
+	llmClient := input.Client
+	if llmClient == nil {
+		llmClient = rt.AgentConfig.LLM.Client
+	}
 	model := llmClient.GetModel()
 	provider := string(llmClient.GetProvider())
 	modelAttr := interfaces.Attribute{Key: types.MetricAttrModel, Value: model}
@@ -296,13 +320,7 @@ func (rt *Runtime) ExecuteLLMStream(ctx context.Context, input ExecuteLLMInput) 
 			rt.Metrics.RecordHistogram(ctx, types.MetricLLMLatencyMs, llmLatency, modelAttr, providerAttr)
 			return nil, err
 		}
-		result, err := rt.llmResponseToResult(resp, input.Tools)
-		if err != nil {
-			sp.RecordError(err)
-			rt.Metrics.IncrementCounter(ctx, types.MetricLLMCallFailed, modelAttr, providerAttr)
-			rt.Metrics.RecordHistogram(ctx, types.MetricLLMLatencyMs, llmLatency, modelAttr, providerAttr)
-			return nil, err
-		}
+		result := rt.llmResponseToResult(ctx, input.Logger, resp, input.Tools)
 		rt.Metrics.RecordHistogram(ctx, types.MetricLLMLatencyMs, llmLatency, modelAttr, providerAttr)
 		rt.Metrics.IncrementCounter(ctx, types.MetricLLMCallCompleted, modelAttr, providerAttr)
 		if resp.Usage != nil {
@@ -388,13 +406,7 @@ func (rt *Runtime) ExecuteLLMStream(ctx context.Context, input ExecuteLLMInput) 
 		return nil, err
 	}
 
-	result, err := rt.llmResponseToResult(resp, input.Tools)
-	if err != nil {
-		sp.RecordError(err)
-		rt.Metrics.IncrementCounter(ctx, types.MetricLLMCallFailed, modelAttr, providerAttr)
-		rt.Metrics.RecordHistogram(ctx, types.MetricLLMLatencyMs, llmLatency, modelAttr, providerAttr)
-		return nil, err
-	}
+	result := rt.llmResponseToResult(ctx, input.Logger, resp, input.Tools)
 
 	rt.Metrics.RecordHistogram(ctx, types.MetricLLMLatencyMs, llmLatency, modelAttr, providerAttr)
 	rt.Metrics.IncrementCounter(ctx, types.MetricLLMCallCompleted, modelAttr, providerAttr)
@@ -429,8 +441,8 @@ func (rt *Runtime) executeTool(ctx context.Context, input ExecuteToolInput) (str
 
 	tool, ok := FindToolByName(input.Tools, toolName)
 	if !ok {
-		log.Warn(ctx, "runtime: unknown tool", slog.String("scope", "runtime"), slog.String("tool", toolName))
-		return "", fmt.Errorf("unknown tool: %s", toolName)
+		rt.NoteUnknownTool(ctx, log, toolName)
+		return UnknownToolMessage(toolName), nil
 	}
 
 	kind := types.KindOf(tool)

@@ -175,7 +175,7 @@ type AgentSpec struct {
 	ResponseFormat *interfaces.ResponseFormat
 }
 
-// AgentConfig is static agent wiring on the runtime at construction: LLM client, tool approval policy, session, limits, retriever config, exec overrides, and hooks.
+// AgentConfig is static agent wiring on the runtime at construction: LLM client, tool approval policy, session, limits, retriever config, exec overrides, lifecycle hooks, and error-control hooks.
 type AgentConfig struct {
 	LLM                AgentLLM
 	ToolApprovalPolicy interfaces.AgentToolApprovalPolicy
@@ -185,6 +185,8 @@ type AgentConfig struct {
 	Limits             AgentLimits
 	ExecutionConfigs   ExecutionConfigs
 	Hooks              []hooks.HookGroup
+	NamedLLMClients    map[string]interfaces.LLMClient
+	ErrorControl       *types.ErrorControlConfig
 }
 
 // AgentMemory holds long-term memory configuration for recall and store.

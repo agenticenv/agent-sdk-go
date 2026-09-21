@@ -1,0 +1,155 @@
+---
+title: "Error Control"
+description: "LLM fallback, extra iterations, and a per-tool circuit breaker — after retries."
+---
+
+Use [`WithErrorControl`](/getting-started/configuration) when you want the agent to **keep going** after a failure instead of stopping the run:
+
+1. Swap to a cheaper or larger-window model after the primary LLM fails
+2. Give the same conversation a few more rounds when `MaxIterations` is hit
+3. Stop calling a tool that is stuck in a failure loop
+
+These callbacks run **after** [`ExecutionConfig`](/features/execution-config) retries. They are not lifecycle [`WithHooks`](/features/hooks) — those inspect or mutate a successful call.
+
+Zero config keeps today's defaults: LLM failure aborts the run, max iterations does one last no-tools LLM call. An unknown tool name **continues** the run (it is never executed).
+
+## Configure
+
+Register extra models with [`WithNamedLLMClients`](/getting-started/configuration), then point error control at a name:
+
+```go
+a, err := agent.NewAgent(
+    agent.WithLLMClient(primary),
+    agent.WithNamedLLMClients(map[string]interfaces.LLMClient{
+        "cheap": fallback,
+    }),
+    agent.WithErrorControl(agent.ErrorControlConfig{
+        FallbackLLMClient: "cheap",
+        Hooks: agent.AgentErrorHooks{
+            OnLLMFailure: func(ctx context.Context, info agent.LLMFailureInfo) agent.ErrorControlDecision {
+                var llmErr *interfaces.LLMError
+                if errors.As(info.Err, &llmErr) && llmErr.Reason == interfaces.LLMReasonRateLimit {
+                    return agent.ErrorControlDecision{Action: agent.ErrorControlFallbackModel}
+                }
+                return agent.ErrorControlDecision{Action: agent.ErrorControlAbort}
+            },
+            OnMaxIterationsExceeded: func(ctx context.Context, info agent.MaxIterationsInfo) agent.ErrorControlDecision {
+                return agent.ErrorControlDecision{
+                    Action:          agent.ErrorControlExtendIterations,
+                    ExtraIterations: 3,
+                }
+            },
+        },
+        CircuitBreaker: &agent.CircuitBreakerConfig{
+            MaxConsecutiveSameArgs: 3,
+            PatternWindowSize:      4,
+        },
+    }),
+)
+```
+
+`FallbackLLMClient` is a name in `WithNamedLLMClients`, not a second client on the config. `NewAgent` rejects an unknown name. If the hook asks for fallback and the name is empty or missing at run time, the run **aborts**.
+
+A nil hook field uses the default. An invalid action logs a warning and uses the default.
+
+| Control | Default | Other action |
+|---|---|---|
+| `OnLLMFailure` | Abort the run | **FallbackModel** — use `FallbackLLMClient` for the rest of the run |
+| `OnMaxIterationsExceeded` | One last LLM call with tools skipped | **ExtendIterations** — add N more rounds (once, hard-capped) |
+| Circuit breaker | Off | Skip that tool, warn, continue the run |
+
+Tool execute failures already skip-and-continue. Use the breaker when the same tool keeps failing.
+
+## Fallback after LLM failure
+
+Built-in providers wrap Generate / stream errors as [`interfaces.LLMError`](https://pkg.go.dev/github.com/agenticenv/agent-sdk-go/pkg/interfaces#LLMError). Branch with `errors.As` — do not parse `err.Error()`. Custom clients that do not wrap stay `unknown`.
+
+| Reason | Typical cause |
+|---|---|
+| `rate_limit` | HTTP 429, quota / "too many requests" |
+| `context_exceeded` | Context length / prompt too long |
+| `provider` | Other 4xx/5xx vendor failures |
+| `unknown` | Unwrapped custom clients, network text |
+
+Retries from `WithLLMExecutionConfig` run first. Then `OnLLMFailure` can abort or switch models for **the rest of that run**. The shared primary client is not mutated. Fallback uses the same [`WithLLMSampling`](/getting-started/configuration) and [`WithResponseFormat`](/getting-started/configuration) as the agent.
+
+On in-process and Restate, the fallback client is retried with the same LLM execution policy as the primary. On Temporal, fallback is one Generate/stream on the last LLM activity attempt. If that call fails, the activity fails and Temporal may retry from the primary (`OnLLMFailure` can run again).
+
+`context_exceeded` can FallbackModel (a model with a larger window) or Abort.
+
+## Extra iterations
+
+When the last iteration still returns tool calls, the default is one LLM call with tools skipped and `FinishReasonMaxIterations`.
+
+Return `ExtendIterations` with `ExtraIterations` to keep the same messages and continue. The SDK:
+
+- Grants this **once** per run
+- Requires `ExtraIterations` ≥ 1 and caps it at the original `MaxIterations` (unset max uses 10)
+- Ignores a second grant and does the final no-tools call
+
+This is not a human approval pause. For token or cost caps, use [Budget](/features/budget).
+
+## Circuit breaker
+
+Optional config — no callback. Tracks **tool name** (not MCP server). Only tools that count toward tool telemetry participate (native and MCP tools; not unknown, sub-agent, A2A, or retriever tools).
+
+| Field | Meaning |
+|---|---|
+| `MaxConsecutiveSameArgs` | Trip after N consecutive execute failures with the same JSON args. `0` disables |
+| `PatternWindowSize` | Sliding window for A-B-A-B. Must be **even and ≥ 4** (`4`, `6`, …). Below 4 disables it. An odd size never trips |
+| `ResetAfter` | How long the skip lasts. `0` = until the run ends |
+
+On trip the SDK skips authorize/execute, appends a tool-role warning, and logs. In-process and Restate increment `agent.tool.call.circuit_open`. Temporal logs the skip and does not increment that counter. The run continues.
+
+A later success clears the failure streak; it does not reopen a tripped tool. Both detectors off means the tracker is not created.
+
+State is kept across Temporal continue-as-new and Restate / in-process durable journals, so a restart does not reset the trip.
+
+## Unknown tool names
+
+If the model names a tool that is not registered, the run **continues**. The SDK appends a synthetic tool-role message and logs a warning. That name is never authorized or executed.
+
+In-process and Restate increment `agent.tool.call.unknown`. Temporal logs and continues; it does not increment that counter.
+
+## Temporal client and worker
+
+When the starter and worker are separate processes, pass the same `WithNamedLLMClients` and `WithErrorControl` on both. The fingerprint includes:
+
+- Whether each error-control hook is set (not the function body)
+- `FallbackLLMClient` name
+- Each named client's model and provider
+- Breaker thresholds
+
+See [Distributed execution](/advanced/distributed-execution).
+
+Works the same on in-process (including durable-go), Temporal, and Restate.
+
+## Example
+
+<CardGroup cols={2}>
+  <Card title="Error Control" icon="play" href="/examples/error-control" horizontal>
+    Fallback on LLM error, extra iteration, breaker skip
+  </Card>
+</CardGroup>
+
+## Related
+
+<CardGroup cols={2}>
+
+  <Card title="Hooks" icon="webhook" href="/features/hooks" horizontal>
+    Lifecycle middleware — inspect, mutate, or abort a call
+  </Card>
+
+  <Card title="Execution Config" icon="repeat" href="/features/execution-config" horizontal>
+    Timeouts and retries run before error-control hooks
+  </Card>
+
+  <Card title="Budget" icon="gauge" href="/features/budget" horizontal>
+    Token and cost caps — separate from max iterations
+  </Card>
+
+  <Card title="Distributed execution" icon="diagram-project" href="/advanced/distributed-execution" horizontal>
+    Match named LLMs and error-control on client and worker
+  </Card>
+
+</CardGroup>

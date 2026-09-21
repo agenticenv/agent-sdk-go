@@ -3,6 +3,7 @@ package anthropic
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"testing"
 
@@ -447,5 +448,16 @@ func TestGenerateStream(t *testing.T) {
 	result := stream.GetResult()
 	if result == nil || result.Content == "" {
 		t.Error("expected non-empty content from GetResult")
+	}
+}
+
+func TestWrapLLM_AnthropicError(t *testing.T) {
+	err := wrapLLM(&anthropic.Error{StatusCode: 429})
+	var llmErr *interfaces.LLMError
+	if !errors.As(err, &llmErr) || llmErr.Reason != interfaces.LLMReasonRateLimit || llmErr.StatusCode != 429 {
+		t.Fatalf("got %v", err)
+	}
+	if wrapLLM(nil) != nil {
+		t.Fatal("nil")
 	}
 }
