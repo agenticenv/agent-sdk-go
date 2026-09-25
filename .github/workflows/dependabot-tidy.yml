@@ -1,0 +1,61 @@
+# After a Dependabot Go PR opens, tidy the SDK and agctl modules and push
+# that commit onto the PR branch. CI and Security then rerun on the new commit.
+#
+# Push with a PAT (DEPENDABOT_TIDY_TOKEN). A push made with GITHUB_TOKEN does
+# not start pull_request workflows, so the required checks would stay red.
+# pull_request_target reads this file from main and only runs `go mod tidy`.
+name: Dependabot tidy
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  tidy:
+    if: github.actor == 'dependabot[bot]' && startsWith(github.head_ref, 'dependabot/go_modules/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require push token
+        env:
+          TOKEN: ${{ secrets.DEPENDABOT_TIDY_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "Add repo secret DEPENDABOT_TIDY_TOKEN: a fine-grained PAT with Contents read/write on this repo."
+            echo "Pushing with GITHUB_TOKEN does not retrigger CI, so the PR checks would stay red."
+            exit 1
+          fi
+
+      - name: Checkout Dependabot branch
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          token: ${{ secrets.DEPENDABOT_TIDY_TOKEN }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            cli/go.sum
+
+      - name: Tidy SDK and agctl
+        run: |
+          go mod tidy
+          (cd cli && go mod tidy)
+
+      - name: Push tidy commit
+        run: |
+          if git diff --quiet -- go.mod go.sum cli/go.mod cli/go.sum; then
+            echo "go.mod already tidy"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add go.mod go.sum cli/go.mod cli/go.sum
+          git commit -m "chore: go mod tidy after dependabot bump"
+          git push
