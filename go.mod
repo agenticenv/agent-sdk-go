@@ -26,7 +26,7 @@ require (
 	github.com/restatedev/sdk-go v1.1.0
 	github.com/restatedev/sdk-go/x/mocks v0.26.0
 	github.com/stretchr/testify v1.12.1
-	github.com/weaviate/weaviate v1.39.7
+	github.com/weaviate/weaviate v1.39.5
 	github.com/weaviate/weaviate-go-client/v5 v5.7.3
 	go.opentelemetry.io/contrib/bridges/otelslog v0.20.1
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.71.0
