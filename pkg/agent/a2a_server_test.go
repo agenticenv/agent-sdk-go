@@ -368,7 +368,10 @@ func TestAgentA2AExecutor_Execute_Streaming_SkipEmptyDelta(t *testing.T) {
 		TaskID:  a2a.NewTaskID(),
 	}
 	n := 0
-	for range exec.Execute(context.Background(), execCtx) {
+	for _, err := range exec.Execute(context.Background(), execCtx) {
+		if err != nil {
+			t.Fatal(err)
+		}
 		n++
 	}
 	if n < 4 {
