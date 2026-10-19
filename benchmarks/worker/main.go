@@ -70,7 +70,9 @@ func main() {
 		}
 	case <-ctx.Done():
 		w.Stop()
-		<-done
+		if err := <-done; err != nil && ctx.Err() == nil {
+			log.Fatalf("worker stopped: %v", err)
+		}
 	}
 
 	fmt.Printf("benchmark worker %d stopped\n", *workerID)
