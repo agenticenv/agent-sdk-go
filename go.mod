@@ -1,25 +1,23 @@
 module github.com/agenticenv/agent-sdk-go
 
-go 1.26.5
-
-toolchain go1.26.9
+go 1.26.10
 
 replace github.com/agenticenv/agent-sdk-go/pkg/tools => ./pkg/tools
 
 replace github.com/agenticenv/agent-sdk-go/pkg/llm => ./pkg/llm
 
 require (
-	github.com/a2aproject/a2a-go/v2 v2.6.0
+	github.com/a2aproject/a2a-go/v2 v2.7.0
 	github.com/agenticenv/durable-go v0.1.5
 	github.com/alicebob/miniredis/v2 v2.40.0
-	github.com/anthropics/anthropic-sdk-go v1.82.0
+	github.com/anthropics/anthropic-sdk-go v1.84.0
 	github.com/golang/mock v1.6.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/joho/godotenv v1.5.1
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/nexus-rpc/sdk-go v0.7.0
-	github.com/openai/openai-go/v3 v3.81.0
+	github.com/openai/openai-go/v3 v3.86.0
 	github.com/pgvector/pgvector-go v0.4.1
 	github.com/pgvector/pgvector-go/pgx v0.4.1
 	github.com/redis/go-redis/v9 v9.23.0
@@ -27,7 +25,7 @@ require (
 	github.com/restatedev/sdk-go/x/mocks v0.26.0
 	github.com/stretchr/testify v1.12.1
 	github.com/weaviate/weaviate v1.39.5
-	github.com/weaviate/weaviate-go-client/v5 v5.7.3
+	github.com/weaviate/weaviate-go-client/v5 v5.7.4
 	go.opentelemetry.io/contrib/bridges/otelslog v0.21.0
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.72.0
 	go.opentelemetry.io/otel v1.47.0
@@ -48,7 +46,7 @@ require (
 	go.temporal.io/sdk/contrib/opentelemetry v0.8.1
 	go.temporal.io/sdk/contrib/workflowstreams v0.1.1
 	golang.org/x/oauth2 v0.37.0
-	google.golang.org/genai v1.75.0
+	google.golang.org/genai v1.76.0
 	google.golang.org/grpc v1.84.0
 	gopkg.in/yaml.v3 v3.0.1
 )
