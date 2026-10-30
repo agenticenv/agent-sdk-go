@@ -709,6 +709,7 @@ func TestRunA2A_JSONRPCSendStreamingMessage_ReturnsSSE(t *testing.T) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set(a2a.SvcParamVersion, string(a2a.Version))
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
