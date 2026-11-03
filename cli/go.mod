@@ -48,10 +48,10 @@ require (
 	github.com/nexus-rpc/nexus-proto-annotations v0.1.0 // indirect
 	github.com/nexus-rpc/sdk-go v0.7.0 // indirect
 	github.com/oklog/ulid/v2 v2.1.2 // indirect
-	github.com/openai/openai-go/v3 v3.86.0 // indirect
+	github.com/openai/openai-go/v3 v3.91.0 // indirect
 	github.com/pb33f/ordered-map/v2 v2.3.1 // indirect
 	github.com/redis/go-redis/v9 v9.23.0 // indirect
-	github.com/restatedev/sdk-go v1.1.0 // indirect
+	github.com/restatedev/sdk-go v1.2.0 // indirect
 	github.com/robfig/cron v1.2.0 // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect
@@ -82,7 +82,7 @@ require (
 	go.opentelemetry.io/otel/sdk/metric v1.47.0 // indirect
 	go.opentelemetry.io/otel/trace v1.47.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.11.0 // indirect
-	go.temporal.io/api v1.64.0 // indirect
+	go.temporal.io/api v1.64.1 // indirect
 	go.temporal.io/sdk v1.50.0 // indirect
 	go.temporal.io/sdk/contrib/opentelemetry v0.8.1 // indirect
 	go.temporal.io/sdk/contrib/workflowstreams v0.1.1 // indirect
@@ -97,9 +97,9 @@ require (
 	golang.org/x/text v0.42.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/api v0.295.0 // indirect
-	google.golang.org/genai v1.76.0 // indirect
+	google.golang.org/genai v1.77.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260928230214-8a89bd6388cc // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260928230214-8a89bd6388cc // indirect
-	google.golang.org/grpc v1.84.0 // indirect
+	google.golang.org/grpc v1.85.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 )
