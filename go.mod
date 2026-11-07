@@ -13,15 +13,15 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.84.0
 	github.com/golang/mock v1.6.0
 	github.com/google/uuid v1.6.0
-	github.com/jackc/pgx/v5 v5.11.0
+	github.com/jackc/pgx/v5 v5.12.0
 	github.com/joho/godotenv v1.5.1
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/nexus-rpc/sdk-go v0.7.0
-	github.com/openai/openai-go/v3 v3.86.0
+	github.com/openai/openai-go/v3 v3.91.0
 	github.com/pgvector/pgvector-go v0.4.1
 	github.com/pgvector/pgvector-go/pgx v0.4.1
 	github.com/redis/go-redis/v9 v9.23.0
-	github.com/restatedev/sdk-go v1.1.0
+	github.com/restatedev/sdk-go v1.2.0
 	github.com/restatedev/sdk-go/x/mocks v0.26.0
 	github.com/stretchr/testify v1.12.1
 	github.com/weaviate/weaviate v1.39.5
@@ -41,13 +41,13 @@ require (
 	go.opentelemetry.io/otel/sdk/log v1.47.0
 	go.opentelemetry.io/otel/sdk/metric v1.47.0
 	go.opentelemetry.io/otel/trace v1.47.0
-	go.temporal.io/api v1.64.0
+	go.temporal.io/api v1.64.1
 	go.temporal.io/sdk v1.50.0
 	go.temporal.io/sdk/contrib/opentelemetry v0.8.1
 	go.temporal.io/sdk/contrib/workflowstreams v0.1.1
 	golang.org/x/oauth2 v0.37.0
-	google.golang.org/genai v1.76.0
-	google.golang.org/grpc v1.84.0
+	google.golang.org/genai v1.77.0
+	google.golang.org/grpc v1.85.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -101,7 +101,7 @@ require (
 	github.com/invopop/jsonschema v0.14.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
-	github.com/jackc/puddle/v2 v2.2.2 // indirect
+	github.com/jackc/puddle/v2 v2.2.3 // indirect
 	github.com/mr-tron/base58 v1.3.0 // indirect
 	github.com/nexus-rpc/nexus-proto-annotations v0.1.0 // indirect
 	github.com/oklog/ulid/v2 v2.1.2 // indirect
