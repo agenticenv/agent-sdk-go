@@ -9,7 +9,7 @@ require (
 	github.com/agenticenv/agent-sdk-go v0.0.0-00010101000000-000000000000
 	github.com/alecthomas/kong v1.17.0
 	github.com/alecthomas/kong-yaml v0.2.0
-	golang.org/x/oauth2 v0.37.0
+	golang.org/x/oauth2 v0.38.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
