@@ -1,6 +1,6 @@
 module github.com/agenticenv/agent-sdk-go
 
-go 1.26.10
+go 1.26.11
 
 replace github.com/agenticenv/agent-sdk-go/pkg/tools => ./pkg/tools
 
