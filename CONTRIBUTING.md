@@ -14,7 +14,7 @@ Before contributing, ensure you have:
 
 | Requirement | Version / Notes |
 |-------------|-----------------|
-| **Go** | **Minimum `go 1.26.0`** (see the `go` line in `go.mod`; use that version or newer). |
+| **Go** | **Go 1.26+** (see the `go` line in `go.mod`; use that version or newer). |
 | **Task** | Task runner for all dev commands (`task build`, `task check`, `task lint`, ...). Install: `go install github.com/go-task/task/v3/cmd/task@latest` or see [taskfile.dev/installation](https://taskfile.dev/installation/) |
 | **Temporal server** | Required only for Temporal runtime examples, CLI, and Temporal-specific tests — see [Temporal setup](temporal-setup.md). Unit tests and in-process runtime examples run without it. |
 | **Restate server** | Required only for Restate runtime examples and Restate-specific tests — see [Restate setup](restate-setup.md). |
