@@ -48,7 +48,7 @@ require (
 	github.com/nexus-rpc/nexus-proto-annotations v0.1.0 // indirect
 	github.com/nexus-rpc/sdk-go v0.7.0 // indirect
 	github.com/oklog/ulid/v2 v2.1.2 // indirect
-	github.com/openai/openai-go/v3 v3.96.0 // indirect
+	github.com/openai/openai-go/v3 v3.99.0 // indirect
 	github.com/pb33f/ordered-map/v2 v2.3.1 // indirect
 	github.com/redis/go-redis/v9 v9.23.0 // indirect
 	github.com/restatedev/sdk-go v1.2.0 // indirect
@@ -82,8 +82,8 @@ require (
 	go.opentelemetry.io/otel/sdk/metric v1.47.0 // indirect
 	go.opentelemetry.io/otel/trace v1.47.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.11.0 // indirect
-	go.temporal.io/api v1.64.2 // indirect
-	go.temporal.io/sdk v1.50.0 // indirect
+	go.temporal.io/api v1.64.3 // indirect
+	go.temporal.io/sdk v1.51.0 // indirect
 	go.temporal.io/sdk/contrib/opentelemetry v0.8.1 // indirect
 	go.temporal.io/sdk/contrib/workflowstreams v0.1.1 // indirect
 	go.uber.org/atomic v1.12.0 // indirect
