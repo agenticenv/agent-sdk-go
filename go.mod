@@ -13,11 +13,11 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.84.0
 	github.com/golang/mock v1.6.0
 	github.com/google/uuid v1.6.0
-	github.com/jackc/pgx/v5 v5.12.0
+	github.com/jackc/pgx/v5 v5.13.0
 	github.com/joho/godotenv v1.5.1
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/nexus-rpc/sdk-go v0.7.0
-	github.com/openai/openai-go/v3 v3.96.0
+	github.com/openai/openai-go/v3 v3.99.0
 	github.com/pgvector/pgvector-go v0.4.1
 	github.com/pgvector/pgvector-go/pgx v0.4.1
 	github.com/redis/go-redis/v9 v9.23.0
@@ -41,8 +41,8 @@ require (
 	go.opentelemetry.io/otel/sdk/log v1.47.0
 	go.opentelemetry.io/otel/sdk/metric v1.47.0
 	go.opentelemetry.io/otel/trace v1.47.0
-	go.temporal.io/api v1.64.2
-	go.temporal.io/sdk v1.50.0
+	go.temporal.io/api v1.64.3
+	go.temporal.io/sdk v1.51.0
 	go.temporal.io/sdk/contrib/opentelemetry v0.8.1
 	go.temporal.io/sdk/contrib/workflowstreams v0.1.1
 	golang.org/x/oauth2 v0.38.0
