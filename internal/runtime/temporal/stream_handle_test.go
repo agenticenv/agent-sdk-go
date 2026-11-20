@@ -28,7 +28,8 @@ func newTestStreamRuntime(tc client.Client) *TemporalRuntime {
 }
 
 // stubWorkflowStreamSubscribeEnd makes WorkflowStream Subscribe exit with no items (no forwardStreamFn).
-// UpdateWorkflow fails; a later DescribeWorkflowExecution must report terminal for a clean exit.
+// UpdateWorkflow fails; workflowstreams then calls DescribeWorkflowExecution and
+// needs a terminal status for a clean exit.
 func stubWorkflowStreamSubscribeEnd(tc *temporalmocks.Client) {
 	tc.On("UpdateWorkflow", mock.Anything, mock.Anything).
 		Return(nil, errors.New("unit test: end stream subscribe")).Maybe()
@@ -36,11 +37,11 @@ func stubWorkflowStreamSubscribeEnd(tc *temporalmocks.Client) {
 
 // stubEventsRunningThenSubscribeEnd: Events status gate (running), then Subscribe ends via terminal describe.
 func stubEventsRunningThenSubscribeEnd(tc *temporalmocks.Client, workflowID string) {
-	tc.On("DescribeWorkflowExecution", mock.Anything, workflowID, mock.Anything).
+	tc.On("DescribeWorkflow", mock.Anything, workflowID, mock.Anything).
 		Return(describeWorkflowRunning(), nil).Once()
 	stubWorkflowStreamSubscribeEnd(tc)
 	tc.On("DescribeWorkflowExecution", mock.Anything, workflowID, mock.Anything).
-		Return(describeWorkflowCompleted(), nil).Maybe()
+		Return(describeWorkflowExecutionCompleted(), nil).Maybe()
 }
 
 func waitHandleDone(t *testing.T, done <-chan struct{}) {
@@ -110,7 +111,7 @@ func TestStreamHandle_ID(t *testing.T) {
 func TestStreamHandle_Status_Running(t *testing.T) {
 	release := make(chan struct{})
 	tc := temporalmocks.NewClient(t)
-	tc.On("DescribeWorkflowExecution", mock.Anything, "wf-1", "").
+	tc.On("DescribeWorkflow", mock.Anything, "wf-1", "").
 		Return(describeWorkflowRunning(), nil).Once()
 
 	rt := newTestStreamRuntime(tc)
@@ -129,7 +130,7 @@ func TestStreamHandle_Status_Running(t *testing.T) {
 func TestStreamHandle_Status_NotFound(t *testing.T) {
 	release := make(chan struct{})
 	tc := temporalmocks.NewClient(t)
-	tc.On("DescribeWorkflowExecution", mock.Anything, "wf-missing", "").
+	tc.On("DescribeWorkflow", mock.Anything, "wf-missing", "").
 		Return(nil, errors.New("workflow not found for ID")).Once()
 
 	rt := newTestStreamRuntime(tc)
@@ -210,7 +211,7 @@ func TestStreamHandle_Events_NotConfigured(t *testing.T) {
 func TestStreamHandle_Events_NotFound(t *testing.T) {
 	release := make(chan struct{})
 	tc := temporalmocks.NewClient(t)
-	tc.On("DescribeWorkflowExecution", mock.Anything, "wf-1", "").
+	tc.On("DescribeWorkflow", mock.Anything, "wf-1", "").
 		Return(nil, errors.New("workflow not found for ID")).Once()
 
 	rt := newTestStreamRuntime(tc)
@@ -229,7 +230,7 @@ func TestStreamHandle_Events_AlreadyCompleted(t *testing.T) {
 	release := make(chan struct{})
 
 	tc := temporalmocks.NewClient(t)
-	tc.On("DescribeWorkflowExecution", mock.Anything, "wf-1", "").
+	tc.On("DescribeWorkflow", mock.Anything, "wf-1", "").
 		Return(describeWorkflowCompleted(), nil).Once()
 
 	cleaned := false
@@ -411,14 +412,14 @@ func TestStreamHandle_Events_SubscribeErrorStillDeliversTerminal(t *testing.T) {
 
 	tc := temporalmocks.NewClient(t)
 	// Events() status gate.
-	tc.On("DescribeWorkflowExecution", mock.Anything, "wf-1", mock.Anything).
+	tc.On("DescribeWorkflow", mock.Anything, "wf-1", mock.Anything).
 		Return(describeWorkflowRunning(), nil).Once()
 	// Subscribe poll fails with a genuine RPC error (ctx still live).
 	tc.On("UpdateWorkflow", mock.Anything, mock.Anything).
 		Return(nil, errors.New("unit test: non-terminal subscribe RPC failure")).Maybe()
 	// followContinueAsNew / isTerminal see RUNNING → Subscribe yields the error (not clean exit).
 	tc.On("DescribeWorkflowExecution", mock.Anything, "wf-1", mock.Anything).
-		Return(describeWorkflowRunning(), nil).Maybe()
+		Return(describeWorkflowExecutionRunning(), nil).Maybe()
 
 	rt := newTestStreamRuntime(tc)
 	wfRun := blockingWorkflowRun(release, want, nil)
@@ -445,11 +446,13 @@ func TestStreamHandle_Events_CleanupOnce(t *testing.T) {
 
 	tc := temporalmocks.NewClient(t)
 	// First Events: running → subscribe end. Later Describes (isTerminal + second Events) → completed.
-	tc.On("DescribeWorkflowExecution", mock.Anything, "wf-1", mock.Anything).
+	tc.On("DescribeWorkflow", mock.Anything, "wf-1", mock.Anything).
 		Return(describeWorkflowRunning(), nil).Once()
+	tc.On("DescribeWorkflow", mock.Anything, "wf-1", mock.Anything).
+		Return(describeWorkflowCompleted(), nil).Maybe()
 	stubWorkflowStreamSubscribeEnd(tc)
 	tc.On("DescribeWorkflowExecution", mock.Anything, "wf-1", mock.Anything).
-		Return(describeWorkflowCompleted(), nil).Maybe()
+		Return(describeWorkflowExecutionCompleted(), nil).Maybe()
 
 	calls := 0
 	rt := newTestStreamRuntime(tc)

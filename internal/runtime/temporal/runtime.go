@@ -307,14 +307,14 @@ func (rt *TemporalRuntime) getRunStatus(ctx context.Context, workflowID string) 
 	if workflowID == "" {
 		return "", fmt.Errorf("temporal: getRunStatus requires workflowID")
 	}
-	desc, err := rt.temporalClient.DescribeWorkflowExecution(ctx, workflowID, "")
+	desc, err := rt.temporalClient.DescribeWorkflow(ctx, workflowID, "")
 	if err != nil {
 		if isNotFoundError(err) {
 			return "", types.ErrRunNotFound
 		}
 		return "", err
 	}
-	return temporalStatusToRunStatus(desc.WorkflowExecutionInfo.GetStatus()), nil
+	return temporalStatusToRunStatus(desc.Status), nil
 }
 
 func (rt *TemporalRuntime) Close() {
@@ -847,14 +847,14 @@ func (rt *TemporalRuntime) GetStreamHandle(ctx context.Context, runID string) (r
 		slog.String("runID", runID),
 		slog.String("workflowID", workflowID))
 
-	desc, err := rt.temporalClient.DescribeWorkflowExecution(ctx, workflowID, "")
+	desc, err := rt.temporalClient.DescribeWorkflow(ctx, workflowID, "")
 	if err != nil {
 		if isNotFoundError(err) {
 			return nil, types.ErrStreamNotFound
 		}
 		return nil, err
 	}
-	st := temporalStatusToRunStatus(desc.WorkflowExecutionInfo.GetStatus())
+	st := temporalStatusToRunStatus(desc.Status)
 	if st.IsTerminal() {
 		return nil, types.ErrRunAlreadyCompleted
 	}
