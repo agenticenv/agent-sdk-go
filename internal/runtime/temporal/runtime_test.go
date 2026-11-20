@@ -22,6 +22,7 @@ import (
 	workflowpb "go.temporal.io/api/workflow/v1"
 	workflowservice "go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/client"
 	temporalmocks "go.temporal.io/sdk/mocks"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
@@ -203,11 +204,11 @@ func describeTaskQueueWithPollers() *workflowservice.DescribeTaskQueueResponse {
 	}
 }
 
-// describeWorkflowRunning returns a DescribeWorkflowExecution response indicating the workflow is still running.
+// describeWorkflowRunning returns a DescribeWorkflow response indicating the workflow is still running.
 // Used in unit tests to satisfy the pre-check inside Events() without a real Temporal server.
-func describeWorkflowRunning() *workflowservice.DescribeWorkflowExecutionResponse {
-	return &workflowservice.DescribeWorkflowExecutionResponse{
-		WorkflowExecutionInfo: &workflowpb.WorkflowExecutionInfo{
+func describeWorkflowRunning() *client.WorkflowExecutionDescription {
+	return &client.WorkflowExecutionDescription{
+		WorkflowExecutionMetadata: client.WorkflowExecutionMetadata{
 			Status: enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING,
 		},
 	}
@@ -357,11 +358,11 @@ func TestTemporalRuntime_Stream_Success(t *testing.T) {
 		}
 	}).Return(nil)
 	// Events gate (running), then Subscribe ends via failed poll + terminal describe.
-	tc.On("DescribeWorkflowExecution", mock.Anything, mock.Anything, mock.Anything).
+	tc.On("DescribeWorkflow", mock.Anything, mock.Anything, mock.Anything).
 		Return(describeWorkflowRunning(), nil).Once()
 	stubWorkflowStreamSubscribeEnd(tc)
 	tc.On("DescribeWorkflowExecution", mock.Anything, mock.Anything, mock.Anything).
-		Return(describeWorkflowCompleted(), nil).Maybe()
+		Return(describeWorkflowExecutionCompleted(), nil).Maybe()
 	tc.On("CancelWorkflow", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	rt, err := NewTemporalRuntime(
@@ -415,11 +416,11 @@ func TestTemporalRuntime_Stream_WorkflowGetError(t *testing.T) {
 		Return(wfRun, nil)
 	tc.On("GetWorkflow", mock.Anything, mock.Anything, "").Return(wfRun).Maybe()
 	wfRun.On("Get", mock.Anything, mock.Anything).Return(errors.New("stream wf err"))
-	tc.On("DescribeWorkflowExecution", mock.Anything, mock.Anything, mock.Anything).
+	tc.On("DescribeWorkflow", mock.Anything, mock.Anything, mock.Anything).
 		Return(describeWorkflowRunning(), nil).Once()
 	stubWorkflowStreamSubscribeEnd(tc)
 	tc.On("DescribeWorkflowExecution", mock.Anything, mock.Anything, mock.Anything).
-		Return(describeWorkflowCompleted(), nil).Maybe()
+		Return(describeWorkflowExecutionCompleted(), nil).Maybe()
 	tc.On("CancelWorkflow", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	rt, err := NewTemporalRuntime(
@@ -671,7 +672,25 @@ func TestTemporalRuntime_Close_ActiveStreams_DoesNotTerminate(t *testing.T) {
 	tc.AssertNotCalled(t, "CancelWorkflow", mock.Anything, mock.Anything, mock.Anything)
 }
 
-func describeWorkflowCompleted() *workflowservice.DescribeWorkflowExecutionResponse {
+func describeWorkflowCompleted() *client.WorkflowExecutionDescription {
+	return &client.WorkflowExecutionDescription{
+		WorkflowExecutionMetadata: client.WorkflowExecutionMetadata{
+			Status: enumspb.WORKFLOW_EXECUTION_STATUS_COMPLETED,
+		},
+	}
+}
+
+// workflowstreams still calls the deprecated DescribeWorkflowExecution API when
+// deciding whether a stream poll ended because the workflow is terminal.
+func describeWorkflowExecutionRunning() *workflowservice.DescribeWorkflowExecutionResponse {
+	return &workflowservice.DescribeWorkflowExecutionResponse{
+		WorkflowExecutionInfo: &workflowpb.WorkflowExecutionInfo{
+			Status: enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING,
+		},
+	}
+}
+
+func describeWorkflowExecutionCompleted() *workflowservice.DescribeWorkflowExecutionResponse {
 	return &workflowservice.DescribeWorkflowExecutionResponse{
 		WorkflowExecutionInfo: &workflowpb.WorkflowExecutionInfo{
 			Status: enumspb.WORKFLOW_EXECUTION_STATUS_COMPLETED,
@@ -688,7 +707,7 @@ func TestTemporalRuntime_GetRunHandle_Running(t *testing.T) {
 	want := &types.AgentRunResult{Content: "ok"}
 	wfRun := blockingWorkflowRun(release, want, nil)
 
-	tc.On("DescribeWorkflowExecution", mock.Anything, workflowID, "").
+	tc.On("DescribeWorkflow", mock.Anything, workflowID, "").
 		Return(describeWorkflowRunning(), nil).Once()
 	tc.On("GetWorkflow", mock.Anything, workflowID, "").Return(wfRun).Maybe()
 	tc.On("CancelWorkflow", mock.Anything, workflowID, "").Return(nil).Maybe()
@@ -728,7 +747,7 @@ func TestTemporalRuntime_GetRunHandle_NotFound(t *testing.T) {
 	runID := "missing"
 	workflowID := "agent-run-agent-a-" + runID
 
-	tc.On("DescribeWorkflowExecution", mock.Anything, workflowID, "").
+	tc.On("DescribeWorkflow", mock.Anything, workflowID, "").
 		Return(nil, errors.New("workflow not found for ID")).Once()
 
 	rt, err := NewTemporalRuntime(
@@ -752,7 +771,7 @@ func TestTemporalRuntime_GetRunHandle_AlreadyCompleted(t *testing.T) {
 	runID := "done-run"
 	workflowID := "agent-run-agent-a-" + runID
 
-	tc.On("DescribeWorkflowExecution", mock.Anything, workflowID, "").
+	tc.On("DescribeWorkflow", mock.Anything, workflowID, "").
 		Return(describeWorkflowCompleted(), nil).Once()
 
 	rt, err := NewTemporalRuntime(
@@ -787,7 +806,7 @@ func TestTemporalRuntime_GetStreamHandle_Running(t *testing.T) {
 	release := make(chan struct{})
 	wfRun := blockingWorkflowRun(release, &types.AgentRunResult{Content: "ok"}, nil)
 
-	tc.On("DescribeWorkflowExecution", mock.Anything, workflowID, "").
+	tc.On("DescribeWorkflow", mock.Anything, workflowID, "").
 		Return(describeWorkflowRunning(), nil).Once()
 	tc.On("GetWorkflow", mock.Anything, workflowID, "").Return(wfRun).Maybe()
 	tc.On("CancelWorkflow", mock.Anything, workflowID, "").Return(nil).Maybe()
@@ -820,7 +839,7 @@ func TestTemporalRuntime_GetStreamHandle_NotFound(t *testing.T) {
 	runID := "missing"
 	workflowID := "agent-stream-agent-a-" + runID
 
-	tc.On("DescribeWorkflowExecution", mock.Anything, workflowID, "").
+	tc.On("DescribeWorkflow", mock.Anything, workflowID, "").
 		Return(nil, errors.New("workflow not found for ID")).Once()
 
 	rt, err := NewTemporalRuntime(
@@ -844,7 +863,7 @@ func TestTemporalRuntime_GetStreamHandle_AlreadyCompleted(t *testing.T) {
 	runID := "done-stream"
 	workflowID := "agent-stream-agent-a-" + runID
 
-	tc.On("DescribeWorkflowExecution", mock.Anything, workflowID, "").
+	tc.On("DescribeWorkflow", mock.Anything, workflowID, "").
 		Return(describeWorkflowCompleted(), nil).Once()
 
 	rt, err := NewTemporalRuntime(
@@ -950,7 +969,7 @@ func TestTemporalRuntime_GetRunHandle_DescribeError(t *testing.T) {
 	runID := "run-desc-err"
 	workflowID := "agent-run-agent-a-" + runID
 
-	tc.On("DescribeWorkflowExecution", mock.Anything, workflowID, "").
+	tc.On("DescribeWorkflow", mock.Anything, workflowID, "").
 		Return(nil, errors.New("describe unavailable")).Once()
 
 	rt, err := NewTemporalRuntime(
@@ -982,7 +1001,7 @@ func TestTemporalRuntime_GetStreamHandle_DescribeError(t *testing.T) {
 	runID := "stream-desc-err"
 	workflowID := "agent-stream-agent-a-" + runID
 
-	tc.On("DescribeWorkflowExecution", mock.Anything, workflowID, "").
+	tc.On("DescribeWorkflow", mock.Anything, workflowID, "").
 		Return(nil, errors.New("describe unavailable")).Once()
 
 	rt, err := NewTemporalRuntime(
@@ -1010,11 +1029,11 @@ func TestTemporalRuntime_GetStreamHandle_EventsWithOffset(t *testing.T) {
 	wfRun := blockingWorkflowRun(release, &types.AgentRunResult{Content: "ok", AgentName: "agent-a"}, nil)
 
 	// GetStreamHandle + Events status gate (running); Subscribe ends via terminal describe.
-	tc.On("DescribeWorkflowExecution", mock.Anything, workflowID, mock.Anything).
+	tc.On("DescribeWorkflow", mock.Anything, workflowID, mock.Anything).
 		Return(describeWorkflowRunning(), nil).Twice()
 	stubWorkflowStreamSubscribeEnd(tc)
 	tc.On("DescribeWorkflowExecution", mock.Anything, workflowID, mock.Anything).
-		Return(describeWorkflowCompleted(), nil).Maybe()
+		Return(describeWorkflowExecutionCompleted(), nil).Maybe()
 	tc.On("GetWorkflow", mock.Anything, workflowID, "").Return(wfRun).Maybe()
 	tc.On("CancelWorkflow", mock.Anything, workflowID, "").Return(nil).Maybe()
 

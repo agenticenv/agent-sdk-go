@@ -11,8 +11,6 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	enumspb "go.temporal.io/api/enums/v1"
-	workflowpb "go.temporal.io/api/workflow/v1"
-	workflowservice "go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
 	temporalmocks "go.temporal.io/sdk/mocks"
 )
@@ -59,7 +57,7 @@ func TestRunHandle_ID(t *testing.T) {
 func TestRunHandle_Status_Running(t *testing.T) {
 	release := make(chan struct{})
 	tc := temporalmocks.NewClient(t)
-	tc.On("DescribeWorkflowExecution", mock.Anything, "wf-1", "").
+	tc.On("DescribeWorkflow", mock.Anything, "wf-1", "").
 		Return(describeWorkflowRunning(), nil).Once()
 
 	wfRun := blockingWorkflowRun(release, &types.AgentRunResult{Content: "ok"}, nil)
@@ -77,7 +75,7 @@ func TestRunHandle_Status_Running(t *testing.T) {
 func TestRunHandle_Status_NotFound(t *testing.T) {
 	release := make(chan struct{})
 	tc := temporalmocks.NewClient(t)
-	tc.On("DescribeWorkflowExecution", mock.Anything, "wf-missing", "").
+	tc.On("DescribeWorkflow", mock.Anything, "wf-missing", "").
 		Return(nil, errors.New("workflow not found for ID")).Once()
 
 	wfRun := blockingWorkflowRun(release, nil, nil)
@@ -140,7 +138,7 @@ func TestRunHandle_Get_UnblocksOnContextCancel(t *testing.T) {
 	defer close(release)
 
 	tc := temporalmocks.NewClient(t)
-	tc.On("DescribeWorkflowExecution", mock.Anything, "wf-1", "").
+	tc.On("DescribeWorkflow", mock.Anything, "wf-1", "").
 		Return(describeWorkflowRunning(), nil).Maybe()
 
 	wfRun := blockingWorkflowRun(release, &types.AgentRunResult{Content: "later"}, nil)
@@ -308,9 +306,9 @@ func TestRunHandle_Done_SameChannel(t *testing.T) {
 func TestRunHandle_Status_MapsCompleted(t *testing.T) {
 	release := make(chan struct{})
 	tc := temporalmocks.NewClient(t)
-	tc.On("DescribeWorkflowExecution", mock.Anything, "wf-1", "").
-		Return(&workflowservice.DescribeWorkflowExecutionResponse{
-			WorkflowExecutionInfo: &workflowpb.WorkflowExecutionInfo{
+	tc.On("DescribeWorkflow", mock.Anything, "wf-1", "").
+		Return(&client.WorkflowExecutionDescription{
+			WorkflowExecutionMetadata: client.WorkflowExecutionMetadata{
 				Status: enumspb.WORKFLOW_EXECUTION_STATUS_COMPLETED,
 			},
 		}, nil).Once()
