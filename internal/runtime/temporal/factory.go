@@ -69,6 +69,7 @@ func (f *RuntimeFactory) Build(params *agentruntime.RuntimeParams, remoteWorker 
 		WithToolExecutionMode(params.ToolExecutionMode),
 		WithRetrieverFingerprint(params.RetrieverFingerprint),
 		WithHooksFingerprint(params.HooksFingerprint),
+		WithGuardrailsFingerprint(params.GuardrailsFingerprint),
 		WithNamedLLMFingerprint(params.NamedLLMFingerprint),
 		WithErrorControlFingerprint(params.ErrorControlFingerprint),
 		WithDisableLocalWorker(params.DisableLocalWorker),

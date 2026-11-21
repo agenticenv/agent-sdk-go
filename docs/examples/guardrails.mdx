@@ -1,0 +1,21 @@
+---
+title: "Guardrails"
+description: "Redact sensitive text, cap prompt length, and stop a run when a check denies it"
+---
+
+Registers an input and output redaction, a maximum prompt length, and a custom input check you replace with your own client.
+
+Source: [`examples/agent_with_guardrails/`](https://github.com/agenticenv/agent-sdk-go/tree/main/examples/agent_with_guardrails)
+
+## Run
+
+From `examples/`:
+
+```bash
+go run ./agent_with_guardrails
+go run ./agent_with_guardrails "My SSN is 123-45-6789. Summarize the return policy."
+```
+
+A prompt that contains `MODERATION_BLOCK` stops with `agent.ErrGuardrailBlocked` and does not call the model. Replace `moderate` in `main.go` with your own check.
+
+On Temporal, register the same guardrails in the same order on the starter and the worker.

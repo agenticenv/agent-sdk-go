@@ -493,6 +493,8 @@ func TestTerminalLoopError(t *testing.T) {
 	require.ErrorIs(t, terminalLoopError(types.ErrBudgetExceeded), types.ErrBudgetExceeded)
 	require.True(t, restatesdk.IsTerminalError(terminalLoopError(types.ErrBudgetExceeded)))
 	require.True(t, restatesdk.IsTerminalError(terminalLoopError(types.ErrBudgetApprovalUnavailable)))
+	require.ErrorIs(t, terminalLoopError(types.ErrGuardrailBlocked), types.ErrGuardrailBlocked)
+	require.True(t, restatesdk.IsTerminalError(terminalLoopError(types.ErrGuardrailBlocked)))
 	other := errors.New("llm timeout")
 	require.Equal(t, other, terminalLoopError(other))
 	already := restatesdk.ToTerminalError(types.ErrBudgetExceeded)

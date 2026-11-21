@@ -44,7 +44,8 @@ Go 1.26+. OpenAI API key required for the example above; Anthropic and Gemini ar
 - **Durable by default, no infrastructure** — the in-process runtime journals every step via [durable-go](https://github.com/agenticenv/durable-go); kill the process and reconnect after a restart. Add `temporal.WithTemporalConfig` (from `pkg/agent/runtime/temporal`) or `restate.WithRestateConfig` (from `pkg/agent/runtime/restate`) only when you need horizontal scale or a client/worker split. Nothing else changes.
 - **Concurrent by default** — one `Agent` instance handles parallel `Run` and `Stream` calls; every runtime issues each a unique run automatically.
 - **Protocol-native integrations** — MCP tool servers, A2A agent-to-agent delegation, and AG-UI streaming events are first-class, not adapters bolted on after the fact.
-- **Middleware hooks** — intercept LLM calls, tool use, retrieval, and memory at any lifecycle point for logging, PII scrubbing, and guardrails without touching agent logic.
+- **Middleware hooks** — intercept LLM calls, tool use, retrieval, and memory at any lifecycle point for logging and PII scrubbing without touching agent logic. See [Hooks](/features/hooks).
+- **Guardrails** — check the user prompt once and each model response, then redact or stop the run. See [Guardrails](/features/guardrails).
 - **Error control** — after retries, swap to a fallback model, grant more iterations, or skip a looping tool. See [Error Control](/features/error-control).
 - **Cache-aware requests** — LLM requests are structured for provider caching, with Anthropic prompt-cache breakpoints to reduce cost on multi-turn runs.
 

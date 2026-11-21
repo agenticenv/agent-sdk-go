@@ -77,6 +77,7 @@ type TemporalRuntime struct {
 	agentMode               string
 	retrieverFingerprint    string
 	hooksFingerprint        string
+	guardrailsFingerprint   string
 	namedLLMFingerprint     string
 	errorControlFingerprint string
 
@@ -177,6 +178,7 @@ func (rt *TemporalRuntime) Start(ctx context.Context) error {
 
 	w := worker.New(rt.temporalClient, rt.taskQueue, workerOptions)
 	w.RegisterWorkflowWithOptions(rt.AgentWorkflow, workflow.RegisterOptions{Name: "AgentWorkflow"})
+	w.RegisterActivityWithOptions(rt.AgentGuardrailActivity, activity.RegisterOptions{Name: "AgentGuardrailActivity"})
 	w.RegisterActivityWithOptions(rt.AgentLLMActivity, activity.RegisterOptions{Name: "AgentLLMActivity"})
 	w.RegisterActivityWithOptions(rt.AgentLLMStreamActivity, activity.RegisterOptions{Name: "AgentLLMStreamActivity"})
 	w.RegisterActivityWithOptions(rt.AgentMaxIterationsDecisionActivity, activity.RegisterOptions{Name: "AgentMaxIterationsDecisionActivity"})

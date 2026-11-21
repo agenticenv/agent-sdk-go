@@ -79,6 +79,10 @@ var ErrBudgetApprovalUnavailable = types.ErrBudgetApprovalUnavailable
 // after BudgetWaitForApproval.
 var ErrBudgetExceeded = types.ErrBudgetExceeded
 
+// ErrGuardrailBlocked is returned when a guardrail denies the user prompt or a model response.
+// The run stops. Check it with errors.Is on every runtime.
+var ErrGuardrailBlocked = types.ErrGuardrailBlocked
+
 // FinishReasonBudgetExceeded is the finish reason set on AgentTelemetry when a run stops
 // because a per-run budget limit was reached.
 const FinishReasonBudgetExceeded = types.FinishReasonBudgetExceeded

@@ -172,4 +172,12 @@ func TestMapInvocationError_BudgetExceeded(t *testing.T) {
 	if mapInvocationError(nil) != nil {
 		t.Fatal("nil should stay nil")
 	}
+	blocked := errors.New(`invocation failed: agent: guardrail blocked: "pii" (output): no`)
+	if !errors.Is(mapInvocationError(blocked), types.ErrGuardrailBlocked) {
+		t.Fatalf("got %v", mapInvocationError(blocked))
+	}
+	plain := errors.New(`agent: guardrail "pii" (output): empty action`)
+	if errors.Is(mapInvocationError(plain), types.ErrGuardrailBlocked) {
+		t.Fatal("fail-closed error must not restore the sentinel")
+	}
 }

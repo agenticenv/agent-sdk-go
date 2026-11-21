@@ -13,6 +13,7 @@ import (
 	sdkruntime "github.com/agenticenv/agent-sdk-go/internal/runtime"
 	"github.com/agenticenv/agent-sdk-go/internal/runtime/base"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
+	"github.com/agenticenv/agent-sdk-go/pkg/guardrail"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/google/uuid"
 	restatesdk "github.com/restatedev/sdk-go"
@@ -277,7 +278,7 @@ func (rt *RestateRuntime) validateAgentName(agentName string) error {
 
 // isApplicationLoopError reports errors that finish the run (do not retry).
 func isApplicationLoopError(err error) bool {
-	return errors.Is(err, types.ErrBudgetExceeded) || errors.Is(err, types.ErrBudgetApprovalUnavailable)
+	return errors.Is(err, types.ErrBudgetExceeded) || errors.Is(err, types.ErrBudgetApprovalUnavailable) || errors.Is(err, types.ErrGuardrailBlocked)
 }
 
 // terminalLoopError marks application-complete failures as Restate terminal so
@@ -292,6 +293,8 @@ func terminalLoopError(err error) error {
 		return fmt.Errorf("%w: %w", types.ErrBudgetExceeded, restatesdk.ToTerminalError(err))
 	case errors.Is(err, types.ErrBudgetApprovalUnavailable):
 		return fmt.Errorf("%w: %w", types.ErrBudgetApprovalUnavailable, restatesdk.ToTerminalError(err))
+	case errors.Is(err, types.ErrGuardrailBlocked):
+		return fmt.Errorf("%w: %w", types.ErrGuardrailBlocked, restatesdk.ToTerminalError(err))
 	}
 	return err
 }
@@ -344,6 +347,21 @@ func (rt *RestateRuntime) executeAgentLoop(ctx restatesdk.Context, input AgentLo
 	// Internal emit: publish events to the stream-owner AgentEventLog for this run.
 	// EventTypes acts as a publish filter: empty = no events; [AgentEventAll] = all; otherwise only listed types.
 	emit := func(ev events.AgentEvent) { rt.emitEvent(ctx, eventLogService, topic, input.EventTypes, ev) }
+
+	if rt.HasGuardrails(guardrail.StageInput) {
+		text, err := executeWithPolicy(ctx, "guardrail-input", policies.Guardrail, func(runCtx restatesdk.RunContext) (string, error) {
+			return rt.ApplyInputGuardrails(runCtx, base.ApplyInputGuardrailsInput{
+				Logger:    log,
+				AgentName: agentName,
+				RunID:     input.RunID,
+				Text:      input.UserPrompt,
+			})
+		})
+		if err != nil {
+			return nil, err
+		}
+		input.UserPrompt = text
+	}
 
 	// Build initial message list from user prompt.
 	messages := []interfaces.Message{{Role: interfaces.MessageRoleUser, Content: input.UserPrompt}}
@@ -679,6 +697,9 @@ func (rt *RestateRuntime) executeLLMStepWithErrorControl(
 	result, err := rt.executeLLMStep(ctx, input, policy, llmIn, iter, stepPrefix, useFallback)
 	if err == nil {
 		return result, useFallback, nil
+	}
+	if errors.Is(err, types.ErrGuardrailBlocked) {
+		return nil, useFallback, err
 	}
 	if useFallback {
 		return nil, true, err
@@ -1340,10 +1361,17 @@ func (rt *RestateRuntime) conversationMemoryEnabled(input AgentLoopInput) bool {
 
 // executeWithPolicy executes fn as a named Restate durable step with retry behaviour from policy.
 func executeWithPolicy[T any](ctx restatesdk.Context, name string, policy sdkruntime.ExecutionPolicy, fn func(restatesdk.RunContext) (T, error)) (T, error) {
-	out, err := restatesdk.Run(ctx, fn, policyToRunOpts(name, policy)...)
+	out, err := restatesdk.Run(ctx, func(runCtx restatesdk.RunContext) (T, error) {
+		v, err := fn(runCtx)
+		if err != nil && errors.Is(err, types.ErrGuardrailBlocked) {
+			var zero T
+			return zero, restatesdk.ToTerminalError(err)
+		}
+		return v, err
+	}, policyToRunOpts(name, policy)...)
 	if err != nil {
 		var zero T
-		return zero, fmt.Errorf("%s: %w", name, err)
+		return zero, fmt.Errorf("%s: %w", name, types.RestoreGuardrailBlocked(err))
 	}
 	return out, nil
 }

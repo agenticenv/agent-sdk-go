@@ -16,6 +16,7 @@ import (
 	sdkruntime "github.com/agenticenv/agent-sdk-go/internal/runtime"
 	"github.com/agenticenv/agent-sdk-go/internal/runtime/base"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
+	"github.com/agenticenv/agent-sdk-go/pkg/guardrail"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
 	durable "github.com/agenticenv/durable-go"
@@ -210,6 +211,23 @@ func (rt *LocalRuntime) executeAgentLoop(ctx context.Context, input AgentLoopInp
 			return
 		}
 		rt.publishEventToChannel(ctx, input.ChannelName, ev)
+	}
+
+	if rt.HasGuardrails(guardrail.StageInput) {
+		text, err := runStep(ctx, input.stepRunner, input.stepPrefix+"guardrail-input", func(stepCtx context.Context) (string, error) {
+			return executeWithPolicy(stepCtx, policies.Guardrail, func(attemptCtx context.Context) (string, error) {
+				return rt.ApplyInputGuardrails(attemptCtx, base.ApplyInputGuardrailsInput{
+					Logger:    log,
+					AgentName: agentName,
+					RunID:     input.RunID,
+					Text:      input.UserPrompt,
+				})
+			})
+		})
+		if err != nil {
+			return nil, err
+		}
+		input.UserPrompt = text
 	}
 
 	// Build initial message list from user prompt.
@@ -1036,6 +1054,9 @@ func executeWithPolicy[T any](ctx context.Context, policy sdkruntime.ExecutionPo
 		if err == nil {
 			return result, nil
 		}
+		if errors.Is(err, types.ErrGuardrailBlocked) {
+			return zero, err
+		}
 		lastErr = err
 
 		if ctx.Err() != nil {
@@ -1110,6 +1131,9 @@ func (rt *LocalRuntime) invokeLLMWithErrorControl(
 	result, err := rt.invokeLLM(ctx, input, in, stepID, useFallback, policies)
 	if err == nil {
 		return result, useFallback, nil
+	}
+	if errors.Is(err, types.ErrGuardrailBlocked) {
+		return nil, useFallback, err
 	}
 	if useFallback {
 		return nil, true, err

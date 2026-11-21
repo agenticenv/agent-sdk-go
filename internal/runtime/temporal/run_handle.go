@@ -191,7 +191,7 @@ func (h *runHandle) awaitCompletion() {
 // isApplicationWorkflowError reports run-complete failures that Temporal
 // serializes as ApplicationError (Go error chain dropped).
 func isApplicationWorkflowError(err error) bool {
-	return errors.Is(err, types.ErrBudgetExceeded) || errors.Is(err, types.ErrBudgetApprovalUnavailable)
+	return errors.Is(err, types.ErrBudgetExceeded) || errors.Is(err, types.ErrBudgetApprovalUnavailable) || errors.Is(err, types.ErrGuardrailBlocked)
 }
 
 // mapWorkflowError restores SDK sentinels lost when Temporal serializes workflow
@@ -206,6 +206,8 @@ func mapWorkflowError(err error) error {
 		return fmt.Errorf("%w: %v", types.ErrBudgetExceeded, err)
 	case strings.Contains(msg, types.ErrBudgetApprovalUnavailable.Error()):
 		return fmt.Errorf("%w: %v", types.ErrBudgetApprovalUnavailable, err)
+	case strings.Contains(msg, types.ErrGuardrailBlocked.Error()):
+		return types.RestoreGuardrailBlocked(err)
 	}
 	return err
 }

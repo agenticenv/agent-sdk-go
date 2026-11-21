@@ -136,6 +136,8 @@ Use the same `WithAgentToolExecutionMode` on `NewAgent`, `NewAgentWorker`, and a
 | `WithA2ADefaultServer()` / `WithA2AServer(cfg)` | [A2A server](/features/a2a) |
 | `WithSubAgents(agents...)` + `WithMaxSubAgentDepth(n)` | [Sub-agents](/features/sub-agents) |
 | `WithHooks(name, hooks)` | [Hooks](/features/hooks) |
+| `WithGuardrail(gs...)` | [Guardrails](/features/guardrails) |
+| `WithGuardrailExecutionConfig(cfg)` | [Guardrails](/features/guardrails) — input check timeout and attempts |
 | `WithErrorControl(cfg)` | [Error Control](/features/error-control) |
 
 ## Observability

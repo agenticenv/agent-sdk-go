@@ -5,6 +5,7 @@ package base
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/agenticenv/agent-sdk-go/internal/hooks"
 	"github.com/agenticenv/agent-sdk-go/internal/runtime"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
+	"github.com/agenticenv/agent-sdk-go/pkg/guardrail"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
 	"github.com/agenticenv/agent-sdk-go/pkg/memory"
@@ -183,6 +185,26 @@ func emitEvent(fn func(events.AgentEvent), ev events.AgentEvent) {
 	}
 }
 
+// recordLLMCallOutcome records latency and either completed or failed for one LLM call.
+// A guardrail deny counts as completed and includes token histograms when the provider
+// reported usage. Any other error counts as failed and does not record tokens.
+func (rt *Runtime) recordLLMCallOutcome(ctx context.Context, latencyMs float64, usage *interfaces.LLMUsage, modelAttr, providerAttr interfaces.Attribute, err error) {
+	if rt.Metrics == nil {
+		return
+	}
+	rt.Metrics.RecordHistogram(ctx, types.MetricLLMLatencyMs, latencyMs, modelAttr, providerAttr)
+	if err != nil && !errors.Is(err, types.ErrGuardrailBlocked) {
+		rt.Metrics.IncrementCounter(ctx, types.MetricLLMCallFailed, modelAttr, providerAttr)
+		return
+	}
+	rt.Metrics.IncrementCounter(ctx, types.MetricLLMCallCompleted, modelAttr, providerAttr)
+	if usage == nil {
+		return
+	}
+	rt.Metrics.RecordHistogram(ctx, types.MetricLLMTokensInput, float64(usage.PromptTokens), modelAttr, providerAttr)
+	rt.Metrics.RecordHistogram(ctx, types.MetricLLMTokensOutput, float64(usage.CompletionTokens), modelAttr, providerAttr)
+}
+
 // ExecuteLLM calls the LLM in non-streaming mode, records metrics and traces, emits
 // TEXT_MESSAGE_START / TEXT_MESSAGE_CONTENT / TEXT_MESSAGE_END events, and returns LLMResult.
 // messageID and agentName are used only for event construction; emit may be nil.
@@ -217,22 +239,17 @@ func (rt *Runtime) ExecuteLLM(ctx context.Context, input ExecuteLLMInput) (*LLMR
 	if err != nil {
 		sp.RecordError(err)
 		sp.End()
-		rt.Metrics.IncrementCounter(ctx, types.MetricLLMCallFailed, modelAttr, providerAttr)
-		rt.Metrics.RecordHistogram(ctx, types.MetricLLMLatencyMs, llmLatency, modelAttr, providerAttr)
+		rt.recordLLMCallOutcome(ctx, llmLatency, nil, modelAttr, providerAttr, err)
 		return nil, err
 	}
 	sp.End()
 
 	if err := rt.runAfterLLMResponse(ctx, input, resp); err != nil {
+		rt.recordLLMCallOutcome(ctx, llmLatency, resp.Usage, modelAttr, providerAttr, err)
 		return nil, err
 	}
 
-	rt.Metrics.RecordHistogram(ctx, types.MetricLLMLatencyMs, llmLatency, modelAttr, providerAttr)
-	rt.Metrics.IncrementCounter(ctx, types.MetricLLMCallCompleted, modelAttr, providerAttr)
-	if resp.Usage != nil {
-		rt.Metrics.RecordHistogram(ctx, types.MetricLLMTokensInput, float64(resp.Usage.PromptTokens), modelAttr, providerAttr)
-		rt.Metrics.RecordHistogram(ctx, types.MetricLLMTokensOutput, float64(resp.Usage.CompletionTokens), modelAttr, providerAttr)
-	}
+	rt.recordLLMCallOutcome(ctx, llmLatency, resp.Usage, modelAttr, providerAttr, nil)
 
 	input.Logger.Debug(ctx, "runtime: LLM generate completed", slog.String("scope", "runtime"), slog.Int("messageCount", len(input.Messages)))
 
@@ -310,23 +327,18 @@ func (rt *Runtime) ExecuteLLMStream(ctx context.Context, input ExecuteLLMInput) 
 		llmLatency := float64(time.Since(llmStart).Milliseconds())
 		if err != nil {
 			sp.RecordError(err)
-			rt.Metrics.IncrementCounter(ctx, types.MetricLLMCallFailed, modelAttr, providerAttr)
-			rt.Metrics.RecordHistogram(ctx, types.MetricLLMLatencyMs, llmLatency, modelAttr, providerAttr)
+			rt.recordLLMCallOutcome(ctx, llmLatency, nil, modelAttr, providerAttr, err)
 			return nil, err
 		}
 		if err := rt.runAfterLLMResponse(ctx, input, resp); err != nil {
-			sp.RecordError(err)
-			rt.Metrics.IncrementCounter(ctx, types.MetricLLMCallFailed, modelAttr, providerAttr)
-			rt.Metrics.RecordHistogram(ctx, types.MetricLLMLatencyMs, llmLatency, modelAttr, providerAttr)
+			if !errors.Is(err, types.ErrGuardrailBlocked) {
+				sp.RecordError(err)
+			}
+			rt.recordLLMCallOutcome(ctx, llmLatency, resp.Usage, modelAttr, providerAttr, err)
 			return nil, err
 		}
 		result := rt.llmResponseToResult(ctx, input.Logger, resp, input.Tools)
-		rt.Metrics.RecordHistogram(ctx, types.MetricLLMLatencyMs, llmLatency, modelAttr, providerAttr)
-		rt.Metrics.IncrementCounter(ctx, types.MetricLLMCallCompleted, modelAttr, providerAttr)
-		if resp.Usage != nil {
-			rt.Metrics.RecordHistogram(ctx, types.MetricLLMTokensInput, float64(resp.Usage.PromptTokens), modelAttr, providerAttr)
-			rt.Metrics.RecordHistogram(ctx, types.MetricLLMTokensOutput, float64(resp.Usage.CompletionTokens), modelAttr, providerAttr)
-		}
+		rt.recordLLMCallOutcome(ctx, llmLatency, resp.Usage, modelAttr, providerAttr, nil)
 		finalizeAssistantText(result)
 		return result, nil
 	}
@@ -334,8 +346,7 @@ func (rt *Runtime) ExecuteLLMStream(ctx context.Context, input ExecuteLLMInput) 
 	stream, err := llmClient.GenerateStream(ctx, req)
 	if err != nil {
 		sp.RecordError(err)
-		rt.Metrics.IncrementCounter(ctx, types.MetricLLMCallFailed, modelAttr, providerAttr)
-		rt.Metrics.RecordHistogram(ctx, types.MetricLLMLatencyMs, float64(time.Since(llmStart).Milliseconds()), modelAttr, providerAttr)
+		rt.recordLLMCallOutcome(ctx, float64(time.Since(llmStart).Milliseconds()), nil, modelAttr, providerAttr, err)
 		return nil, err
 	}
 
@@ -365,12 +376,13 @@ func (rt *Runtime) ExecuteLLMStream(ctx context.Context, input ExecuteLLMInput) 
 		reasoningMsgOpen = true
 	}
 
+	holdText := rt.HasGuardrails(guardrail.StageOutput)
 	for stream.Next() {
 		chunk := stream.Current()
 		if chunk == nil {
 			continue
 		}
-		if chunk.ContentDelta != "" {
+		if chunk.ContentDelta != "" && !holdText {
 			flushReasoning()
 			openTextMsg()
 			emitEvent(input.Emit, events.NewAgentTextMessageContentEvent(input.MessageID, chunk.ContentDelta))
@@ -385,8 +397,7 @@ func (rt *Runtime) ExecuteLLMStream(ctx context.Context, input ExecuteLLMInput) 
 	llmLatency := float64(time.Since(llmStart).Milliseconds())
 	if err := stream.Err(); err != nil {
 		sp.RecordError(err)
-		rt.Metrics.IncrementCounter(ctx, types.MetricLLMCallFailed, modelAttr, providerAttr)
-		rt.Metrics.RecordHistogram(ctx, types.MetricLLMLatencyMs, llmLatency, modelAttr, providerAttr)
+		rt.recordLLMCallOutcome(ctx, llmLatency, nil, modelAttr, providerAttr, err)
 		return nil, err
 	}
 
@@ -394,26 +405,21 @@ func (rt *Runtime) ExecuteLLMStream(ctx context.Context, input ExecuteLLMInput) 
 	if resp == nil {
 		err := fmt.Errorf("stream completed without result")
 		sp.RecordError(err)
-		rt.Metrics.IncrementCounter(ctx, types.MetricLLMCallFailed, modelAttr, providerAttr)
-		rt.Metrics.RecordHistogram(ctx, types.MetricLLMLatencyMs, llmLatency, modelAttr, providerAttr)
+		rt.recordLLMCallOutcome(ctx, llmLatency, nil, modelAttr, providerAttr, err)
 		return nil, err
 	}
 
 	if err := rt.runAfterLLMResponse(ctx, input, resp); err != nil {
-		sp.RecordError(err)
-		rt.Metrics.IncrementCounter(ctx, types.MetricLLMCallFailed, modelAttr, providerAttr)
-		rt.Metrics.RecordHistogram(ctx, types.MetricLLMLatencyMs, llmLatency, modelAttr, providerAttr)
+		if !errors.Is(err, types.ErrGuardrailBlocked) {
+			sp.RecordError(err)
+		}
+		rt.recordLLMCallOutcome(ctx, llmLatency, resp.Usage, modelAttr, providerAttr, err)
 		return nil, err
 	}
 
 	result := rt.llmResponseToResult(ctx, input.Logger, resp, input.Tools)
 
-	rt.Metrics.RecordHistogram(ctx, types.MetricLLMLatencyMs, llmLatency, modelAttr, providerAttr)
-	rt.Metrics.IncrementCounter(ctx, types.MetricLLMCallCompleted, modelAttr, providerAttr)
-	if resp.Usage != nil {
-		rt.Metrics.RecordHistogram(ctx, types.MetricLLMTokensInput, float64(resp.Usage.PromptTokens), modelAttr, providerAttr)
-		rt.Metrics.RecordHistogram(ctx, types.MetricLLMTokensOutput, float64(resp.Usage.CompletionTokens), modelAttr, providerAttr)
-	}
+	rt.recordLLMCallOutcome(ctx, llmLatency, resp.Usage, modelAttr, providerAttr, nil)
 
 	input.Logger.Debug(ctx, "runtime: LLM stream completed", slog.String("scope", "runtime"))
 	finalizeAssistantText(result)

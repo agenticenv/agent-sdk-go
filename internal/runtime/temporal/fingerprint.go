@@ -59,6 +59,12 @@ type AgentFingerprintPayload struct {
 	// Omitted when empty. Must match pkg/agent [hookGroupsFingerprint] on caller and worker.
 	HooksFingerprint string `json:"hooks_fingerprint,omitempty"`
 
+	// GuardrailsFingerprint is the pkg/agent digest of guardrail names and stages in
+	// registration order. Omitted when empty. Must match pkg/agent [guardrailsFingerprint]
+	// on caller and worker. The starter and the worker must register the same guardrails
+	// in the same order; the check bodies are not part of the digest.
+	GuardrailsFingerprint string `json:"guardrails_fingerprint,omitempty"`
+
 	// NamedLLMFingerprint is the pkg/agent digest of WithNamedLLMClients names plus each
 	// client's model/provider. Omitted when empty. Must match pkg/agent [namedLLMClientsFingerprint]
 	// on caller and worker.
@@ -119,6 +125,7 @@ func BuildAgentFingerprintPayload(
 	hooksFingerprint string,
 	namedLLMFingerprint string,
 	errorControlFingerprint string,
+	guardrailsFingerprint string,
 ) AgentFingerprintPayload {
 	names := append([]string(nil), toolNames...)
 	sort.Strings(names)
@@ -145,6 +152,7 @@ func BuildAgentFingerprintPayload(
 		HooksFingerprint:         hooksFingerprint,
 		NamedLLMFingerprint:      namedLLMFingerprint,
 		ErrorControlFingerprint:  errorControlFingerprint,
+		GuardrailsFingerprint:    guardrailsFingerprint,
 		Sampling:                 cloneLLMSampling(sampling),
 		SessionSize:              sessionSize,
 		MaxIterations:            limits.MaxIterations,
@@ -235,6 +243,7 @@ func computeAgentFingerprintFromRuntime(rt *TemporalRuntime, tools []interfaces.
 		rt.hooksFingerprint,
 		rt.namedLLMFingerprint,
 		rt.errorControlFingerprint,
+		rt.guardrailsFingerprint,
 	)
 	return ComputeAgentFingerprint(mat)
 }

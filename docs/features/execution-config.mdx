@@ -31,8 +31,11 @@ At runtime the SDK merges your overrides onto the defaults and produces a fully 
 | Memory recall / store | `WithMemoryExecutionConfig` | 5 min | 3 |
 | Conversation persist | `WithConversationExecutionConfig` | 30 s | 1 |
 | Sub-agent delegation | `WithSubAgentExecutionConfig` | *(agent run timeout)* | 1 |
+| Input guardrail | `WithGuardrailExecutionConfig` | 5 min | 3 |
 
 Sub-agent timeout has no fixed SDK default — when no override is set and the resolved timeout is still zero, the **agent run timeout** (`WithTimeout`) is used as the ceiling.
+
+Output guardrails run inside the model call and use `WithLLMExecutionConfig`. See [Guardrails](/features/guardrails).
 
 ## Retry backoff
 

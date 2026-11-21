@@ -85,6 +85,7 @@ When `WithObservabilityConfig` enables traces, any `WithTracer` value is **repla
 | `a2a.execute` | A2A server executor per request |
 | `llm.generate` | Sync LLM call |
 | `llm.stream` | Streaming LLM call |
+| `guardrail.evaluate` | One guardrail check. The checked text is not recorded |
 | `tool.execute` | Tool execution |
 | `tool.authorize` | Programmatic tool authorization |
 | `retriever.search` | Retriever search (prefetch or agentic) |
@@ -112,6 +113,9 @@ Spans and metrics share attribute keys where applicable:
 | `memory.kind` | Memory store/recall spans |
 | `memory.dedup` | Dedup lookup spans |
 | `query` | Memory recall spans |
+| `guardrail` | Guardrail name. The checked text is not an attribute |
+| `guardrail.stage` | `input` or `output` |
+| `guardrail.action` | `allow`, `deny`, `modify`, or `error` |
 
 ## Temporal workflow traces
 

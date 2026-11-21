@@ -70,6 +70,7 @@
               "features/budget",
               "features/reasoning",
               "features/hooks",
+              "features/guardrails",
               "features/error-control",
               "features/ag-ui-protocol"
             ]
@@ -177,6 +178,7 @@
             "pages": [
               "examples/observability",
               "examples/hooks",
+              "examples/guardrails",
               "examples/logs"
             ]
           },

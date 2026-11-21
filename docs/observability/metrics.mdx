@@ -73,11 +73,17 @@ Emitted per LLM call, tool execution, retriever search, and memory operation on 
 | Metric | Kind | Description |
 |---|---|---|
 | `agent.llm.call.started` | counter | LLM call started |
-| `agent.llm.call.completed` | counter | LLM call succeeded |
+| `agent.llm.call.completed` | counter | LLM call returned. An output guardrail deny still counts as completed |
 | `agent.llm.call.failed` | counter | LLM call failed |
 | `agent.llm.latency_ms` | histogram | LLM wall-clock time in ms |
 | `agent.llm.tokens.input` | histogram | Prompt tokens when provider reports usage |
 | `agent.llm.tokens.output` | histogram | Completion tokens when provider reports usage |
+
+### Guardrails
+
+| Metric | Kind | Description |
+|---|---|---|
+| `agent.guardrail.evaluated` | counter | One sample per guardrail check. Attributes: `guardrail` (name), `guardrail.stage` (`input` or `output`), `guardrail.action` (`allow`, `deny`, `modify`, or `error`). The checked text is not recorded |
 
 ### Tools
 
@@ -122,6 +128,9 @@ Runtime metrics include attributes when available:
 | `retriever` | Retriever name |
 | `memory.kind` | Memory record kind |
 | `memory.dedup` | Dedup decision metadata |
+| `guardrail` | Guardrail name |
+| `guardrail.stage` | `input` or `output` |
+| `guardrail.action` | `allow`, `deny`, `modify`, or `error` |
 
 ## Export to Prometheus
 

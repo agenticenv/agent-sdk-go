@@ -177,6 +177,8 @@ func mapInvocationError(err error) error {
 		return fmt.Errorf("%w: %v", types.ErrBudgetExceeded, err)
 	case strings.Contains(msg, types.ErrBudgetApprovalUnavailable.Error()):
 		return fmt.Errorf("%w: %v", types.ErrBudgetApprovalUnavailable, err)
+	case strings.Contains(msg, types.ErrGuardrailBlocked.Error()):
+		return types.RestoreGuardrailBlocked(err)
 	}
 	return err
 }
