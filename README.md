@@ -30,10 +30,12 @@
 - **Streaming & AG-UI** — partial token streaming; AG-UI protocol for frontend integration
 - **Reasoning** — extended thinking on Anthropic, Gemini, DeepSeek, and OpenAI reasoning models
 - **Token usage** — aggregate prompt, completion, and reasoning token counts per run
-- **Budget control** — cap token spend per run; stop execution or require human-in-the-loop approval when the limits are reached
+- **Budget control** — cap token and cost spend per run; stop execution or require human-in-the-loop approval when limits are reached
 - **Lifecycle hooks** — middleware at LLM, tool, retrieval, and memory lifecycle points
+- **Guardrails** — built-in and custom input/output checks to redact sensitive content or block unsafe prompts and responses
+- **Action policy** — govern every tool call (allow, deny, modify, step up, or defer) with signed, verifiable audit receipts
 - **Error control** — fallback LLM after a classified failure, one extra-iteration grant, per-tool circuit breaker
-- **Model selection** — send a run, or each model call, to a named client you registered
+- **Model selection** — dynamically route runs or individual LLM calls across registered providers and models
 - **Execution config** — per-operation timeouts and max attempts via `With*ExecutionConfig`
 - **Durable execution** — crash-resilient runs on every runtime; reconnect to active runs and resume event streams after a restart
 - **Distributed execution** — with Temporal, decouple client triggers from worker execution across processes; with Restate, scale via registered endpoint deployments

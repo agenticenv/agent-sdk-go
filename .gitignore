@@ -37,3 +37,10 @@ eval-harness/deepeval/.venv/
 eval-harness/deepeval/.pytest_cache/
 eval-harness/deepeval/.deepeval/
 eval-harness/deepeval/__pycache__/
+
+# Local scratchpad / audit notes
+notes/
+
+
+# Local engineering notes & backlogs
+notes/
