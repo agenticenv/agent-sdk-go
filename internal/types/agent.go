@@ -45,8 +45,24 @@ type AgentRunResult struct {
 	// Usage acts as the historical root for aggregated token counters.
 	LLMUsage *LLMUsage `json:"llm_usage,omitempty"`
 
+	// Actions summarizes the action-policy ledger for this run.
+	// Nil when the agent has no action policy.
+	Actions *ActionSummary `json:"actions,omitempty"`
+
 	// Telemetry contains the strongly typed nested metrics domain payload.
 	Telemetry *AgentTelemetry `json:"telemetry,omitempty"`
+}
+
+// ActionSummary is the ledger head and counts for one run that used an action policy.
+// Labels are the session labels at the end of the run, including labels inherited from
+// a parent and labels returned by a delegated child.
+type ActionSummary struct {
+	SessionID  string   `json:"sessionId,omitempty"`
+	LedgerHead string   `json:"ledgerHead,omitempty"`
+	Count      int      `json:"count,omitempty"`
+	Denied     int      `json:"denied,omitempty"`
+	Deferred   int      `json:"deferred,omitempty"`
+	Labels     []string `json:"labels,omitempty"`
 }
 
 // AgentMode distinguishes how the agent is driven: human-in-the-loop versus self-directed runs.

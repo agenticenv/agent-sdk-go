@@ -70,6 +70,7 @@ func (f *RuntimeFactory) Build(params *agentruntime.RuntimeParams, remoteWorker 
 		WithRetrieverFingerprint(params.RetrieverFingerprint),
 		WithHooksFingerprint(params.HooksFingerprint),
 		WithGuardrailsFingerprint(params.GuardrailsFingerprint),
+		WithActionPolicyFingerprint(params.ActionPolicyFingerprint),
 		WithNamedLLMFingerprint(params.NamedLLMFingerprint),
 		WithErrorControlFingerprint(params.ErrorControlFingerprint),
 		WithDisableLocalWorker(params.DisableLocalWorker),

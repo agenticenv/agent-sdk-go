@@ -37,7 +37,7 @@ func agentConfigFingerprintTools(c *agentConfig, tools []interfaces.Tool) string
 	if c.conversationConfig != nil {
 		convSize = c.conversationConfig.Size
 	}
-	return temporal.ComputeAgentFingerprint(temporal.BuildAgentFingerprintPayload(
+	mat := temporal.BuildAgentFingerprintPayload(
 		c.runtimeAgentSpec(),
 		temporal.ToolNamesFromTools(tools),
 		toolPolicyFingerprint(c.toolApprovalPolicy),
@@ -59,7 +59,9 @@ func agentConfigFingerprintTools(c *agentConfig, tools []interfaces.Tool) string
 		namedLLMClientsFingerprint(c.namedLLMClients),
 		errorControlFingerprint(c.errorControl),
 		guardrailsFingerprint(c.guardrails),
-	))
+	)
+	mat.ActionPolicyFingerprint = actionPolicyFingerprint(c.actionPolicy)
+	return temporal.ComputeAgentFingerprint(mat)
 }
 
 func TestBuildAgentConfig_NeitherTemporalConfigNorClient_UsesLocalRuntime(t *testing.T) {

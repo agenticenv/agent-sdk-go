@@ -13,6 +13,7 @@ import (
 	sdkruntime "github.com/agenticenv/agent-sdk-go/internal/runtime"
 	"github.com/agenticenv/agent-sdk-go/internal/runtime/base"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
+	"github.com/agenticenv/agent-sdk-go/pkg/actionpolicy"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
 	durable "github.com/agenticenv/durable-go"
@@ -54,6 +55,8 @@ type durableRunInput struct {
 	// the same order on a fresh tracker reproduces the exact same running totals — no
 	// separate tracker-state persistence is needed. See base.BudgetTracker.
 	Budget *types.BudgetConfig `json:"budget,omitempty"`
+	// Requester is the caller captured before the run started.
+	Requester actionpolicy.Requester `json:"requester,omitempty"`
 }
 
 // durableRunOutput is the JSON DTO durable-go persists to output.json on completion.
@@ -64,6 +67,7 @@ type durableRunOutput struct {
 	AgentName string                `json:"agent_name"`
 	Model     string                `json:"model"`
 	Metadata  map[string]any        `json:"metadata,omitempty"`
+	Actions   *types.ActionSummary  `json:"actions,omitempty"`
 }
 
 // liveRunExtras holds the non-JSON-serializable per-run wiring for a run started in this
@@ -234,6 +238,7 @@ func (rt *LocalRuntime) durableExec(ctx context.Context, s *durable.StepRunner, 
 		stepRunner:        s,
 		stepPrefix:        "",
 		budgetApprovalSeq: &seq,
+		Action:            base.ActionRunContext{Requester: in.Requester},
 	})
 	if err != nil {
 		return durableRunOutput{}, err
@@ -246,6 +251,7 @@ func (rt *LocalRuntime) durableExec(ctx context.Context, s *durable.StepRunner, 
 		AgentName: rt.AgentSpec.Name,
 		Model:     rt.AgentConfig.LLM.Client.GetModel(),
 		Metadata:  map[string]any{},
+		Actions:   loopResult.Actions,
 	}, nil
 }
 
@@ -301,6 +307,7 @@ func (rt *LocalRuntime) driveDurableRun(runCtx context.Context, dto durableRunIn
 		RunID:     handle.id,
 		LLMUsage:  out.LLMUsage,
 		Telemetry: out.Telemetry,
+		Actions:   out.Actions,
 	}, nil)
 }
 
@@ -380,6 +387,7 @@ func (rt *LocalRuntime) driveDurableStream(runCtx context.Context, dto durableRu
 		RunID:     handle.id,
 		LLMUsage:  out.LLMUsage,
 		Telemetry: out.Telemetry,
+		Actions:   out.Actions,
 	}
 	rt.publishLifecycleEvent(channel, events.NewAgentRunFinishedEvent(threadID, handle.id, result))
 	handle.markDone(result, nil)

@@ -16,7 +16,9 @@ import (
 
 	"github.com/agenticenv/agent-sdk-go/internal/events"
 	sdkruntime "github.com/agenticenv/agent-sdk-go/internal/runtime"
+	"github.com/agenticenv/agent-sdk-go/internal/runtime/base"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
+	"github.com/agenticenv/agent-sdk-go/pkg/actionpolicy"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/google/uuid"
 	restatesdk "github.com/restatedev/sdk-go"
@@ -336,16 +338,35 @@ func (rt *RestateRuntime) approve(ctx context.Context, approvalToken string, sta
 		return fmt.Errorf("restate: invalid approval status %q", status)
 	}
 	approvalToken = strings.TrimSpace(approvalToken)
-	if approvalToken == "" {
-		return fmt.Errorf("restate: empty approval token")
+	if _, ok := base.ActionTokenRaw(approvalToken); ok {
+		return rt.resolve(ctx, approvalToken, types.ActionResolution{Status: status, Method: actionpolicy.MethodHuman})
 	}
-
 	payload, err := json.Marshal(status)
 	if err != nil {
 		return fmt.Errorf("restate: marshal approval status: %w", err)
 	}
+	return rt.postAwakeable(ctx, approvalToken, payload)
+}
+
+// resolve completes an action-policy pause. The awakeable id is the token without the prefix.
+func (rt *RestateRuntime) resolve(ctx context.Context, approvalToken string, resolution types.ActionResolution) error {
+	raw, ok := base.ActionTokenRaw(strings.TrimSpace(approvalToken))
+	if !ok {
+		return fmt.Errorf("restate: action resolution requires an action-policy token")
+	}
+	payload, err := json.Marshal(resolution)
+	if err != nil {
+		return fmt.Errorf("restate: marshal action resolution: %w", err)
+	}
+	return rt.postAwakeable(ctx, raw, payload)
+}
+
+func (rt *RestateRuntime) postAwakeable(ctx context.Context, awakeableID string, payload []byte) error {
+	if awakeableID == "" {
+		return fmt.Errorf("restate: empty approval token")
+	}
 	resolveURL := strings.TrimRight(rt.config.Ingress.URL, "/") +
-		"/restate/awakeables/" + url.PathEscape(approvalToken) + "/resolve"
+		"/restate/awakeables/" + url.PathEscape(awakeableID) + "/resolve"
 
 	resp, body, err := rt.doIngressHTTP(ctx, func(attemptCtx context.Context) (*http.Request, error) {
 		req, err := http.NewRequestWithContext(attemptCtx, http.MethodPost, resolveURL, bytes.NewReader(payload))
@@ -361,7 +382,6 @@ func (rt *RestateRuntime) approve(ctx context.Context, approvalToken string, sta
 	if err != nil {
 		return fmt.Errorf("restate: resolve awakeable: %w", err)
 	}
-
 	switch resp.StatusCode {
 	case http.StatusOK, http.StatusAccepted, http.StatusNoContent:
 		return nil
@@ -369,7 +389,7 @@ func (rt *RestateRuntime) approve(ctx context.Context, approvalToken string, sta
 		return types.ErrApprovalAlreadyResolved
 	default:
 		return fmt.Errorf("restate: resolve awakeable %q: status %d: %s",
-			approvalToken, resp.StatusCode, strings.TrimSpace(string(body)))
+			awakeableID, resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 }
 

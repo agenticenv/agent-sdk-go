@@ -121,6 +121,12 @@ func WithGuardrailsFingerprint(fp string) Option {
 	return func(rt *TemporalRuntime) { rt.guardrailsFingerprint = fp }
 }
 
+// WithActionPolicyFingerprint sets the action-policy digest used with [ComputeAgentFingerprint].
+// Must match pkg/agent actionPolicyFingerprint for the same WithActionPolicy wiring.
+func WithActionPolicyFingerprint(fp string) Option {
+	return func(rt *TemporalRuntime) { rt.actionPolicyFingerprint = fp }
+}
+
 // WithNamedLLMFingerprint sets the named LLM clients digest used with [ComputeAgentFingerprint].
 // Must match pkg/agent [namedLLMClientsFingerprint] for the same WithNamedLLMClients wiring.
 func WithNamedLLMFingerprint(fp string) Option {

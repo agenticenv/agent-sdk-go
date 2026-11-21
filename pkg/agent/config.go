@@ -17,6 +17,7 @@ import (
 	"github.com/agenticenv/agent-sdk-go/internal/runtime"
 	"github.com/agenticenv/agent-sdk-go/internal/runtime/local"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
+	"github.com/agenticenv/agent-sdk-go/pkg/actionpolicy"
 	agentruntime "github.com/agenticenv/agent-sdk-go/pkg/agent/runtime"
 	"github.com/agenticenv/agent-sdk-go/pkg/conversation"
 	"github.com/agenticenv/agent-sdk-go/pkg/guardrail"
@@ -187,7 +188,7 @@ type ObservabilityConfig struct {
 //     WithLLMExecutionConfig, WithToolAuthExecutionConfig, WithToolExecutionConfig, WithMCPExecutionConfig, WithA2AExecutionConfig,
 //     WithRetrieverExecutionConfig, WithMemoryExecutionConfig, WithConversationExecutionConfig, WithSubAgentExecutionConfig,
 //     WithObservabilityConfig, WithTracer, WithMetrics, WithLogs, WithHooks,
-//     WithGuardrail, WithGuardrailExecutionConfig,
+//     WithGuardrail, WithGuardrailExecutionConfig, WithActionPolicy, WithActionPolicyExecutionConfig,
 //     WithNamedLLMClients, WithErrorControl
 //
 // When [WithObservabilityConfig] is set and a signal is not disabled, [buildAgentConfig] replaces
@@ -276,6 +277,8 @@ type agentConfig struct {
 	// Hooks: named middleware hook groups for the agent execution lifecycle.
 	hooks      []hooks.HookGroup
 	guardrails []guardrail.Guardrail
+	// actionPolicy is nil when the agent does not sign tool calls.
+	actionPolicy *actionpolicy.Config
 
 	// errorControl is optional error-control wiring (hooks, FallbackLLMClient, circuit breaker). Nil = disabled.
 	errorControl *ErrorControlConfig
@@ -767,6 +770,21 @@ func WithGuardrail(gs ...guardrail.Guardrail) Option {
 	}
 }
 
+// WithActionPolicy signs a decision before every tool call and an outcome after it.
+// Agents without this option keep the existing tool path. Applies to Agent and AgentWorker.
+// On Temporal, the starter and the worker must use the same policy id, version, hash, agent id, and key id.
+func WithActionPolicy(cfg actionpolicy.Config) Option {
+	return func(c *agentConfig) {
+		c.actionPolicy = &cfg
+	}
+}
+
+// WithActionPolicyExecutionConfig overrides timeout and max attempts for action-policy checks.
+// Zero fields keep the SDK default (Timeout: 1m, MaxAttempts: 3).
+func WithActionPolicyExecutionConfig(cfg ExecutionConfig) Option {
+	return func(c *agentConfig) { c.executionConfigs.ActionPolicy = cfg }
+}
+
 // otlpLogsClientConfigured reports whether logs holds a concrete OTLP [*observability.Logs] client
 // (built by the SDK or injected after [observability.NewLogs]), before [DefaultNoopLogs] fallback.
 func otlpLogsClientConfigured(logs interfaces.Logs) bool {
@@ -823,6 +841,9 @@ func buildAgentConfig(opts []Option) (*agentConfig, error) {
 		return nil, err
 	}
 	if err := c.validateGuardrails(); err != nil {
+		return nil, err
+	}
+	if err := c.validateActionPolicy(); err != nil {
 		return nil, err
 	}
 	// Runtime factory validation: only when the caller opts in via
@@ -1188,6 +1209,9 @@ func validateSubAgentRegistry(c *agentConfig, reg SubAgentRegistry) error {
 			return fmt.Errorf("duplicate sub-agent %q in WithSubAgents", sa.Name)
 		}
 		seen[sa] = struct{}{}
+		if c.actionPolicy != nil && !agentHasActionPolicy(sa) {
+			return fmt.Errorf("WithActionPolicy: sub-agent %q has no action policy", sa.Name)
+		}
 		if sa.Name == c.Name {
 			return fmt.Errorf("sub-agent name %q must differ from root agent name", sa.Name)
 		}
@@ -1202,7 +1226,7 @@ func validateSubAgentRegistry(c *agentConfig, reg SubAgentRegistry) error {
 	}
 	for _, s := range agents {
 		path := map[*Agent]struct{}{s: {}}
-		if err := dfsSubAgentDepth(s, path, 1, maxDepth); err != nil {
+		if err := dfsSubAgentDepth(s, path, 1, maxDepth, c.actionPolicy != nil); err != nil {
 			return err
 		}
 	}
@@ -1286,7 +1310,7 @@ func (c *agentConfig) resolveSubAgentTools() ([]interfaces.Tool, error) {
 	return out, nil
 }
 
-func dfsSubAgentDepth(a *Agent, path map[*Agent]struct{}, depth, maxDepth int) error {
+func dfsSubAgentDepth(a *Agent, path map[*Agent]struct{}, depth, maxDepth int, requirePolicy bool) error {
 	if depth > maxDepth {
 		return fmt.Errorf("sub-agent depth exceeds max (%d): at %q", maxDepth, a.Name)
 	}
@@ -1297,16 +1321,23 @@ func dfsSubAgentDepth(a *Agent, path map[*Agent]struct{}, depth, maxDepth int) e
 		if child == nil {
 			return fmt.Errorf("sub-agent %q has a nil entry in sub-agent registry", a.Name)
 		}
+		if requirePolicy && !agentHasActionPolicy(child) {
+			return fmt.Errorf("WithActionPolicy: sub-agent %q has no action policy", child.Name)
+		}
 		if _, cycle := path[child]; cycle {
 			return fmt.Errorf("sub-agent cycle detected involving %q and %q", a.Name, child.Name)
 		}
 		path[child] = struct{}{}
-		if err := dfsSubAgentDepth(child, path, depth+1, maxDepth); err != nil {
+		if err := dfsSubAgentDepth(child, path, depth+1, maxDepth, requirePolicy); err != nil {
 			return err
 		}
 		delete(path, child)
 	}
 	return nil
+}
+
+func agentHasActionPolicy(a *Agent) bool {
+	return a != nil && a.actionPolicy != nil && a.actionPolicy.Policy != nil
 }
 
 // validateToolNames ensures tool names are unique across registry, MCP, A2A, retriever, and sub-agent tools.
@@ -1486,6 +1517,7 @@ func (c *agentConfig) runtimeAgentConfig() runtime.AgentConfig {
 		ExecutionConfigs: c.executionConfigs,
 		Hooks:            c.runtimeHookGroups(),
 		Guardrails:       c.runtimeGuardrails(),
+		ActionPolicy:     c.runtimeActionPolicy(),
 		ErrorControl:     c.errorControl,
 	}
 	if c.llmSampling != nil {
@@ -1508,6 +1540,24 @@ func (c *agentConfig) runtimeGuardrails() []guardrail.Guardrail {
 	out := make([]guardrail.Guardrail, len(c.guardrails))
 	copy(out, c.guardrails)
 	return out
+}
+
+func (c *agentConfig) runtimeActionPolicy() *actionpolicy.Config {
+	if c.actionPolicy == nil {
+		return nil
+	}
+	cfg := c.actionPolicy.Resolved()
+	return &cfg
+}
+
+func (c *agentConfig) validateActionPolicy() error {
+	if c.actionPolicy == nil {
+		return nil
+	}
+	if err := c.actionPolicy.Validate(); err != nil {
+		return fmt.Errorf("WithActionPolicy: %w", err)
+	}
+	return nil
 }
 
 // runtimeHookGroups copies configured hook groups onto the runtime view.
@@ -1689,6 +1739,47 @@ func guardrailsFingerprint(gs []guardrail.Guardrail) string {
 	}
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
+}
+
+// actionPolicyFingerprint hashes the policy identity and limits. Matcher code is not included.
+// Change the policy version when matcher behavior changes. Returns "" when no policy is set.
+func actionPolicyFingerprint(cfg *actionpolicy.Config) string {
+	if cfg == nil || cfg.Policy == nil || cfg.Signer == nil {
+		return ""
+	}
+	resolved := cfg.Resolved()
+	classifierID := ""
+	if resolved.Classifier != nil {
+		classifierID = resolved.Classifier.ID()
+	}
+	body := struct {
+		PolicyID        string `json:"policyId"`
+		Version         string `json:"version"`
+		Hash            string `json:"hash"`
+		AgentID         string `json:"agentId"`
+		KeyID           string `json:"keyId"`
+		Algorithm       string `json:"algorithm"`
+		ClassifierID    string `json:"classifierId,omitempty"`
+		DeferTimeout    int64  `json:"deferTimeoutNs"`
+		EvaluateTimeout int64  `json:"evaluateTimeoutNs"`
+		MaxDeferrals    int    `json:"maxDeferrals"`
+		ContextWindow   int    `json:"contextWindow"`
+		RequireVerified bool   `json:"requireVerified"`
+		HasSessionStore bool   `json:"hasSessionStore"`
+	}{
+		PolicyID: resolved.Policy.ID(), Version: resolved.Policy.Version(), Hash: resolved.Policy.Hash(),
+		AgentID: resolved.AgentID, KeyID: resolved.Signer.KeyID(), Algorithm: resolved.Signer.Algorithm(),
+		ClassifierID: classifierID, DeferTimeout: resolved.DeferTimeout.Nanoseconds(),
+		EvaluateTimeout: resolved.EvaluateTimeout.Nanoseconds(), MaxDeferrals: resolved.MaxDeferrals,
+		ContextWindow: resolved.ContextWindow, RequireVerified: resolved.RequireVerifiedIdentity,
+		HasSessionStore: resolved.SessionStore != nil,
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return ""
+	}
+	digest := sha256.Sum256(raw)
+	return hex.EncodeToString(digest[:])
 }
 
 type namedLLMFpShot struct {

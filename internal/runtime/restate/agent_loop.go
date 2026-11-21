@@ -13,6 +13,7 @@ import (
 	sdkruntime "github.com/agenticenv/agent-sdk-go/internal/runtime"
 	"github.com/agenticenv/agent-sdk-go/internal/runtime/base"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
+	"github.com/agenticenv/agent-sdk-go/pkg/actionpolicy"
 	"github.com/agenticenv/agent-sdk-go/pkg/guardrail"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/google/uuid"
@@ -91,6 +92,7 @@ type AgentLoopInput struct {
 	// circuitBreaker is the per-run tracker (not on the Restate wire). Persisted via durable Run steps.
 	circuitBreaker *base.CircuitBreaker
 	circuitNow     time.Time
+	actionLedger   *restateActionLedger
 }
 
 // AgentLoopResult is the outcome of a completed durable agent run.
@@ -99,6 +101,7 @@ type AgentLoopResult struct {
 	Content   string
 	LLMUsage  *interfaces.LLMUsage
 	Telemetry *types.AgentTelemetry
+	Actions   *types.ActionSummary
 }
 
 // toolResult holds the output of a single tool execution step.
@@ -262,6 +265,7 @@ func (s AgentLoop) handle(ctx restatesdk.Context, req AgentLoopRequest) (*AgentL
 			RunID:     req.RunID,
 			LLMUsage:  result.LLMUsage,
 			Telemetry: result.Telemetry,
+			Actions:   result.Actions,
 		},
 	}, nil
 }
@@ -278,7 +282,7 @@ func (rt *RestateRuntime) validateAgentName(agentName string) error {
 
 // isApplicationLoopError reports errors that finish the run (do not retry).
 func isApplicationLoopError(err error) bool {
-	return errors.Is(err, types.ErrBudgetExceeded) || errors.Is(err, types.ErrBudgetApprovalUnavailable) || errors.Is(err, types.ErrGuardrailBlocked)
+	return errors.Is(err, types.ErrBudgetExceeded) || errors.Is(err, types.ErrBudgetApprovalUnavailable) || errors.Is(err, types.ErrGuardrailBlocked) || errors.Is(err, types.ErrActionPolicyUnavailable) || errors.Is(err, actionpolicy.ErrSessionConflict)
 }
 
 // terminalLoopError marks application-complete failures as Restate terminal so
@@ -295,6 +299,10 @@ func terminalLoopError(err error) error {
 		return fmt.Errorf("%w: %w", types.ErrBudgetApprovalUnavailable, restatesdk.ToTerminalError(err))
 	case errors.Is(err, types.ErrGuardrailBlocked):
 		return fmt.Errorf("%w: %w", types.ErrGuardrailBlocked, restatesdk.ToTerminalError(err))
+	case errors.Is(err, types.ErrActionPolicyUnavailable):
+		return fmt.Errorf("%w: %w", types.ErrActionPolicyUnavailable, restatesdk.ToTerminalError(err))
+	case errors.Is(err, actionpolicy.ErrSessionConflict):
+		return fmt.Errorf("%w: %w", actionpolicy.ErrSessionConflict, restatesdk.ToTerminalError(err))
 	}
 	return err
 }
@@ -555,9 +563,17 @@ func (rt *RestateRuntime) executeAgentLoop(ctx restatesdk.Context, input AgentLo
 		var toolResults []toolResult
 		switch toolExecMode {
 		case types.AgentToolExecutionModeParallel:
-			toolResults, err = rt.executeToolsParallel(ctx, input, messageID, iter, llmResult.ToolCalls, policies, emit)
+			if rt.HasActionPolicy() {
+				toolResults, err = rt.executeToolsWithActionPolicy(ctx, &input, messageID, iter, llmResult.ToolCalls, policies, emit)
+			} else {
+				toolResults, err = rt.executeToolsParallel(ctx, input, messageID, iter, llmResult.ToolCalls, policies, emit)
+			}
 		case types.AgentToolExecutionModeSequential:
-			toolResults, err = rt.executeToolsSequential(ctx, input, messageID, iter, llmResult.ToolCalls, policies, emit)
+			if rt.HasActionPolicy() {
+				toolResults, err = rt.executeToolsWithActionPolicy(ctx, &input, messageID, iter, llmResult.ToolCalls, policies, emit)
+			} else {
+				toolResults, err = rt.executeToolsSequential(ctx, input, messageID, iter, llmResult.ToolCalls, policies, emit)
+			}
 		default:
 			return nil, fmt.Errorf("invalid tool execution mode %q: use %q or %q",
 				toolExecMode, types.AgentToolExecutionModeParallel, types.AgentToolExecutionModeSequential)
@@ -640,7 +656,7 @@ func (rt *RestateRuntime) executeAgentLoop(ctx restatesdk.Context, input AgentLo
 		slog.String("model", model),
 		slog.Int("contentLen", len(lastContent)))
 
-	return &AgentLoopResult{Content: lastContent, LLMUsage: llmUsage, Telemetry: telemetry}, nil
+	return &AgentLoopResult{Content: lastContent, LLMUsage: llmUsage, Telemetry: telemetry, Actions: restateActionSummary(input)}, nil
 }
 
 // ─── LLM step ────────────────────────────────────────────────────────────────
@@ -743,7 +759,7 @@ func (rt *RestateRuntime) executeToolsSequential(
 
 	results := make([]toolResult, len(toolCalls))
 	for idx, tc := range toolCalls {
-		res, err := rt.executeSingleTool(ctx, input, messageID, iteration, tc, policies, emit)
+		res, err := rt.executeSingleTool(ctx, input, messageID, iteration, tc, policies, emit, nil)
 		if err != nil {
 			rt.logger.Info(ctx, "restate: sequential tool failed",
 				slog.String("scope", "loop"),
@@ -989,12 +1005,31 @@ func (rt *RestateRuntime) executeSingleTool(
 	tc base.ToolCallRequest,
 	policies sdkruntime.ExecutionPolicies,
 	emit func(events.AgentEvent),
+	verdict *base.ActionVerdict,
 ) (toolResult, error) {
 	emit(events.NewAgentToolCallStartEvent(tc.ToolCallID, tc.ToolName, messageID))
 	if argsJSON, err := json.Marshal(tc.Args); err == nil {
 		if s := string(argsJSON); s != "" && s != "null" && s != "{}" {
 			emit(events.NewAgentToolCallArgsEvent(tc.ToolCallID, s))
 		}
+	}
+
+	if verdict != nil && verdict.Result == actionpolicy.ResultDeny {
+		cause := verdict.Cause
+		if cause == "" {
+			cause = actionpolicy.CausePolicyDenied
+		}
+		content := base.ActionToolMessage(cause, verdict.Reason, "", tc.ToolName)
+		emitToolComplete(emit, messageID, tc.ToolCallID, content)
+		return toolResult{message: interfaces.Message{
+			Role: interfaces.MessageRoleTool, Content: content, ToolName: tc.ToolName, ToolCallID: tc.ToolCallID,
+		}}, nil
+	}
+	if verdict != nil && verdict.Result == actionpolicy.ResultModify && verdict.Args != nil {
+		tc.Args = verdict.Args
+	}
+	if verdict != nil && (verdict.Result == actionpolicy.ResultStepUp || verdict.Result == actionpolicy.ResultDefer) {
+		tc.NeedsApproval = true
 	}
 
 	if base.IsUnknownTool(tc, input.Tools) {

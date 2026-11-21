@@ -15,6 +15,7 @@ import (
 	agentrt "github.com/agenticenv/agent-sdk-go/internal/runtime"
 	"github.com/agenticenv/agent-sdk-go/internal/runtime/base"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
+	"github.com/agenticenv/agent-sdk-go/pkg/actionpolicy"
 	"github.com/agenticenv/agent-sdk-go/pkg/guardrail"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/google/uuid"
@@ -106,6 +107,13 @@ type AgentWorkflowState struct {
 	ExtraIterations int `json:"extra_iterations,omitempty"`
 	// CircuitBreaker is the per-tool same-args / A-B-A-B tracker across ContinueAsNew.
 	CircuitBreaker *base.CircuitBreakerState `json:"circuit_breaker,omitempty"`
+	// ActionSession is the policy ledger. It survives ContinueAsNew.
+	ActionSession    actionpolicy.SessionState `json:"action_session,omitempty"`
+	ActionLoadedHead string                    `json:"action_loaded_head,omitempty"`
+	ActionDeferrals  int                       `json:"action_deferrals,omitempty"`
+	ActionDenied     int                       `json:"action_denied,omitempty"`
+	ActionDeferred   int                       `json:"action_deferred,omitempty"`
+	ActionReady      bool                      `json:"action_ready,omitempty"`
 }
 
 // AgentRetrieverInput is the input to AgentRetrieverActivity.
@@ -249,6 +257,7 @@ type agentToolCallInput struct {
 	pendingApprovals    map[string]*pendingApproval // shared with AgentWorkflow; nil when not tracking
 	circuitBreaker      *base.CircuitBreaker
 	circuitNow          time.Time
+	verdict             *base.ActionVerdict
 }
 
 // agentToolCallOutput is the output of executeAgentToolCall.
@@ -722,6 +731,14 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 		messages = append(messages, assistantMsg)
 
 		var toolResults []agentToolResult
+		var actionVerdicts []base.ActionVerdict
+		if rt.HasActionPolicy() {
+			var gateErr error
+			actionVerdicts, gateErr = rt.gateActionBatch(ctx, &input, iter, llmResult.ToolCalls, policies, emitAgentEvent)
+			if gateErr != nil {
+				return nil, gateErr
+			}
+		}
 
 		toolExecMode := rt.ToolExecutionMode
 		if toolExecMode == "" {
@@ -759,6 +776,8 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 						parallelInput.pendingApprovals = pendingApprovals
 						parallelInput.circuitBreaker = circuitBreaker
 						parallelInput.circuitNow = circuitNow
+						parallelInput.verdict = actionVerdictAt(actionVerdicts, i)
+						tc = applyActionVerdict(tc, parallelInput.verdict)
 						toolOutput, runErr := rt.executeAgentToolCall(parallelInput, tc)
 						if runErr != nil {
 							gLog.Debug("workflow: parallel tool branch finished with error",
@@ -827,6 +846,8 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 				toolInput.circuitNow = circuitNow
 				toolResults = make([]agentToolResult, len(llmResult.ToolCalls))
 				for i, tc := range llmResult.ToolCalls {
+					toolInput.verdict = actionVerdictAt(actionVerdicts, i)
+					tc = applyActionVerdict(tc, toolInput.verdict)
 					logger.Debug("workflow: sequential tool executing",
 						"scope", "workflow",
 						"toolIndex", i,
@@ -866,6 +887,9 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 			}
 		default:
 			return nil, fmt.Errorf("invalid tool execution mode %q: use %q or %q", toolExecMode, types.AgentToolExecutionModeParallel, types.AgentToolExecutionModeSequential)
+		}
+		if err := rt.recordActionBatch(ctx, &input, iter, actionVerdicts, toolResults, policies); err != nil {
+			return nil, err
 		}
 
 		for i, result := range toolResults {
@@ -967,6 +991,12 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 				IterationsExtended:     iterationsExtended,
 				ExtraIterations:        extraGranted,
 				CircuitBreaker:         circuitBreakerStatePtr(circuitBreaker),
+				ActionSession:          input.State.ActionSession,
+				ActionLoadedHead:       input.State.ActionLoadedHead,
+				ActionDeferrals:        input.State.ActionDeferrals,
+				ActionDenied:           input.State.ActionDenied,
+				ActionDeferred:         input.State.ActionDeferred,
+				ActionReady:            input.State.ActionReady,
 			}
 			return nil, workflow.NewContinueAsNewError(ctx, rt.AgentWorkflow, input)
 		}
@@ -1015,6 +1045,7 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 		RunID:     input.RunID,
 		LLMUsage:  llmUsage,
 		Telemetry: telemetry,
+		Actions:   actionRunSummary(input),
 	}
 
 	return runResult, nil
@@ -1096,6 +1127,23 @@ func (rt *TemporalRuntime) executeAgentToolCall(input agentToolCallInput, tc Too
 				return nil, emitErr
 			}
 		}
+	}
+
+	if input.verdict != nil && input.verdict.Result == actionpolicy.ResultDeny {
+		cause := input.verdict.Cause
+		if cause == "" {
+			cause = actionpolicy.CausePolicyDenied
+		}
+		content := base.ActionToolMessage(cause, input.verdict.Reason, "", tc.ToolName)
+		if emitErr := emitToolEndThenResult(tc.ToolCallID, content); emitErr != nil {
+			return nil, emitErr
+		}
+		return &agentToolCallOutput{msg: interfaces.Message{
+			Role: interfaces.MessageRoleTool, Content: content, ToolName: tc.ToolName, ToolCallID: tc.ToolCallID,
+		}}, nil
+	}
+	if input.verdict != nil && input.verdict.Result == actionpolicy.ResultModify && input.verdict.Args != nil {
+		tc.Args = input.verdict.Args
 	}
 
 	if tc.Unknown {
@@ -1253,11 +1301,23 @@ func (rt *TemporalRuntime) executeAgentToolCall(input agentToolCallInput, tc Too
 			}
 		}
 	case types.ApprovalStatusRejected:
-		content = msgToolRejected
+		if input.verdict != nil && input.verdict.Result == actionpolicy.ResultDefer {
+			content = base.ActionToolMessage(actionpolicy.CauseDeferralRejected, input.verdict.Reason, "", tc.ToolName)
+		} else {
+			content = msgToolRejected
+		}
 	case types.ApprovalStatusUnavailable:
-		content = msgToolApprovalUnavailable
+		if input.verdict != nil && input.verdict.Result == actionpolicy.ResultDefer {
+			content = msgToolApprovalUnavailable
+		} else {
+			content = msgToolApprovalUnavailable
+		}
 	case types.ApprovalStatusTimedOut:
-		content = msgToolApprovalTimedOut
+		if input.verdict != nil && input.verdict.Result == actionpolicy.ResultDefer {
+			content = base.ActionToolMessage(actionpolicy.CauseDeferralTimeout, input.verdict.Reason, "", tc.ToolName)
+		} else {
+			content = msgToolApprovalTimedOut
+		}
 	default:
 		return nil, fmt.Errorf("workflow: unexpected approval status %q for tool %q", approvalStatus, tc.ToolName)
 	}

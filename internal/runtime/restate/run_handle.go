@@ -9,6 +9,7 @@ import (
 
 	sdkruntime "github.com/agenticenv/agent-sdk-go/internal/runtime"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
+	"github.com/agenticenv/agent-sdk-go/pkg/actionpolicy"
 	restateingress "github.com/restatedev/sdk-go/ingress"
 )
 
@@ -179,6 +180,12 @@ func mapInvocationError(err error) error {
 		return fmt.Errorf("%w: %v", types.ErrBudgetApprovalUnavailable, err)
 	case strings.Contains(msg, types.ErrGuardrailBlocked.Error()):
 		return types.RestoreGuardrailBlocked(err)
+	case strings.Contains(msg, types.ErrActionPolicyUnavailable.Error()):
+		return types.RestoreActionPolicyUnavailable(err)
+	case strings.Contains(msg, actionpolicy.ErrSessionConflict.Error()):
+		return actionpolicy.RestoreSessionConflict(err)
+	case strings.Contains(msg, types.ErrIdentityUnverified.Error()):
+		return types.RestoreIdentityUnverified(err)
 	}
 	return err
 }

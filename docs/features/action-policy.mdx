@@ -1,0 +1,121 @@
+---
+title: "Action policy"
+description: "Decide whether each tool call may run, and keep a signed record of that decision"
+---
+
+An action policy decides what happens to each tool call the model emits, and signs a record of the decision and the outcome. Register it with [`WithActionPolicy`](/getting-started/configuration). An agent without that option keeps today's tool path.
+
+Guardrails still check only text. They do not see tool arguments or tool results. See [Guardrails](/features/guardrails).
+
+## What is checked
+
+One action is one tool call from the model. That includes native tools, MCP tools, A2A tools, sub-agent delegation, retriever tools, and memory tools the model calls.
+
+The SDK does not treat its own memory recall, retriever prefetch, or model calls as actions.
+
+Each call is decided before authorization, approval, and execution. The model then sees a tool message for a call that did not run, and the run continues.
+
+| Decision | What you get |
+|---|---|
+| Allow | The call continues with the arguments the model produced |
+| Deny | The tool does not run. The model sees `Action denied by policy: <reason>` |
+| Modify | Authorization and execution use the replacement arguments. The assistant message keeps the model's arguments |
+| Step up | The run pauses once for approval, then continues only if that approval is granted |
+| Defer | The run pauses until something resolves the call. A person approving it does not cause a second approval pause |
+
+A policy error, a panic, a timeout, or a decision the SDK does not recognize becomes a deny. The run continues. A failure to sign or store the receipt stops the run with [`agent.ErrActionPolicyUnavailable`](https://pkg.go.dev/github.com/agenticenv/agent-sdk-go/pkg/agent#ErrActionPolicyUnavailable). There is no unsigned fallback.
+
+## Register
+
+```go
+pub, priv, err := ed25519.GenerateKey(rand.Reader)
+signer, err := actionpolicy.NewEd25519Signer("key-1", priv)
+
+policy, err := actionpolicy.NewRuleSet("payments", "1", actionpolicy.ResultDeny,
+    actionpolicy.Rule{
+        ID: "no-shell", Class: actionpolicy.ClassForbidden,
+        Match: actionpolicy.Tool("shell"),
+        Decision: actionpolicy.Deny("shell is not allowed"),
+    },
+    actionpolicy.Rule{
+        ID: "restricted-refund", Class: actionpolicy.ClassContextual, Priority: 10,
+        Match: actionpolicy.And(actionpolicy.Tool("refund"), actionpolicy.HasLabel("restricted")),
+        Decision: actionpolicy.StepUp("a person must approve a restricted refund"),
+    },
+)
+
+a, err := agent.NewAgent(
+    agent.WithLLMClient(llmClient),
+    agent.WithActionPolicy(actionpolicy.Config{
+        Policy:  policy,
+        AgentID: "payments-agent",
+        Signer:  signer,
+        Sink:    actionpolicy.NewJSONLSink(receiptFile),
+        Classifier: actionpolicy.NewClassifier("payments", actionpolicy.ClassifierConfig{
+            Tools: map[string][]string{"refund": {"customer"}},
+        }),
+    }),
+)
+```
+
+`NewRuleSet` takes the decision used when no rule matches. That default may be allow, deny, step up, or defer.
+
+Forbidden rules are checked first, in the order you declare them. A match is always a deny, using that rule's id and reason. Among the other rules, the highest priority wins. Two rules with the same priority and the same result use the earlier rule. Two rules with the same priority and different results defer the call.
+
+On Temporal, the starter and the worker must register the same policy id, version, hash, agent id, and signing key id. Change the version when you change what a rule matches. The hash covers the policy id, version, default, and each rule's id, class, priority, and result. It does not cover the matcher function.
+
+An agent that has a policy rejects a sub-agent, at any depth, that does not have one. A parent without a policy may still delegate to a child that has one.
+
+## Arguments and labels
+
+`actionpolicy.Tool`, `Kind`, `HasLabel`, `SessionHasLabel`, `PriorTool`, `PriorPending`, `RequesterHasRole`, and `Unverified` are the built-in matchers. `And`, `Or`, and `Not` combine them. `ArgType`, `ArgRange`, `ArgPattern`, `ArgIn`, and `ArgNotIn` match a dotted field of nested arguments.
+
+A missing argument path is treated as missing context and the call is deferred. A value of the wrong type does not match.
+
+A classifier adds labels. `Tools` maps a tool name to labels. A tool with no entry gets the unclassified labels, which default to `restricted`. `Patterns` add a label when the expression matches the arguments, and again when it matches the tool result. A classifier error does not deny the call.
+
+A `BeforeTool` or `BeforeRetrieve` hook that changes the arguments is checked again. The tool runs only when that second check allows it. The model sees `Action denied by policy on recheck: <reason>` otherwise.
+
+## Receipts
+
+The sink receives one signed decision before the tool runs and one signed outcome after. The run result does not contain those receipts. `AgentRunResult.Actions` is a summary: session id, ledger head, how many actions were recorded, how many were denied, how many were deferred, and the labels on the session.
+
+```go
+head, err := actionpolicy.VerifyLedger(receipts, actionpolicy.StaticKeys(map[string]crypto.PublicKey{
+    "key-1": pub,
+}))
+```
+
+`VerifyLedger` checks the signature, the hash chain, and that every decision has an outcome. `VerifyAction` checks one call's decision and outcome pair.
+
+Give the same conversation id on later runs and set `SessionStore` when a later run must continue the same ledger. Without a store, or without a conversation id, the session id is the run id and nothing is loaded or saved.
+
+## Identity and pauses
+
+`actionpolicy.WithRequester` attaches the caller to the context you pass to `Run` or `Stream`. The agent reads it once. An `IdentityVerifier` may replace that caller, including roles. The verifier's error fails the run before it starts, as [`agent.ErrIdentityUnverified`](https://pkg.go.dev/github.com/agenticenv/agent-sdk-go/pkg/agent#ErrIdentityUnverified). `RequireVerifiedIdentity` returns the same error when the caller is missing or `Verified` is false. A delegated run keeps the caller's identity and does not verify it again.
+
+A step up uses the approval you already handle with `AgentStream.Approve`. A deferral uses `AgentStream.Resolve`. `Approve` on a deferral token records a human decision. A deferral has its own timeout (`DeferTimeout`, or the approval timeout when that is zero) and a per-run limit (`MaxDeferrals`, default 8). A deferral past that limit is a deny and does not pause.
+
+## Errors
+
+```go
+if errors.Is(err, agent.ErrActionPolicyUnavailable) {
+    log.Printf("receipts unavailable: %v", err)
+}
+if errors.Is(err, agent.ErrSessionConflict) {
+    log.Printf("session changed elsewhere: %v", err)
+}
+```
+
+`errors.Is` matches these sentinels on the local, Temporal, and Restate runtimes. `ErrSessionConflict` means the stored ledger moved between the load and the save. It is not `ErrActionPolicyUnavailable`.
+
+## Requirements
+
+| | What you see |
+|---|---|
+| R1 | Every model tool call gets one decision and one outcome |
+| R2 | Allow, deny, modify, step up, and defer |
+| R3 | A deny continues the run. A signing or storage failure stops it |
+| R4 | Labels, identity, and prior calls are part of the decision |
+| R5 | Receipts are signed and can be verified |
+| R6 | A delegated run keeps the parent intent and returns its labels |

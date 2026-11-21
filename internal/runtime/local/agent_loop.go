@@ -16,6 +16,7 @@ import (
 	sdkruntime "github.com/agenticenv/agent-sdk-go/internal/runtime"
 	"github.com/agenticenv/agent-sdk-go/internal/runtime/base"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
+	"github.com/agenticenv/agent-sdk-go/pkg/actionpolicy"
 	"github.com/agenticenv/agent-sdk-go/pkg/guardrail"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
@@ -94,6 +95,11 @@ type AgentLoopInput struct {
 	// iteration counter advancing in between. Nil on the non-durable path. Shared by
 	// pointer so every recursion level draws from the same sequence.
 	budgetApprovalSeq *atomic.Int64
+
+	// Action is the caller and delegation context. Empty when the agent has no action policy.
+	Action base.ActionRunContext
+	// actionLedger is set by executeAgentLoop when a policy is configured.
+	actionLedger *actionLedger
 }
 
 // runStep wraps fn as a durable-go step when sr is non-nil, memoising fn's result under
@@ -125,11 +131,13 @@ type AgentLoopResult struct {
 	Content   string
 	LLMUsage  *interfaces.LLMUsage
 	Telemetry *types.AgentTelemetry
+	Actions   *types.ActionSummary
 }
 
 type toolResult struct {
-	message interfaces.Message
-	failed  bool // true: hard err, ExecuteTool err, or ctx cancel
+	message    interfaces.Message
+	failed     bool // true: hard err, ExecuteTool err, or ctx cancel
+	completion base.ActionCompletion
 }
 
 // publishEventToChannel marshals ev and publishes it on channelName via the runtime eventbus.
@@ -171,6 +179,9 @@ func (rt *LocalRuntime) executeAgentLoop(ctx context.Context, input AgentLoopInp
 
 	tools := input.Tools
 	policies := rt.executionPolicies()
+	if err := rt.loadActionLedger(ctx, &input); err != nil {
+		return nil, err
+	}
 
 	maxIter := base.EffectiveMaxIterations(rt.AgentConfig.Limits.MaxIterations)
 	originalMaxIter := maxIter
@@ -532,6 +543,7 @@ func (rt *LocalRuntime) executeAgentLoop(ctx context.Context, input AgentLoopInp
 		Content:   lastContent,
 		LLMUsage:  llmUsage,
 		Telemetry: telemetry,
+		Actions:   actionSummary(input),
 	}, nil
 }
 
@@ -556,13 +568,21 @@ func (rt *LocalRuntime) executeToolsParallel(
 		slog.Int("toolCount", len(toolCalls)))
 
 	results := make([]toolResult, len(toolCalls))
+	var verdicts []base.ActionVerdict
+	if input.actionLedger != nil {
+		var gateErr error
+		verdicts, gateErr = rt.gateActionCalls(ctx, input, iteration, toolCalls, fmt.Sprintf("%saction-gate-%d", input.stepPrefix, iteration), emit)
+		if gateErr != nil {
+			return nil, gateErr
+		}
+	}
 	var wg sync.WaitGroup
 
 	for i := range toolCalls {
 		wg.Add(1)
 		go func(idx int, tc base.ToolCallRequest) {
 			defer wg.Done()
-			result, err := rt.executeSingleTool(ctx, input, messageID, iteration, idx, tc, policies, emit)
+			result, err := rt.executeSingleTool(ctx, input, messageID, iteration, idx, tc, policies, emit, verdictAt(verdicts, idx))
 			if err != nil {
 				rt.logger.Info(ctx, "local: parallel tool failed",
 					slog.String("scope", "loop"),
@@ -581,7 +601,11 @@ func (rt *LocalRuntime) executeToolsParallel(
 		}(i, toolCalls[i])
 	}
 	wg.Wait()
-
+	if input.actionLedger != nil {
+		if err := rt.recordActionCalls(ctx, input, verdicts, results, fmt.Sprintf("%saction-record-%d", input.stepPrefix, iteration)); err != nil {
+			return nil, err
+		}
+	}
 	return results, nil
 }
 
@@ -602,7 +626,15 @@ func (rt *LocalRuntime) executeToolsSequential(
 
 	results := make([]toolResult, len(toolCalls))
 	for idx, tc := range toolCalls {
-		result, err := rt.executeSingleTool(ctx, input, messageID, iteration, idx, tc, policies, emit)
+		var verdict *base.ActionVerdict
+		if input.actionLedger != nil {
+			verdicts, gateErr := rt.gateActionCalls(ctx, input, iteration, []base.ToolCallRequest{tc}, fmt.Sprintf("%saction-gate-%d-%d", input.stepPrefix, iteration, idx), emit)
+			if gateErr != nil {
+				return nil, gateErr
+			}
+			verdict = verdictAt(verdicts, 0)
+		}
+		result, err := rt.executeSingleTool(ctx, input, messageID, iteration, idx, tc, policies, emit, verdict)
 		if err != nil {
 			rt.logger.Info(ctx, "local: sequential tool failed",
 				slog.String("scope", "loop"),
@@ -619,6 +651,11 @@ func (rt *LocalRuntime) executeToolsSequential(
 			result.failed = true
 		}
 		results[idx] = result
+		if input.actionLedger != nil && verdict != nil {
+			if err := rt.recordActionCalls(ctx, input, []base.ActionVerdict{*verdict}, []toolResult{result}, fmt.Sprintf("%saction-record-%d-%d", input.stepPrefix, iteration, idx)); err != nil {
+				return nil, err
+			}
+		}
 	}
 	return results, nil
 }
@@ -635,6 +672,7 @@ func (rt *LocalRuntime) executeSingleTool(
 	tc base.ToolCallRequest,
 	policies sdkruntime.ExecutionPolicies,
 	emit func(events.AgentEvent),
+	verdict *base.ActionVerdict,
 ) (toolResult, error) {
 	log := rt.logger
 	tools := input.Tools
@@ -653,6 +691,43 @@ func (rt *LocalRuntime) executeSingleTool(
 		if s != "" && s != "null" && s != "{}" {
 			emit(events.NewAgentToolCallArgsEvent(tc.ToolCallID, s))
 		}
+	}
+
+	if verdict != nil && verdict.Result == actionpolicy.ResultDeny {
+		if verdict.Cause == actionpolicy.CauseUnknownTool && !tc.Unknown {
+			rt.NoteUnknownTool(ctx, log, tc.ToolName)
+		}
+		cause := verdict.Cause
+		if cause == "" {
+			cause = actionpolicy.CausePolicyDenied
+		}
+		content := base.ActionToolMessage(cause, verdict.Reason, "", tc.ToolName)
+		emitToolEndThenResult(tc.ToolCallID, content)
+		return policyDeniedResult(verdict, tc, content, cause), nil
+	}
+	if verdict != nil && verdict.Result == actionpolicy.ResultDefer {
+		resolution, waitErr := rt.waitActionDeferral(ctx, input, iteration, idx, tc, verdict)
+		if waitErr != nil {
+			return toolResult{failed: true}, waitErr
+		}
+		if resolution.Status == types.ApprovalStatusApproved {
+			if base.HumanDeferralApproved(resolution) {
+				verdict.SkipApproval = true
+			}
+		} else {
+			cause, note := deferralCause(resolution)
+			content := base.ActionToolMessage(cause, verdict.Reason, note, tc.ToolName)
+			if cause == actionpolicy.CauseApprovalUnavailable {
+				content = msgToolApprovalUnavailable
+			}
+			emitToolEndThenResult(tc.ToolCallID, content)
+			done := policyDeniedResult(verdict, tc, content, cause)
+			done.completion.Deferral = &actionpolicy.ReceiptDeferral{Reason: verdict.Reason, Method: resolution.Method}
+			return done, nil
+		}
+	}
+	if verdict != nil && verdict.Result == actionpolicy.ResultModify && verdict.Args != nil {
+		tc.Args = verdict.Args
 	}
 
 	if base.IsUnknownTool(tc, tools) {
@@ -722,9 +797,14 @@ func (rt *LocalRuntime) executeSingleTool(
 	// Determine whether this tool call is a sub-agent delegation.
 	subAgentRoute, isSubAgent := input.SubAgentRoutes[tc.ToolName]
 
-	// Approval gate when required.
+	// Approval gate when the policy stepped up or the tool asks for approval.
+	// A deferral a person approved is not asked again.
 	approvalStatus := types.ApprovalStatusApproved
-	if tc.NeedsApproval {
+	needsPause := tc.NeedsApproval || (verdict != nil && verdict.Result == actionpolicy.ResultStepUp)
+	if verdict != nil && verdict.SkipApproval {
+		needsPause = false
+	}
+	if needsPause {
 		// No channel (non-streaming Execute) and no handler: skip approval.
 		if input.ChannelName == "" && input.ApprovalHandler == nil {
 			approvalStatus = types.ApprovalStatusUnavailable
@@ -875,6 +955,8 @@ func (rt *LocalRuntime) executeSingleTool(
 	}
 
 	var content string
+	var childCompletion base.ActionCompletion
+	var observed base.ActionObservation
 	failed := false
 	switch approvalStatus {
 	case types.ApprovalStatusApproved:
@@ -890,6 +972,14 @@ func (rt *LocalRuntime) executeSingleTool(
 					slog.Int("maxDepth", input.MaxSubAgentDepth),
 					slog.String("toolName", tc.ToolName))
 				content = fmt.Sprintf("Sub-agent delegation refused: maximum nesting depth (%d) reached.", input.MaxSubAgentDepth)
+				if verdict != nil {
+					childCompletion = base.ActionCompletion{
+						ToolCallID:   verdict.ToolCallID,
+						Status:       actionpolicy.OutcomeNotExecuted,
+						Cause:        actionpolicy.CauseDepthLimit,
+						ResultDigest: actionpolicy.DigestText(content),
+					}
+				}
 			} else if subAgentRoute.runtime != nil {
 				query := base.SubAgentQuery(tc.Args)
 				log.Info(ctx, "local: delegating to sub-agent",
@@ -899,6 +989,10 @@ func (rt *LocalRuntime) executeSingleTool(
 					slog.Int("depth", input.SubAgentDepth+1))
 				emit(events.NewAgentStepStartedEvent(delegationName))
 				subResult, execErr := executeWithPolicy(ctx, rt.subAgentExecutionPolicy(), func(attemptCtx context.Context) (*AgentLoopResult, error) {
+					agentID := ""
+					if rt.AgentConfig.ActionPolicy != nil {
+						agentID = rt.AgentConfig.ActionPolicy.AgentID
+					}
 					return subAgentRoute.runtime.executeAgentLoop(attemptCtx, AgentLoopInput{
 						UserPrompt:       query,
 						RunID:            uuid.New().String(),
@@ -913,6 +1007,7 @@ func (rt *LocalRuntime) executeSingleTool(
 						Tools:            subAgentRoute.tools,
 						BudgetTracker:    input.BudgetTracker,
 						EnforceBudget:    false,
+						Action:           childActionContext(input, agentID, rt.AgentSpec.Name, tc, query),
 						// A sub-agent has no durable.Task of its own — its LLM/tool calls
 						// become steps on the same parent run, sharing stepRunner but
 						// namespaced under a prefix unique to this delegation call site
@@ -939,6 +1034,15 @@ func (rt *LocalRuntime) executeSingleTool(
 				} else {
 					content = subResult.Content
 				}
+				if verdict != nil && subResult != nil && subResult.Actions != nil {
+					childCompletion = base.ActionCompletion{
+						ToolCallID:  verdict.ToolCallID,
+						ChildLabels: append([]string(nil), subResult.Actions.Labels...),
+						Child: &actionpolicy.ReceiptChild{
+							ID: subResult.Actions.SessionID, Head: subResult.Actions.LedgerHead, Count: subResult.Actions.Count,
+						},
+					}
+				}
 			} else {
 				content = "Sub-agent delegation not available for this runtime."
 			}
@@ -949,24 +1053,56 @@ func (rt *LocalRuntime) executeSingleTool(
 				slog.String("toolCallID", tc.ToolCallID))
 			toolPolicy := rt.toolExecutionPolicy(tc.ToolKind, policies)
 			toolStepID := fmt.Sprintf("%stool-exec-%d-%d", input.stepPrefix, iteration, idx)
-			result, execErr := runStep(ctx, input.stepRunner, toolStepID, func(stepCtx context.Context) (string, error) {
-				return executeWithPolicy(stepCtx, toolPolicy, func(attemptCtx context.Context) (string, error) {
-					return rt.ExecuteTool(attemptCtx, base.ExecuteToolInput{
-						Logger:     log,
-						Tools:      tools,
-						ToolName:   tc.ToolName,
-						Args:       tc.Args,
-						ToolCallID: tc.ToolCallID,
-						RunID:      input.RunID,
-						Iteration:  iteration,
-					}, input.MemoryScope)
+			if verdict != nil {
+				out, execErr := runStep(ctx, input.stepRunner, toolStepID, func(stepCtx context.Context) (actionToolOutput, error) {
+					return executeWithPolicy(stepCtx, toolPolicy, func(attemptCtx context.Context) (actionToolOutput, error) {
+						obs := rt.actionObservation(input, tc, iteration, verdict)
+						text, err := rt.ExecuteTool(attemptCtx, base.ExecuteToolInput{
+							Logger: log, Tools: tools, ToolName: tc.ToolName, Args: tc.Args,
+							ToolCallID: tc.ToolCallID, RunID: input.RunID, Iteration: iteration, Action: obs,
+						}, input.MemoryScope)
+						if err != nil {
+							return actionToolOutput{}, err
+						}
+						return actionToolOutput{
+							Content: text, Status: obs.Status, Cause: obs.Cause,
+							ResultDigest: obs.ResultDigest, DeliveredDigest: obs.DeliveredDigest,
+							ExecutedArgsDigest: obs.ExecutedArgsDigest, ResultLabels: obs.ResultLabels,
+							Recheck: obs.RecheckResult,
+						}, nil
+					})
 				})
-			})
-			if execErr != nil {
-				content = "Tool execution failed: " + execErr.Error()
-				failed = true
+				if execErr != nil {
+					content = "Tool execution failed: " + execErr.Error()
+					failed = true
+				} else {
+					content = out.Content
+					observed = base.ActionObservation{
+						Status: out.Status, Cause: out.Cause, ResultDigest: out.ResultDigest,
+						DeliveredDigest: out.DeliveredDigest, ExecutedArgsDigest: out.ExecutedArgsDigest,
+						ResultLabels: out.ResultLabels, RecheckResult: out.Recheck,
+					}
+				}
 			} else {
-				content = result
+				result, execErr := runStep(ctx, input.stepRunner, toolStepID, func(stepCtx context.Context) (string, error) {
+					return executeWithPolicy(stepCtx, toolPolicy, func(attemptCtx context.Context) (string, error) {
+						return rt.ExecuteTool(attemptCtx, base.ExecuteToolInput{
+							Logger:     log,
+							Tools:      tools,
+							ToolName:   tc.ToolName,
+							Args:       tc.Args,
+							ToolCallID: tc.ToolCallID,
+							RunID:      input.RunID,
+							Iteration:  iteration,
+						}, input.MemoryScope)
+					})
+				})
+				if execErr != nil {
+					content = "Tool execution failed: " + execErr.Error()
+					failed = true
+				} else {
+					content = result
+				}
 			}
 		}
 	case types.ApprovalStatusRejected:
@@ -981,15 +1117,43 @@ func (rt *LocalRuntime) executeSingleTool(
 	}
 
 	emitToolEndThenResult(tc.ToolCallID, content)
-	return toolResult{
+	done := toolResult{
 		message: interfaces.Message{
 			Role:       interfaces.MessageRoleTool,
 			Content:    content,
 			ToolName:   tc.ToolName,
 			ToolCallID: tc.ToolCallID,
 		},
-		failed: failed,
-	}, nil
+		failed:     failed,
+		completion: childCompletion,
+	}
+	if verdict != nil && done.completion.Status == "" {
+		status := actionpolicy.OutcomeExecuted
+		if failed {
+			status = actionpolicy.OutcomeFailed
+		}
+		if observed.Status != "" {
+			status = observed.Status
+		}
+		done.completion.ToolCallID = verdict.ToolCallID
+		done.completion.Status = status
+		done.completion.Cause = observed.Cause
+		done.completion.Recheck = observed.RecheckResult
+		done.completion.ResultLabels = observed.ResultLabels
+		done.completion.DeliveredDigest = observed.DeliveredDigest
+		done.completion.ExecutedArgsDigest = observed.ExecutedArgsDigest
+		if observed.ResultDigest != "" {
+			done.completion.ResultDigest = observed.ResultDigest
+		} else {
+			done.completion.ResultDigest = actionpolicy.DigestText(content)
+		}
+		if done.completion.ExecutedArgsDigest == "" {
+			if digest, digestErr := actionpolicy.DigestJSON(tc.Args); digestErr == nil {
+				done.completion.ExecutedArgsDigest = digest
+			}
+		}
+	}
+	return done, nil
 }
 
 // persistConversationMessages stores messages in the conversation store.

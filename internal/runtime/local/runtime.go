@@ -14,6 +14,7 @@ import (
 	sdkruntime "github.com/agenticenv/agent-sdk-go/internal/runtime"
 	"github.com/agenticenv/agent-sdk-go/internal/runtime/base"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
+	"github.com/agenticenv/agent-sdk-go/pkg/actionpolicy"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
 	durable "github.com/agenticenv/durable-go"
@@ -42,7 +43,8 @@ type LocalRuntime struct {
 	// StreamHandle.Approve (streaming path). Thread-safe: parallel tool calls each register
 	// their own token. Only used on the non-durable path — see pendingApprovals doc on
 	// approve() for how durable mode branches to durable.CompleteStep instead.
-	pendingApprovals sync.Map // key: string token, value: chan types.ApprovalStatus
+	pendingApprovals   sync.Map // key: string token, value: chan types.ApprovalStatus
+	pendingResolutions sync.Map // key: prefixed token, value: chan types.ActionResolution
 
 	// --- durable-go wiring (see durable_engine.go). Zero values (engine nil) behave
 	// exactly like the pre-durability runtime: Run/Stream/GetRunHandle/GetStreamHandle
@@ -248,6 +250,7 @@ func (rt *LocalRuntime) buildDurableRunInput(ctx context.Context, req *sdkruntim
 		MaxSubAgentDepth: req.MaxSubAgentDepth,
 		MemoryScope:      memoryScope,
 		Budget:           rt.AgentConfig.Limits.Budget,
+		Requester:        req.Requester,
 	}
 }
 
@@ -295,6 +298,7 @@ func (rt *LocalRuntime) driveRun(runCtx context.Context, req *sdkruntime.RunRequ
 		Tools:            req.Tools,
 		BudgetTracker:    budgetTracker,
 		EnforceBudget:    budgetTracker != nil,
+		Action:           base.ActionRunContext{Requester: req.Requester},
 	})
 	if err != nil {
 		rt.logger.Error(runCtx, "runtime run failed",
@@ -313,6 +317,7 @@ func (rt *LocalRuntime) driveRun(runCtx context.Context, req *sdkruntime.RunRequ
 		RunID:     handle.id,
 		LLMUsage:  loopResult.LLMUsage,
 		Telemetry: loopResult.Telemetry,
+		Actions:   loopResult.Actions,
 	}, nil)
 }
 
@@ -484,6 +489,7 @@ func (rt *LocalRuntime) driveStream(
 		Tools:            req.Tools,
 		BudgetTracker:    streamBudgetTracker,
 		EnforceBudget:    streamBudgetTracker != nil,
+		Action:           base.ActionRunContext{Requester: req.Requester},
 	})
 	if loopErr != nil {
 		rt.logger.Error(runCtx, "runtime stream run failed",
@@ -503,6 +509,7 @@ func (rt *LocalRuntime) driveStream(
 		RunID:     handle.id,
 		LLMUsage:  result.LLMUsage,
 		Telemetry: result.Telemetry,
+		Actions:   result.Actions,
 	}
 	rt.publishLifecycleEvent(channel, events.NewAgentRunFinishedEvent(threadID, handle.id, agentRunResult))
 	handle.markDone(agentRunResult, nil)
@@ -579,6 +586,9 @@ func (rt *LocalRuntime) GetStreamHandle(ctx context.Context, runID string) (sdkr
 // [types.ErrApprovalAlreadyResolved] when the token is unknown or was already resolved
 // (same sentinel as Temporal when CompleteActivity reports not found).
 func (rt *LocalRuntime) approve(ctx context.Context, approvalToken string, status types.ApprovalStatus) error {
+	if _, ok := base.ActionTokenRaw(approvalToken); ok {
+		return rt.resolve(ctx, approvalToken, types.ActionResolution{Status: status, Method: actionpolicy.MethodHuman})
+	}
 	if rt.engine != nil {
 		if err := durable.CompleteStep(ctx, rt.engine, approvalToken, status); err != nil {
 			if errors.Is(err, durable.ErrRunAlreadyFinished) || errors.Is(err, durable.ErrInvalidToken) {
@@ -594,6 +604,30 @@ func (rt *LocalRuntime) approve(ctx context.Context, approvalToken string, statu
 	}
 	ch := val.(chan types.ApprovalStatus)
 	ch <- status
+	return nil
+}
+
+// resolve completes an action-policy pause. The token keeps the ar1: prefix on the
+// non-durable path and is stripped before durable.CompleteStep.
+func (rt *LocalRuntime) resolve(ctx context.Context, approvalToken string, resolution types.ActionResolution) error {
+	raw, ok := base.ActionTokenRaw(approvalToken)
+	if !ok {
+		return fmt.Errorf("local: action resolution requires an action-policy token")
+	}
+	if rt.engine != nil {
+		if err := durable.CompleteStep(ctx, rt.engine, raw, resolution); err != nil {
+			if errors.Is(err, durable.ErrRunAlreadyFinished) || errors.Is(err, durable.ErrInvalidToken) {
+				return types.ErrApprovalAlreadyResolved
+			}
+			return err
+		}
+		return nil
+	}
+	val, found := rt.pendingResolutions.LoadAndDelete(approvalToken)
+	if !found {
+		return types.ErrApprovalAlreadyResolved
+	}
+	val.(chan types.ActionResolution) <- resolution
 	return nil
 }
 

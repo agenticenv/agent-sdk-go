@@ -16,6 +16,7 @@ import (
 	"github.com/agenticenv/agent-sdk-go/internal/runtime/base"
 	"github.com/agenticenv/agent-sdk-go/internal/store"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
+	"github.com/agenticenv/agent-sdk-go/pkg/actionpolicy"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
 	"github.com/google/uuid"
@@ -78,6 +79,7 @@ type TemporalRuntime struct {
 	retrieverFingerprint    string
 	hooksFingerprint        string
 	guardrailsFingerprint   string
+	actionPolicyFingerprint string
 	namedLLMFingerprint     string
 	errorControlFingerprint string
 
@@ -189,6 +191,9 @@ func (rt *TemporalRuntime) Start(ctx context.Context) error {
 	w.RegisterActivityWithOptions(rt.AgentToolApprovalActivity, activity.RegisterOptions{Name: "AgentToolApprovalActivity"})
 	w.RegisterActivityWithOptions(rt.AgentBudgetApprovalActivity, activity.RegisterOptions{Name: "AgentBudgetApprovalActivity"})
 	w.RegisterActivityWithOptions(rt.AgentToolExecuteActivity, activity.RegisterOptions{Name: "AgentToolExecuteActivity"})
+	w.RegisterActivityWithOptions(rt.AgentActionSessionActivity, activity.RegisterOptions{Name: "AgentActionSessionActivity"})
+	w.RegisterActivityWithOptions(rt.AgentActionGateActivity, activity.RegisterOptions{Name: "AgentActionGateActivity"})
+	w.RegisterActivityWithOptions(rt.AgentActionRecordActivity, activity.RegisterOptions{Name: "AgentActionRecordActivity"})
 	w.RegisterActivityWithOptions(rt.AgentWorkflowCleanupActivity, activity.RegisterOptions{Name: "AgentWorkflowCleanupActivity"})
 	// PublishStreamEventActivity: used by sub-agent workflows to forward events to the root WorkflowStream.
 	w.RegisterActivityWithOptions(rt.PublishStreamEventActivity, activity.RegisterOptions{Name: "PublishStreamEventActivity"})
@@ -340,14 +345,30 @@ func (rt *TemporalRuntime) Close() {
 // and the chosen status (e.g., [ApprovalStatusApproved] or [ApprovalStatusRejected]).
 // Returns [ErrApprovalAlreadyResolved] when the token was already completed.
 func (rt *TemporalRuntime) approve(ctx context.Context, approvalToken string, status types.ApprovalStatus) error {
+	if _, ok := base.ActionTokenRaw(approvalToken); ok {
+		return rt.resolve(ctx, approvalToken, types.ActionResolution{Status: status, Method: actionpolicy.MethodHuman})
+	}
 	if status != types.ApprovalStatusApproved && status != types.ApprovalStatusRejected {
 		return fmt.Errorf("invalid approval status: %s", status)
 	}
+	return rt.completeActivity(ctx, approvalToken, status)
+}
+
+// resolve completes an action-policy pause. The activity token is the base64 id without the prefix.
+func (rt *TemporalRuntime) resolve(ctx context.Context, approvalToken string, resolution types.ActionResolution) error {
+	raw, ok := base.ActionTokenRaw(approvalToken)
+	if !ok {
+		return fmt.Errorf("temporal: action resolution requires an action-policy token")
+	}
+	return rt.completeActivity(ctx, raw, resolution)
+}
+
+func (rt *TemporalRuntime) completeActivity(ctx context.Context, approvalToken string, result any) error {
 	taskToken, err := base64.StdEncoding.DecodeString(approvalToken)
 	if err != nil {
 		return fmt.Errorf("invalid approval token: %w", err)
 	}
-	if err := rt.temporalClient.CompleteActivity(ctx, taskToken, status, nil); err != nil {
+	if err := rt.temporalClient.CompleteActivity(ctx, taskToken, result, nil); err != nil {
 		if isNotFoundError(err) {
 			return types.ErrApprovalAlreadyResolved
 		}

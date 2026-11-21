@@ -16,6 +16,7 @@ import (
 	"github.com/agenticenv/agent-sdk-go/internal/hooks"
 	"github.com/agenticenv/agent-sdk-go/internal/runtime"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
+	"github.com/agenticenv/agent-sdk-go/pkg/actionpolicy"
 	"github.com/agenticenv/agent-sdk-go/pkg/guardrail"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
@@ -464,6 +465,10 @@ func (rt *Runtime) executeTool(ctx context.Context, input ExecuteToolInput) (str
 		args = hookedCall.Args
 	}
 
+	if msg, stop, err := noteRecheck(ctx, input.Action, toolName, args); err != nil || stop {
+		return msg, err
+	}
+
 	toolAttr := interfaces.Attribute{Key: types.MetricAttrTool, Value: toolName}
 	rt.Metrics.IncrementCounter(ctx, types.MetricToolCallStarted, toolAttr)
 	toolStart := time.Now()
@@ -491,6 +496,7 @@ func (rt *Runtime) executeTool(ctx context.Context, input ExecuteToolInput) (str
 		if execErr == nil {
 			content = fmt.Sprintf("%v", result)
 		}
+		raw := content
 		if runHooks {
 			var err error
 			content, execErr, err = rt.runAfterToolHooks(ctx, input, hookedCall, content, execErr)
@@ -500,6 +506,11 @@ func (rt *Runtime) executeTool(ctx context.Context, input ExecuteToolInput) (str
 				rt.Metrics.RecordHistogram(ctx, types.MetricToolLatencyMs, float64(time.Since(toolStart).Milliseconds()), toolAttr)
 				return "", err
 			}
+		}
+		if execErr == nil {
+			noteActionResult(ctx, rt, input.Action, actionpolicy.Action{
+				ID: input.ToolCallID, Tool: toolName, Kind: string(kind), Args: args,
+			}, raw, content, args)
 		}
 	}
 
@@ -543,6 +554,9 @@ func (rt *Runtime) executeRetrieverTool(ctx context.Context, input ExecuteToolIn
 	}
 
 	execArgs := map[string]any{types.RetrieverToolParamQuery: call.Query}
+	if msg, stop, err := noteRecheck(ctx, input.Action, tool.Name(), execArgs); err != nil || stop {
+		return msg, err
+	}
 	result, execErr := tool.Execute(ctx, execArgs)
 	if execErr != nil {
 		return "", execErr
@@ -552,6 +566,7 @@ func (rt *Runtime) executeRetrieverTool(ctx context.Context, input ExecuteToolIn
 	if !ok {
 		return "", fmt.Errorf("retriever tool: unexpected result type %T", result)
 	}
+	raw := FormatRetrieverDocs(docs)
 
 	docs, err = rt.runAfterRetrieveHooks(ctx, retrieveInput, call, docs)
 	if err != nil {
@@ -559,6 +574,9 @@ func (rt *Runtime) executeRetrieverTool(ctx context.Context, input ExecuteToolIn
 	}
 
 	content := FormatRetrieverDocs(docs)
+	noteActionResult(ctx, rt, input.Action, actionpolicy.Action{
+		ID: input.ToolCallID, Tool: tool.Name(), Kind: string(types.ToolKindRetriever), Args: execArgs,
+	}, raw, content, execArgs)
 	if content == "" {
 		input.Logger.Warn(ctx, "runtime: retriever returned no documents",
 			slog.String("scope", "runtime"),
