@@ -51,6 +51,8 @@ flowchart LR
 
 **Error control** — post-retry decisions: fallback LLM, extra iterations, and a per-tool circuit breaker. Separate from lifecycle hooks. See [Error Control](/features/error-control).
 
+**Model selection** — send a run, or each model call, to a named client you registered. See [Model Selection](/features/model-selection).
+
 ## Request lifecycle
 
 What happens from the moment your code calls `a.Run(ctx, prompt, nil)`:

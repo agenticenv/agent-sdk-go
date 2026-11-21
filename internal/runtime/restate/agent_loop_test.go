@@ -121,6 +121,66 @@ func (c *seqLLM) GetModel() string                    { return "seq" }
 func (c *seqLLM) GetProvider() interfaces.LLMProvider { return interfaces.LLMProviderOpenAI }
 func (c *seqLLM) IsStreamSupported() bool             { return false }
 
+func TestExecuteAgentLoop_ModelSelection(t *testing.T) {
+	primary := &seqLLM{responses: []*interfaces.LLMResponse{{Content: "primary"}}}
+	local := &seqLLM{responses: []*interfaces.LLMResponse{
+		{ToolCalls: []*interfaces.ToolCall{{ToolCallID: "c1", ToolName: "echo"}}},
+		{Content: "from local"},
+	}}
+	calls := 0
+	rt := testRestateRuntime("select-agent")
+	rt.AgentConfig.Limits.MaxIterations = 1
+	rt.AgentConfig.LLM.Client = primary
+	rt.AgentConfig.NamedLLMClients = map[string]interfaces.LLMClient{"local": local}
+	rt.AgentConfig.LLMSelector = &sdkruntime.LLMSelectorConfig{
+		Mode: sdkruntime.LLMSelectPerRun,
+		Select: func(context.Context, sdkruntime.LLMSelectInfo) (string, error) {
+			calls++
+			return "local", nil
+		},
+	}
+
+	ctx := mocks.NewMockContext(t)
+	ctx.EXPECT().Wrap(mock.Anything).Return(ctx).Maybe()
+	expectRunExecutes(ctx, 2).Once() // message-id
+	expectRunExecutes(ctx, 6).Once() // llm
+	expectRunExecutes(ctx, 2).Once() // max-iter
+	expectRunExecutes(ctx, 2).Once() // final message-id
+	expectRunExecutes(ctx, 6).Once() // final llm
+
+	result, err := rt.executeAgentLoop(restatesdk.WithMockContext(ctx), AgentLoopInput{
+		agentLoopCore: agentLoopCore{RunID: "run-1", UserPrompt: "hi"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "from local", result.Content)
+	require.Equal(t, 1, calls)
+	require.Equal(t, int64(2), result.Telemetry.Run.LLMCallsByClient["local"])
+
+	calls = 0
+	local.i = 0
+	rt.AgentConfig.LLMSelector.Mode = sdkruntime.LLMSelectPerCall
+	rt.AgentConfig.LLMSelector.Select = func(_ context.Context, info sdkruntime.LLMSelectInfo) (string, error) {
+		calls++
+		if info.FinalCall {
+			return "", nil
+		}
+		return "local", nil
+	}
+	ctx2 := mocks.NewMockContext(t)
+	ctx2.EXPECT().Wrap(mock.Anything).Return(ctx2).Maybe()
+	expectRunExecutes(ctx2, 2).Once()
+	expectRunExecutes(ctx2, 6).Once()
+	expectRunExecutes(ctx2, 2).Once()
+	expectRunExecutes(ctx2, 2).Once()
+	expectRunExecutes(ctx2, 6).Once()
+	perCall, err := rt.executeAgentLoop(restatesdk.WithMockContext(ctx2), AgentLoopInput{
+		agentLoopCore: agentLoopCore{RunID: "run-2", UserPrompt: "hi"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "primary", perCall.Content)
+	require.Equal(t, 2, calls)
+}
+
 func TestExecuteAgentLoop_SimpleText(t *testing.T) {
 	rt := testRestateRuntime("loop-agent")
 	rt.AgentConfig.Limits.MaxIterations = 3

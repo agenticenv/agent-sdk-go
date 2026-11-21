@@ -202,6 +202,13 @@ func (a *Agent) Run(ctx context.Context, input string, opts *AgentRunOptions) (A
 	if err != nil {
 		return nil, err
 	}
+	llmClient := ""
+	if opts != nil {
+		llmClient = opts.LLMClient
+	}
+	if err := a.validateLLMClientName(llmClient); err != nil {
+		return nil, err
+	}
 
 	start := time.Now()
 	ctx, sp := a.tracer.StartSpan(ctx, "agent.run",
@@ -212,6 +219,7 @@ func (a *Agent) Run(ctx context.Context, input string, opts *AgentRunOptions) (A
 	a.metrics.IncrementCounter(ctx, types.MetricRunStarted)
 
 	req := a.createRunRequest(input, conversationID, false, tools, subAgents, requester)
+	req.LLMClient = llmClient
 	rh, err := a.runtime.Run(ctx, req)
 	elapsed := float64(time.Since(start).Milliseconds())
 	if err != nil {
@@ -289,6 +297,16 @@ func (a *Agent) Stream(ctx context.Context, input string, opts *AgentStreamOptio
 	}
 
 	enableLLMStream := opts == nil || !opts.DisableTokenStreaming
+	llmClient := ""
+	if opts != nil {
+		llmClient = opts.LLMClient
+	}
+	if err := a.validateLLMClientName(llmClient); err != nil {
+		sp.RecordError(err)
+		a.metrics.IncrementCounter(ctx, types.MetricStreamFailed, interfaces.Attribute{Key: "error", Value: "llm_client_invalid"})
+		a.metrics.RecordHistogram(ctx, types.MetricStreamDurationMs, float64(time.Since(start).Milliseconds()))
+		return nil, err
+	}
 	requester, err := a.callerForRun(ctx)
 	if err != nil {
 		sp.RecordError(err)
@@ -297,6 +315,7 @@ func (a *Agent) Stream(ctx context.Context, input string, opts *AgentStreamOptio
 		return nil, err
 	}
 	req := a.createRunRequest(input, conversationID, enableLLMStream, tools, subAgents, requester)
+	req.LLMClient = llmClient
 	sh, err := a.runtime.Stream(ctx, req)
 	elapsed := float64(time.Since(start).Milliseconds())
 	if err != nil {
@@ -438,6 +457,17 @@ func conversationIDFromStreamOpts(opts *AgentStreamOptions) string {
 		return opts.ConversationOptions.ID
 	}
 	return ""
+}
+
+func (a *Agent) validateLLMClientName(name string) error {
+	if name == "" {
+		return nil
+	}
+	client, ok := a.namedLLMClients[name]
+	if !ok || client == nil {
+		return fmt.Errorf("LLMClient %q is not in WithNamedLLMClients", name)
+	}
+	return nil
 }
 
 func (a *Agent) validateConversationID(conversationID string) error {

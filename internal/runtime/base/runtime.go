@@ -48,8 +48,23 @@ type ExecuteLLMInput struct {
 	RetrieverContext string
 	Tools            []interfaces.Tool
 	Emit             func(events.AgentEvent)
-	// Client overrides AgentConfig.LLM.Client for this call (per-run fallback). Nil = primary.
+	// Client overrides AgentConfig.LLM.Client for this call (error-control fallback).
+	// A non-nil Client skips model selection.
 	Client interfaces.LLMClient
+	// LLMSelectionPinned keeps LLMClientName for this call and does not run the selector.
+	// Pinned with an empty LLMClientName selects the primary client.
+	LLMSelectionPinned bool
+	// LLMClientName is the pinned WithNamedLLMClients name. Empty with LLMSelectionPinned
+	// selects the primary. Ignored when Client is set or the call is not pinned.
+	LLMClientName string
+	// CurrentLLMClient is the name that answered the previous call. Empty means primary.
+	CurrentLLMClient string
+	// SubAgentDepth is the nesting depth of this run. Zero is a top-level run.
+	SubAgentDepth int
+	// RunUsage is token usage accumulated in this run before this call.
+	RunUsage *interfaces.LLMUsage
+	// FinalCall is the no-tools call after max iterations.
+	FinalCall bool
 }
 
 // BuildLLMRequest constructs an LLMRequest from the given messages and options.
@@ -179,6 +194,21 @@ func (rt *Runtime) NoteUnknownTool(ctx context.Context, log logger.Logger, toolN
 	}
 }
 
+// llmSpanAttrs are the shared llm.generate / llm.stream attributes.
+// llm.client is set only when the call does not use the primary client.
+func llmSpanAttrs(input ExecuteLLMInput, clientName string, messageCount int, modelAttr, providerAttr interfaces.Attribute) []interfaces.Attribute {
+	attrs := []interfaces.Attribute{
+		{Key: "agent.name", Value: strings.TrimSpace(input.AgentName)},
+		{Key: "message.count", Value: messageCount},
+		modelAttr,
+		providerAttr,
+	}
+	if clientName != "" {
+		attrs = append(attrs, interfaces.Attribute{Key: "llm.client", Value: clientName})
+	}
+	return attrs
+}
+
 // emitEvent calls fn safely; a nil fn is a no-op.
 func emitEvent(fn func(events.AgentEvent), ev events.AgentEvent) {
 	if fn != nil {
@@ -215,9 +245,9 @@ func (rt *Runtime) ExecuteLLM(ctx context.Context, input ExecuteLLMInput) (*LLMR
 		return nil, err
 	}
 
-	llmClient := input.Client
-	if llmClient == nil {
-		llmClient = rt.AgentConfig.LLM.Client
+	llmClient, clientName, err := rt.resolveLLMClientForCall(ctx, input, req)
+	if err != nil {
+		return nil, err
 	}
 	model := llmClient.GetModel()
 	provider := string(llmClient.GetProvider())
@@ -229,12 +259,7 @@ func (rt *Runtime) ExecuteLLM(ctx context.Context, input ExecuteLLMInput) (*LLMR
 	rt.Metrics.IncrementCounter(ctx, types.MetricLLMCallStarted, modelAttr, providerAttr)
 	llmStart := time.Now()
 
-	ctx, sp := rt.Tracer.StartSpan(ctx, "llm.generate",
-		interfaces.Attribute{Key: "agent.name", Value: strings.TrimSpace(input.AgentName)},
-		interfaces.Attribute{Key: "message.count", Value: len(input.Messages)},
-		modelAttr,
-		providerAttr,
-	)
+	ctx, sp := rt.Tracer.StartSpan(ctx, "llm.generate", llmSpanAttrs(input, clientName, len(input.Messages), modelAttr, providerAttr)...)
 	resp, err := llmClient.Generate(ctx, req)
 	llmLatency := float64(time.Since(llmStart).Milliseconds())
 	if err != nil {
@@ -255,6 +280,7 @@ func (rt *Runtime) ExecuteLLM(ctx context.Context, input ExecuteLLMInput) (*LLMR
 	input.Logger.Debug(ctx, "runtime: LLM generate completed", slog.String("scope", "runtime"), slog.Int("messageCount", len(input.Messages)))
 
 	result := rt.llmResponseToResult(ctx, input.Logger, resp, input.Tools)
+	result.LLMClientName = clientName
 
 	emitEvent(input.Emit, events.NewAgentTextMessageStartEvent(input.MessageID, string(interfaces.MessageRoleAssistant)))
 	emitEvent(input.Emit, events.NewAgentTextMessageContentEvent(input.MessageID, result.Content))
@@ -272,9 +298,9 @@ func (rt *Runtime) ExecuteLLMStream(ctx context.Context, input ExecuteLLMInput) 
 		return nil, err
 	}
 
-	llmClient := input.Client
-	if llmClient == nil {
-		llmClient = rt.AgentConfig.LLM.Client
+	llmClient, clientName, err := rt.resolveLLMClientForCall(ctx, input, req)
+	if err != nil {
+		return nil, err
 	}
 	model := llmClient.GetModel()
 	provider := string(llmClient.GetProvider())
@@ -285,13 +311,10 @@ func (rt *Runtime) ExecuteLLMStream(ctx context.Context, input ExecuteLLMInput) 
 	rt.Metrics.IncrementCounter(ctx, types.MetricLLMCallStarted, modelAttr, providerAttr)
 	llmStart := time.Now()
 
-	ctx, sp := rt.Tracer.StartSpan(ctx, "llm.stream",
-		interfaces.Attribute{Key: "agent.name", Value: strings.TrimSpace(input.AgentName)},
-		interfaces.Attribute{Key: "message.count", Value: len(input.Messages)},
+	ctx, sp := rt.Tracer.StartSpan(ctx, "llm.stream", append(
+		llmSpanAttrs(input, clientName, len(input.Messages), modelAttr, providerAttr),
 		interfaces.Attribute{Key: "streaming", Value: isStreamSupported},
-		modelAttr,
-		providerAttr,
-	)
+	)...)
 	defer sp.End()
 
 	// Helpers to track open/close state for text message and reasoning events.
@@ -339,6 +362,7 @@ func (rt *Runtime) ExecuteLLMStream(ctx context.Context, input ExecuteLLMInput) 
 			return nil, err
 		}
 		result := rt.llmResponseToResult(ctx, input.Logger, resp, input.Tools)
+		result.LLMClientName = clientName
 		rt.recordLLMCallOutcome(ctx, llmLatency, resp.Usage, modelAttr, providerAttr, nil)
 		finalizeAssistantText(result)
 		return result, nil
@@ -419,6 +443,7 @@ func (rt *Runtime) ExecuteLLMStream(ctx context.Context, input ExecuteLLMInput) 
 	}
 
 	result := rt.llmResponseToResult(ctx, input.Logger, resp, input.Tools)
+	result.LLMClientName = clientName
 
 	rt.recordLLMCallOutcome(ctx, llmLatency, resp.Usage, modelAttr, providerAttr, nil)
 

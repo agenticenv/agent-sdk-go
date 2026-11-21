@@ -7,6 +7,11 @@ type AgentRunOptions struct {
 	// ConversationOptions selects a conversation session for this call.
 	// Required when the agent was configured with WithConversation; must be nil otherwise.
 	ConversationOptions *ConversationOptions `json:"conversation_options,omitempty"`
+
+	// LLMClient is a WithNamedLLMClients name for this run.
+	// Empty keeps the agent's selector, or the primary client when no selector is set.
+	// An unknown name is rejected before the run starts. The name is not passed to sub-agents.
+	LLMClient string `json:"llm_client,omitempty"`
 }
 
 // AgentStreamOptions holds per-call options passed to [Agent.Stream].
@@ -21,6 +26,11 @@ type AgentStreamOptions struct {
 	// response rather than a token-by-token stream. All other AG-UI events (lifecycle,
 	// tool calls, CUSTOM events) are still emitted. Default false = stream tokens.
 	DisableTokenStreaming bool `json:"disable_token_streaming,omitempty"`
+
+	// LLMClient is a WithNamedLLMClients name for this run.
+	// Empty keeps the agent's selector, or the primary client when no selector is set.
+	// An unknown name is rejected before the run starts. The name is not passed to sub-agents.
+	LLMClient string `json:"llm_client,omitempty"`
 }
 
 // ConversationOptions identifies a conversation session for one call.

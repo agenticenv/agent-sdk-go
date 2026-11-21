@@ -196,6 +196,8 @@ type AgentConfig struct {
 	ActionPolicy       *actionpolicy.Config
 	NamedLLMClients    map[string]interfaces.LLMClient
 	ErrorControl       *types.ErrorControlConfig
+	// LLMSelector chooses a named client per run or per call. Nil means the primary client.
+	LLMSelector *LLMSelectorConfig
 }
 
 // AgentMemory holds long-term memory configuration for recall and store.
@@ -256,6 +258,8 @@ type RunRequest struct {
 
 	// Tools is the registry-resolved tool list for this run.
 	Tools []interfaces.Tool `json:"-"`
+	// LLMClient is a WithNamedLLMClients name for this run. Empty means the agent's selector or primary.
+	LLMClient string `json:"llm_client,omitempty"`
 }
 
 // ExecutionPolicy is the resolved runtime shape for one agent loop operation (local [executeWithPolicy] or Temporal activity).

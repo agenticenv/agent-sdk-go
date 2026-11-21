@@ -55,6 +55,7 @@ type RuntimeParams struct {
 	ActionPolicyFingerprint  string
 	NamedLLMFingerprint      string
 	ErrorControlFingerprint  string
+	LLMSelectorFingerprint   string
 	AgentMode                string
 	DisableLocalWorker       bool
 	DisableFingerprintCheck  bool

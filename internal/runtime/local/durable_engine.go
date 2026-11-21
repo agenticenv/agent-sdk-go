@@ -57,6 +57,8 @@ type durableRunInput struct {
 	Budget *types.BudgetConfig `json:"budget,omitempty"`
 	// Requester is the caller captured before the run started.
 	Requester actionpolicy.Requester `json:"requester,omitempty"`
+	// LLMClient is the per-run named client. Empty leaves the agent's selector or primary.
+	LLMClient string `json:"llm_client,omitempty"`
 }
 
 // durableRunOutput is the JSON DTO durable-go persists to output.json on completion.
@@ -235,6 +237,7 @@ func (rt *LocalRuntime) durableExec(ctx context.Context, s *durable.StepRunner, 
 		Tools:             tools,
 		BudgetTracker:     budgetTracker,
 		EnforceBudget:     budgetTracker != nil,
+		LLMClient:         in.LLMClient,
 		stepRunner:        s,
 		stepPrefix:        "",
 		budgetApprovalSeq: &seq,

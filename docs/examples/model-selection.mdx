@@ -1,0 +1,55 @@
+---
+title: "Model Selection"
+description: "Pick a named client for one run, or switch per model call"
+---
+
+Walks through [`WithLLMSelector`](/features/model-selection) and the per-run `LLMClient` option. Three stub clients, no provider key.
+
+Source: [`examples/agent_with_model_selection/`](https://github.com/agenticenv/agent-sdk-go/tree/main/examples/agent_with_model_selection)
+
+Set `AGENT_RUNTIME=temporal` or `restate` in `examples/.env` to exercise those runtimes. On Temporal, register the same named clients and the same selector mode on the worker.
+
+## What you will see
+
+| Scenario | What happens |
+|---|---|
+| This run | `LLMClient: "local"` sends the whole run to the local stub. The selector is not set. |
+| Sensitive prompt | The selector sees "ssn" in the request and keeps the local client for the run. |
+| Tool rounds | Per-call mode uses the cheap client until a tool result is in the request, then the primary client writes the answer. |
+
+## Run
+
+From `examples/`:
+
+```bash
+go run ./agent_with_model_selection
+```
+
+## Expected output
+
+```
+=== Scenario 1: this run uses the local client ===
+assistant: answered on the local model
+llm calls: local=1
+
+=== Scenario 2: sensitive prompts stay on the local client ===
+assistant: handled on the local model
+llm calls: local=1
+
+=== Scenario 3: cheap client for tool rounds, primary for the answer ===
+assistant: answered on the primary model
+llm calls: primary=1 cheap=1
+```
+
+`primary` in the counts is the empty name: the client from `WithLLMClient`.
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Model Selection" icon="sliders" href="/features/model-selection" horizontal>
+    Modes, precedence, and limits
+  </Card>
+  <Card title="Error Control" icon="shield-halved" href="/features/error-control" horizontal>
+    Fallback after a model failure still wins for the rest of the run
+  </Card>
+</CardGroup>

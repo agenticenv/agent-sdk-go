@@ -26,7 +26,8 @@ A Temporal or Restate connection is **optional**. Omit Temporal and Restate opti
 | `WithDescription(desc)` | Agent description — used in A2A agent card |
 | `WithSystemPrompt(prompt)` | System message prepended to every LLM call |
 | `WithLLMClient(client)` | LLM client — **required**. See [LLM Providers](/getting-started/llm-providers) |
-| `WithNamedLLMClients(clients)` | Extra LLM clients by name. See [Error Control](/features/error-control) |
+| `WithNamedLLMClients(clients)` | Extra LLM clients by name. See [Error Control](/features/error-control) and [Model Selection](/features/model-selection) |
+| `WithLLMSelector(cfg)` | Pick a named client per run or per call. See [Model Selection](/features/model-selection) |
 | `WithLLMSampling(s)` | Temperature, max tokens, top-p/top-k, reasoning. See [Reasoning](/features/reasoning) |
 | `WithResponseFormat(rf)` | Text or JSON schema output. See [Response Format](/features/response-format) |
 | `WithLogger(l)` | Custom structured logger |
@@ -139,6 +140,7 @@ Use the same `WithAgentToolExecutionMode` on `NewAgent`, `NewAgentWorker`, and a
 | `WithGuardrail(gs...)` | [Guardrails](/features/guardrails) |
 | `WithGuardrailExecutionConfig(cfg)` | [Guardrails](/features/guardrails) — input check timeout and attempts |
 | `WithErrorControl(cfg)` | [Error Control](/features/error-control) |
+| `WithLLMSelector(cfg)` | [Model Selection](/features/model-selection) |
 
 ## Observability
 
@@ -170,6 +172,8 @@ result, err := agentRun.Get(ctx)
 
 When conversation is enabled, pass the same `ID` on every call in a session to share history across turns.
 
+`LLMClient` on the same options sends that run to a [`WithNamedLLMClients`](/features/model-selection) name. An empty value leaves selection unchanged.
+
 ## Runtime registries
 
 After `NewAgent`, mutate registered capabilities without restarting. Each run picks up the current registry state:
@@ -185,7 +189,7 @@ See [Dynamic capabilities](/advanced/dynamic-capabilities).
 
 ## Agent and worker alignment
 
-When splitting client and worker across processes, `NewAgent` and `NewAgentWorker` must share identical configuration — the SDK validates this with a fingerprint check at activity entry (including named LLM clients and error-control slots). See [Distributed execution](/advanced/distributed-execution).
+When splitting client and worker across processes, `NewAgent` and `NewAgentWorker` must share identical configuration — the SDK validates this with a fingerprint check at activity entry (including named LLM clients, error-control slots, and whether a model selector is set and which mode). See [Distributed execution](/advanced/distributed-execution).
 
 ## Token usage
 

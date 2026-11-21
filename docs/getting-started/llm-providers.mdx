@@ -197,6 +197,10 @@ Field support varies by provider:
 
 See [Reasoning](/features/reasoning) for extended thinking configuration per provider.
 
+## More than one model
+
+Put a gateway behind `WithLLMClient` when you want one endpoint to load-balance, rotate keys, or fail over. Use [Model Selection](/features/model-selection) when this agent should choose among clients you registered with `WithNamedLLMClients`.
+
 ## Bring your own LLM client
 
 Implement [`interfaces.LLMClient`](https://pkg.go.dev/github.com/agenticenv/agent-sdk-go/pkg/interfaces#LLMClient) and pass your implementation to `WithLLMClient`.

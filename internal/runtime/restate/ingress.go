@@ -229,6 +229,7 @@ func (rt *RestateRuntime) sendAgentLoop(
 			MaxSubAgentDepth: req.MaxSubAgentDepth,
 			SubAgentRoutes:   buildSubAgentRoutes(req.SubAgents),
 			MemoryScope:      memoryScope,
+			LLMClient:        req.LLMClient,
 		},
 		AgentName:        strings.TrimSpace(rt.AgentSpec.Name),
 		LLMStreamEnabled: req.EnableLLMStream,

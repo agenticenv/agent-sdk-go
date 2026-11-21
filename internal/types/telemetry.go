@@ -47,6 +47,12 @@ type RunTelemetry struct {
 
 	// FinishReason explains how the run concluded. See FinishReason for possible values.
 	FinishReason FinishReason `json:"finish_reason"`
+
+	// LLMCallsByClient counts answered LLM calls by WithNamedLLMClients name.
+	// An empty key is the primary client. The map is set only when the agent has a
+	// model selector or the run passed LLMClient. Fallback calls count under the
+	// fallback name when the map is being filled.
+	LLMCallsByClient map[string]int64 `json:"llm_calls_by_client,omitempty"`
 }
 
 // ToolTelemetry tracks tool invocation counts and per-tool breakdowns across a single agent run.

@@ -147,6 +147,8 @@ cost = (prompt_tokens / 1_000_000 × PromptUSDPer1M) + (completion_tokens / 1_00
 
 The SDK does **not** include built-in provider price tables. Set the rates to match the model you are using. If a provider does not report token counts, `MaxCostUSD` will not trigger (use `MaxTokens` instead).
 
+Those rates are the only rates. When [model selection](/features/model-selection) sends calls to different models, `MaxCostUSD` is still computed from this one pair. `MaxTokens` stays an exact count.
+
 ## Validation
 
 `NewAgent` returns an error if `WithBudget` is misconfigured:

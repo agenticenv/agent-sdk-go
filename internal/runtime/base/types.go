@@ -18,6 +18,10 @@ type LLMResult struct {
 	Content   string
 	ToolCalls []ToolCallRequest
 	Usage     *interfaces.LLMUsage
+	// LLMClientName is the WithNamedLLMClients name that answered this call.
+	// Empty means the primary client. Journaled with the step result so a replay
+	// does not run the selector again.
+	LLMClientName string
 }
 
 // ToolCallRequest describes one tool call returned by the LLM.

@@ -73,6 +73,7 @@
               "features/guardrails",
               "features/action-policy",
               "features/error-control",
+              "features/model-selection",
               "features/ag-ui-protocol"
             ]
           },
@@ -145,7 +146,8 @@
             "pages": [
               "examples/execution-config",
               "examples/agent-with-budget",
-              "examples/error-control"
+              "examples/error-control",
+              "examples/model-selection"
             ]
           },
           {

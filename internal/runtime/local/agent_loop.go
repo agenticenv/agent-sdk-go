@@ -96,6 +96,10 @@ type AgentLoopInput struct {
 	// pointer so every recursion level draws from the same sequence.
 	budgetApprovalSeq *atomic.Int64
 
+	// LLMClient is a WithNamedLLMClients name for this run. Empty leaves selection to the
+	// agent's selector, or the primary client when no selector is set. Not copied to sub-agents.
+	LLMClient string
+
 	// Action is the caller and delegation context. Empty when the agent has no action policy.
 	Action base.ActionRunContext
 	// actionLedger is set by executeAgentLoop when a policy is configured.
@@ -186,6 +190,8 @@ func (rt *LocalRuntime) executeAgentLoop(ctx context.Context, input AgentLoopInp
 	maxIter := base.EffectiveMaxIterations(rt.AgentConfig.Limits.MaxIterations)
 	originalMaxIter := maxIter
 	useFallback := false
+	sel := base.NewLLMCallSelection(input.LLMClient)
+	trackClients := base.LLMSelectionActive(input.LLMClient, rt.AgentConfig.LLMSelector)
 	iterationsExtended := false
 	if input.circuitBreaker == nil {
 		input.circuitBreaker = base.NewCircuitBreaker(rt.AgentConfig.ErrorControl)
@@ -345,6 +351,7 @@ func (rt *LocalRuntime) executeAgentLoop(ctx context.Context, input AgentLoopInp
 			Tools:            tools,
 			Emit:             emit,
 		}
+		sel.Apply(&executeLLMInput, input.SubAgentDepth, llmUsage, false)
 		llmStepID := fmt.Sprintf("%sllm-%d", input.stepPrefix, iter)
 		llmResult, usedFB, err := rt.invokeLLMWithErrorControl(ctx, input, executeLLMInput, llmStepID, useFallback, policies, log)
 		if err != nil {
@@ -355,7 +362,9 @@ func (rt *LocalRuntime) executeAgentLoop(ctx context.Context, input AgentLoopInp
 		}
 
 		telemetry.Run.TotalLLMCalls++
+		base.NoteLLMClientCall(telemetry, trackClients, llmResult.LLMClientName)
 		llmUsage = base.MergeLLMUsage(llmUsage, llmResult.Usage)
+		sel = sel.After(rt.AgentConfig.LLMSelector, input.LLMClient, llmResult.LLMClientName)
 		if budgetErr := rt.checkBudget(ctx, input, telemetry, llmResult.Usage, iter, "llm"); budgetErr != nil {
 			return &AgentLoopResult{Content: lastContent, LLMUsage: llmUsage, Telemetry: telemetry}, budgetErr
 		}
@@ -412,11 +421,13 @@ func (rt *LocalRuntime) executeAgentLoop(ctx context.Context, input AgentLoopInp
 					Tools:            tools,
 					Emit:             emit,
 				}
+				sel.Apply(&executeLLMInput, input.SubAgentDepth, llmUsage, true)
 				finalLLMStepID := fmt.Sprintf("%sllm-final-%d", input.stepPrefix, iter)
 				llmResult, _, err = rt.invokeLLMWithErrorControl(ctx, input, executeLLMInput, finalLLMStepID, useFallback, policies, log)
 				if err != nil {
 					return nil, fmt.Errorf("llm final call (iter %d): %w", iter, err)
 				}
+				base.NoteLLMClientCall(telemetry, trackClients, llmResult.LLMClientName)
 				llmUsage = base.MergeLLMUsage(llmUsage, llmResult.Usage)
 				if budgetErr := rt.checkBudget(ctx, input, telemetry, llmResult.Usage, iter, "llm-final"); budgetErr != nil {
 					return &AgentLoopResult{Content: lastContent, LLMUsage: llmUsage, Telemetry: telemetry}, budgetErr
@@ -1296,7 +1307,7 @@ func (rt *LocalRuntime) invokeLLMWithErrorControl(
 	if err == nil {
 		return result, useFallback, nil
 	}
-	if errors.Is(err, types.ErrGuardrailBlocked) {
+	if errors.Is(err, types.ErrGuardrailBlocked) || base.IsLLMSelectAbort(err) {
 		return nil, useFallback, err
 	}
 	if useFallback {

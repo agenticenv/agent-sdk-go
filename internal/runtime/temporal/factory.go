@@ -73,6 +73,7 @@ func (f *RuntimeFactory) Build(params *agentruntime.RuntimeParams, remoteWorker 
 		WithActionPolicyFingerprint(params.ActionPolicyFingerprint),
 		WithNamedLLMFingerprint(params.NamedLLMFingerprint),
 		WithErrorControlFingerprint(params.ErrorControlFingerprint),
+		WithLLMSelectorFingerprint(params.LLMSelectorFingerprint),
 		WithDisableLocalWorker(params.DisableLocalWorker),
 		// Never allow fingerprint bypass on remote worker runtime.
 		WithDisableFingerprintCheck(params.DisableFingerprintCheck && !remoteWorker),

@@ -73,6 +73,8 @@ Built-in providers wrap Generate / stream errors as [`interfaces.LLMError`](http
 
 Retries from `WithLLMExecutionConfig` run first. Then `OnLLMFailure` can abort or switch models for **the rest of that run**. The shared primary client is not mutated. Fallback uses the same [`WithLLMSampling`](/getting-started/configuration) and [`WithResponseFormat`](/getting-started/configuration) as the agent.
 
+Fallback wins over [model selection](/features/model-selection) for the rest of the run. A selector error does not trigger fallback.
+
 On in-process and Restate, the fallback client is retried with the same LLM execution policy as the primary. On Temporal, fallback is one Generate/stream on the last LLM activity attempt. If that call fails, the activity fails and Temporal may retry from the primary (`OnLLMFailure` can run again).
 
 `context_exceeded` can FallbackModel (a model with a larger window) or Abort.
