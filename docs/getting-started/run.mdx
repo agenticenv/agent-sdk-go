@@ -33,6 +33,8 @@ fmt.Println(result.Content)
 
 Full walkthrough: [Quickstart](/getting-started/quickstart). Runnable example: [Simple Agent](/examples/simple-agent).
 
+To send this run to a named client, set `LLMClient` on [`AgentRunOptions`](https://pkg.go.dev/github.com/agenticenv/agent-sdk-go/pkg/agent#AgentRunOptions). An empty value does not override the agent. See [Model Selection](/features/model-selection).
+
 ## Non-blocking Run
 
 Wait on `Done()` (or multiplex with other work), poll `Status`, optionally `Cancel`, then `Get`:

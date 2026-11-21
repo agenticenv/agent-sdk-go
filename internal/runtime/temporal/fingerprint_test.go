@@ -253,3 +253,14 @@ func TestVerifyAgentFingerprint_usesPreFetchedTools(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestComputeAgentFingerprint_llmSelectorFingerprintChangesDigest(t *testing.T) {
+	spec := sdkruntime.AgentSpec{Name: "a", SystemPrompt: "p"}
+	lim := sdkruntime.AgentLimits{MaxIterations: 3}
+	empty := BuildAgentFingerprintPayload(spec, nil, "auto", nil, 0, lim, "", "", "", "", "", "", "", "", "", "")
+	withSel := empty
+	withSel.LLMSelectorFingerprint = "selector-set"
+	if ComputeAgentFingerprint(empty) == ComputeAgentFingerprint(withSel) {
+		t.Fatal("expected different digests when a model selector is set")
+	}
+}

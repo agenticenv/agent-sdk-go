@@ -54,6 +54,9 @@ type agentLoopCore struct {
 	SubAgentDepth    int                      `json:"sub_agent_depth,omitempty"`
 	SubAgentRoutes   map[string]SubAgentRoute `json:"sub_agent_routes,omitempty"`
 	MemoryScope      interfaces.MemoryScope   `json:"memory_scope,omitempty"`
+	// LLMClient is a WithNamedLLMClients name for this run. Empty leaves the agent's selector or primary.
+	// Not copied onto a delegated sub-agent.
+	LLMClient string `json:"llm_client,omitempty"`
 }
 
 // AgentLoopRequest is the JSON ingress payload for AgentLoop.Run and .Stream.
@@ -339,6 +342,8 @@ func (rt *RestateRuntime) executeAgentLoop(ctx restatesdk.Context, input AgentLo
 	maxIter := base.EffectiveMaxIterations(rt.AgentConfig.Limits.MaxIterations)
 	originalMaxIter := maxIter
 	useFallback := false
+	sel := base.NewLLMCallSelection(input.LLMClient)
+	trackClients := base.LLMSelectionActive(input.LLMClient, rt.AgentConfig.LLMSelector)
 	iterationsExtended := false
 	if input.circuitBreaker == nil {
 		input.circuitBreaker = base.NewCircuitBreaker(rt.AgentConfig.ErrorControl)
@@ -458,7 +463,7 @@ func (rt *RestateRuntime) executeAgentLoop(ctx restatesdk.Context, input AgentLo
 			return nil, err
 		}
 
-		llmResult, usedFB, err := rt.executeLLMStepWithErrorControl(ctx, input, policies.LLM, base.ExecuteLLMInput{
+		llmIn := base.ExecuteLLMInput{
 			Logger:           log,
 			AgentName:        agentName,
 			MessageID:        messageID,
@@ -469,7 +474,9 @@ func (rt *RestateRuntime) executeAgentLoop(ctx restatesdk.Context, input AgentLo
 			MemoryContext:    memoryContext,
 			RetrieverContext: retrieverContext,
 			Tools:            input.Tools,
-		}, iter, "", useFallback)
+		}
+		sel.Apply(&llmIn, input.SubAgentDepth, llmUsage, false)
+		llmResult, usedFB, err := rt.executeLLMStepWithErrorControl(ctx, input, policies.LLM, llmIn, iter, "", useFallback)
 		if err != nil {
 			return nil, err
 		}
@@ -477,7 +484,9 @@ func (rt *RestateRuntime) executeAgentLoop(ctx restatesdk.Context, input AgentLo
 			useFallback = true
 		}
 		telemetry.Run.TotalLLMCalls++
+		base.NoteLLMClientCall(telemetry, trackClients, llmResult.LLMClientName)
 		llmUsage = base.MergeLLMUsage(llmUsage, llmResult.Usage)
+		sel = sel.After(rt.AgentConfig.LLMSelector, input.LLMClient, llmResult.LLMClientName)
 		if budgetErr := rt.checkBudget(ctx, budgetTracker, enforceBudget, telemetry, llmResult.Usage, emit); budgetErr != nil {
 			return &AgentLoopResult{Content: lastContent, LLMUsage: llmUsage, Telemetry: telemetry}, budgetErr
 		}
@@ -515,7 +524,7 @@ func (rt *RestateRuntime) executeAgentLoop(ctx restatesdk.Context, input AgentLo
 				if idErr != nil {
 					return nil, idErr
 				}
-				llmResult, _, err = rt.executeLLMStepWithErrorControl(ctx, input, policies.LLM, base.ExecuteLLMInput{
+				finalIn := base.ExecuteLLMInput{
 					Logger:           log,
 					AgentName:        agentName,
 					MessageID:        finalMsgID,
@@ -526,10 +535,13 @@ func (rt *RestateRuntime) executeAgentLoop(ctx restatesdk.Context, input AgentLo
 					MemoryContext:    memoryContext,
 					RetrieverContext: retrieverContext,
 					Tools:            input.Tools,
-				}, iter, "final-", useFallback)
+				}
+				sel.Apply(&finalIn, input.SubAgentDepth, llmUsage, true)
+				llmResult, _, err = rt.executeLLMStepWithErrorControl(ctx, input, policies.LLM, finalIn, iter, "final-", useFallback)
 				if err != nil {
 					return nil, fmt.Errorf("llm final call (iter %d): %w", iter, err)
 				}
+				base.NoteLLMClientCall(telemetry, trackClients, llmResult.LLMClientName)
 				llmUsage = base.MergeLLMUsage(llmUsage, llmResult.Usage)
 				if budgetErr := rt.checkBudget(ctx, budgetTracker, enforceBudget, telemetry, llmResult.Usage, emit); budgetErr != nil {
 					return &AgentLoopResult{Content: lastContent, LLMUsage: llmUsage, Telemetry: telemetry}, budgetErr
@@ -714,7 +726,7 @@ func (rt *RestateRuntime) executeLLMStepWithErrorControl(
 	if err == nil {
 		return result, useFallback, nil
 	}
-	if errors.Is(err, types.ErrGuardrailBlocked) {
+	if errors.Is(err, types.ErrGuardrailBlocked) || base.IsLLMSelectAbort(err) {
 		return nil, useFallback, err
 	}
 	if useFallback {

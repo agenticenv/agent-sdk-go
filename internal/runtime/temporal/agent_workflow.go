@@ -83,7 +83,10 @@ type AgentWorkflowInput struct {
 	SubAgentDepth    int                                  `json:"sub_agent_depth,omitempty"`
 	SubAgentRoutes   map[string]SubAgentRoute             `json:"sub_agent_routes,omitempty"`
 	MaxSubAgentDepth int                                  `json:"max_sub_agent_depth,omitempty"`
-	State            *AgentWorkflowState                  `json:"state,omitempty"`
+	// LLMClient is a WithNamedLLMClients name for this run. Empty leaves the selector or primary.
+	// Not copied onto a child workflow.
+	LLMClient string              `json:"llm_client,omitempty"`
+	State     *AgentWorkflowState `json:"state,omitempty"`
 }
 
 // AgentWorkflowState is the state of the agent workflow.
@@ -101,6 +104,12 @@ type AgentWorkflowState struct {
 	BudgetWatermarkCostUSD float64 `json:"budget_watermark_cost_usd,omitempty"`
 	// UseFallbackLLM is true after OnLLMFailure selected FallbackModel; later LLM activities use the named client.
 	UseFallbackLLM bool `json:"use_fallback_llm,omitempty"`
+	// LLMSelectionPinned keeps LLMClientName for later calls, including across continue-as-new.
+	// Pinned with an empty LLMClientName selects the primary client.
+	LLMSelectionPinned bool `json:"llm_selection_pinned,omitempty"`
+	// LLMClientName is the pinned client, or the previous client when the run is not pinned.
+	// Empty means the primary client.
+	LLMClientName string `json:"llm_client_name,omitempty"`
 	// IterationsExtended is true after one OnMaxIterationsExceeded grant (hard cap).
 	IterationsExtended bool `json:"iterations_extended,omitempty"`
 	// ExtraIterations is the granted extra rounds so ContinueAsNew restores the raised bound.
@@ -164,27 +173,34 @@ type AgentMemoryStoreInput struct {
 // StreamWorkflowID is the Temporal workflow ID of the stream the activity publishes events to;
 // empty disables activity-side event publishing (non-streaming / non-approval runs).
 type AgentLLMInput struct {
-	AgentName        string               `json:"agent_name,omitempty"`
-	ConversationID   string               `json:"conversation_id,omitempty"`
-	Messages         []interfaces.Message `json:"messages,omitempty"`
-	SkipTools        bool                 `json:"skip_tools,omitempty"`
-	AgentFingerprint string               `json:"agent_fingerprint,omitempty"`
-	MessageID        string               `json:"message_id,omitempty"`
-	StreamWorkflowID string               `json:"stream_workflow_id,omitempty"`
-	MemoryContext    string               `json:"memory_context,omitempty"`
-	RetrieverContext string               `json:"retriever_context,omitempty"`
-	RunID            string               `json:"run_id,omitempty"`
-	Iteration        int                  `json:"iteration,omitempty"`
-	UseFallback      bool                 `json:"use_fallback,omitempty"`
+	AgentName          string               `json:"agent_name,omitempty"`
+	ConversationID     string               `json:"conversation_id,omitempty"`
+	Messages           []interfaces.Message `json:"messages,omitempty"`
+	SkipTools          bool                 `json:"skip_tools,omitempty"`
+	AgentFingerprint   string               `json:"agent_fingerprint,omitempty"`
+	MessageID          string               `json:"message_id,omitempty"`
+	StreamWorkflowID   string               `json:"stream_workflow_id,omitempty"`
+	MemoryContext      string               `json:"memory_context,omitempty"`
+	RetrieverContext   string               `json:"retriever_context,omitempty"`
+	RunID              string               `json:"run_id,omitempty"`
+	Iteration          int                  `json:"iteration,omitempty"`
+	UseFallback        bool                 `json:"use_fallback,omitempty"`
+	LLMSelectionPinned bool                 `json:"llm_selection_pinned,omitempty"`
+	LLMClientName      string               `json:"llm_client_name,omitempty"`
+	CurrentLLMClient   string               `json:"current_llm_client,omitempty"`
+	SubAgentDepth      int                  `json:"sub_agent_depth,omitempty"`
+	RunUsage           *interfaces.LLMUsage `json:"run_usage,omitempty"`
+	FinalCall          bool                 `json:"final_call,omitempty"`
 }
 
 // AgentLLMResult is the return value of AgentLLMActivity. Workflow uses it to decide: return content or execute tools.
 type AgentLLMResult struct {
-	Content      string               `json:"content"`
-	ToolCalls    []ToolCallRequest    `json:"tool_calls"`
-	Usage        *interfaces.LLMUsage `json:"usage,omitempty"`
-	RetryCount   int32                `json:"retry_count,omitempty"` // number of Temporal retries before this successful attempt (Attempt - 1)
-	UsedFallback bool                 `json:"used_fallback,omitempty"`
+	Content       string               `json:"content"`
+	ToolCalls     []ToolCallRequest    `json:"tool_calls"`
+	Usage         *interfaces.LLMUsage `json:"usage,omitempty"`
+	RetryCount    int32                `json:"retry_count,omitempty"` // number of Temporal retries before this successful attempt (Attempt - 1)
+	UsedFallback  bool                 `json:"used_fallback,omitempty"`
+	LLMClientName string               `json:"llm_client_name,omitempty"`
 }
 
 // baseLLMResultToActivity converts a [base.LLMResult] (no JSON tags) to an [AgentLLMResult]
@@ -192,8 +208,9 @@ type AgentLLMResult struct {
 // so the two types stay independent (temporal adds JSON tags, base does not).
 func baseLLMResultToActivity(r *base.LLMResult) *AgentLLMResult {
 	out := &AgentLLMResult{
-		Content: r.Content,
-		Usage:   base.CloneLLMUsage(r.Usage),
+		Content:       r.Content,
+		Usage:         base.CloneLLMUsage(r.Usage),
+		LLMClientName: r.LLMClientName,
 	}
 	for _, tc := range r.ToolCalls {
 		out.ToolCalls = append(out.ToolCalls, ToolCallRequest{
@@ -513,6 +530,8 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 	}
 	telemetry := input.State.Telemetry
 	useFallback := input.State.UseFallbackLLM
+	sel := base.RestoreLLMCallSelection(input.LLMClient, input.State.LLMSelectionPinned, input.State.LLMClientName)
+	trackClients := base.LLMSelectionActive(input.LLMClient, rt.AgentConfig.LLMSelector)
 	iterationsExtended := input.State.IterationsExtended
 	if input.State.ExtraIterations > 0 {
 		maxIter += input.State.ExtraIterations
@@ -614,6 +633,7 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 			RetrieverContext: retrieverContext,
 			UseFallback:      useFallback,
 		}
+		fillLLMSelection(&llmInput, sel, input.SubAgentDepth, llmUsage, false)
 
 		if useStreaming {
 			err = workflow.ExecuteActivity(streamActCtx, rt.AgentLLMStreamActivity, llmInput).Get(streamActCtx, &llmResult)
@@ -632,7 +652,9 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 
 		telemetry.Run.TotalLLMCalls++
 		telemetry.Run.LLMRetryCount += int64(llmResult.RetryCount)
+		base.NoteLLMClientCall(telemetry, trackClients, llmResult.LLMClientName)
 		llmUsage = base.MergeLLMUsage(llmUsage, llmResult.Usage)
+		sel = sel.After(rt.AgentConfig.LLMSelector, input.LLMClient, llmResult.LLMClientName)
 		if enforceBudget {
 			if budgetErr := budgetTracker.Add(llmResult.Usage); budgetErr != nil {
 				if stopErr := rt.handleBudgetExceeded(ctx, input, budgetTracker, telemetry, budgetErr.Error(), activityIDSuffix, streamWorkflowID, emitAgentEvent); stopErr != nil {
@@ -688,6 +710,7 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 				llmInput.MessageID = uuid.New().String()
 				llmInput.SkipTools = true
 				llmInput.UseFallback = useFallback
+				fillLLMSelection(&llmInput, sel, input.SubAgentDepth, llmUsage, true)
 				if useStreaming {
 					err = workflow.ExecuteActivity(streamActCtx, rt.AgentLLMStreamActivity, llmInput).Get(streamActCtx, &llmResult)
 				} else {
@@ -699,6 +722,7 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 					}
 					return nil, err
 				}
+				base.NoteLLMClientCall(telemetry, trackClients, llmResult.LLMClientName)
 				llmUsage = base.MergeLLMUsage(llmUsage, llmResult.Usage)
 				if enforceBudget {
 					if budgetErr := budgetTracker.Add(llmResult.Usage); budgetErr != nil {
@@ -978,6 +1002,7 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 			if originalMaxIter > 0 && maxIter > originalMaxIter {
 				extraGranted = maxIter - originalMaxIter
 			}
+			selPinned, selName := sel.StoredName()
 			input.State = &AgentWorkflowState{
 				Iteration:              iter + 1,
 				Messages:               messages,
@@ -988,6 +1013,8 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 				BudgetWatermarkTokens:  bwt,
 				BudgetWatermarkCostUSD: bwc,
 				UseFallbackLLM:         useFallback,
+				LLMSelectionPinned:     selPinned,
+				LLMClientName:          selName,
 				IterationsExtended:     iterationsExtended,
 				ExtraIterations:        extraGranted,
 				CircuitBreaker:         circuitBreakerStatePtr(circuitBreaker),
@@ -1634,14 +1661,36 @@ func (rt *TemporalRuntime) AgentMaxIterationsDecisionActivity(ctx context.Contex
 	}, input.AlreadyExtended, actLog), nil
 }
 
-func (rt *TemporalRuntime) runLLMActivity(ctx context.Context, input AgentLLMInput, executeLLMInput base.ExecuteLLMInput, stream bool) (*AgentLLMResult, error) {
-	client, err := rt.ResolveLLMClient(input.UseFallback)
-	if err != nil {
-		return nil, err
+// fillLLMSelection copies the run's client choice onto one LLM activity.
+func fillLLMSelection(in *AgentLLMInput, sel base.LLMCallSelection, depth int, usage *interfaces.LLMUsage, finalCall bool) {
+	if in == nil {
+		return
 	}
-	executeLLMInput.Client = client
+	in.LLMSelectionPinned = sel.Pinned
+	in.LLMClientName = sel.Name
+	in.CurrentLLMClient = sel.Current
+	in.SubAgentDepth = depth
+	in.RunUsage = base.CloneLLMUsage(usage)
+	in.FinalCall = finalCall
+}
+
+func (rt *TemporalRuntime) runLLMActivity(ctx context.Context, input AgentLLMInput, executeLLMInput base.ExecuteLLMInput, stream bool) (*AgentLLMResult, error) {
+	if input.UseFallback {
+		client, err := rt.ResolveLLMClient(true)
+		if err != nil {
+			return nil, err
+		}
+		executeLLMInput.Client = client
+	}
+	executeLLMInput.LLMSelectionPinned = input.LLMSelectionPinned
+	executeLLMInput.LLMClientName = input.LLMClientName
+	executeLLMInput.CurrentLLMClient = input.CurrentLLMClient
+	executeLLMInput.SubAgentDepth = input.SubAgentDepth
+	executeLLMInput.RunUsage = input.RunUsage
+	executeLLMInput.FinalCall = input.FinalCall
 
 	var result *base.LLMResult
+	var err error
 	if stream {
 		result, err = rt.ExecuteLLMStream(ctx, executeLLMInput)
 	} else {
@@ -1652,6 +1701,9 @@ func (rt *TemporalRuntime) runLLMActivity(ctx context.Context, input AgentLLMInp
 	}
 	if errors.Is(err, types.ErrGuardrailBlocked) {
 		return nil, guardrailActivityError(err)
+	}
+	if base.IsLLMSelectAbort(err) {
+		return nil, err
 	}
 	if input.UseFallback || !rt.llmActivityLastAttempt(ctx) {
 		return nil, err

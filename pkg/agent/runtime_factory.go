@@ -111,6 +111,7 @@ func (cfg *agentConfig) runtimeParams() *agentruntime.RuntimeParams {
 		ActionPolicyFingerprint:  actionPolicyFingerprint(cfg.actionPolicy),
 		NamedLLMFingerprint:      namedLLMClientsFingerprint(cfg.namedLLMClients),
 		ErrorControlFingerprint:  errorControlFingerprint(cfg.errorControl),
+		LLMSelectorFingerprint:   llmSelectorFingerprint(cfg.llmSelector),
 		AgentMode:                string(cfg.agentMode),
 		DisableLocalWorker:       cfg.disableLocalWorker,
 		DisableFingerprintCheck:  cfg.disableFingerprintCheck,

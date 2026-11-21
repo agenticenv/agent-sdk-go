@@ -105,6 +105,7 @@ These examples run with `AGENT_RUNTIME=local` (default), `AGENT_RUNTIME=temporal
 | `agent_with_reasoning` | Generic `interfaces.LLMReasoning` via `WithLLMSampling` — `Stream` to observe `thinking_delta` (e.g. Anthropic) | — |
 | `agent_with_budget` | Budget config via `WithBudget` — stop the run or pause for approval when the limit is reached | — |
 | `agent_with_error_control` | Error control via `WithErrorControl` — fallback LLM, extend iterations, circuit breaker; stub clients, no extra infra; **[README](agent_with_error_control/README.md)** | — |
+| `agent_with_model_selection` | Model selection via `WithLLMSelector` and per-run `LLMClient` — stub clients, no extra infra; **[README](agent_with_model_selection/README.md)** | — |
 | `agent_with_mcp_config` | MCP via `WithMCPConfig` — transport from env; **[README](agent_with_mcp_config/README.md)** | stdio: — (`.env.defaults`); remote MCP: manual |
 | `agent_with_mcp_client` | Same via `mcpclient.NewClient` + `WithMCPClients` — **[README](agent_with_mcp_client/README.md)** | same as `mcp_config` |
 | `agent_with_a2a_config` | Outbound A2A via `WithA2AConfig` — **`A2A_URL`**; **[README](agent_with_a2a_config/README.md)** | `infra:a2a:up` or external A2A (manual) |
@@ -307,6 +308,16 @@ go run ./agent_with_error_control
 ```
 
 See **[agent_with_error_control/README.md](agent_with_error_control/README.md)**. When using **`AGENT_RUNTIME=temporal`**, register the same named clients and error-control config on the worker.
+
+### Model selection (`WithLLMSelector`)
+
+Per-run `LLMClient`, a per-run selector for a sensitive prompt, and a per-call selector that uses a cheap client for tool rounds.
+
+```bash
+go run ./agent_with_model_selection
+```
+
+See **[agent_with_model_selection/README.md](agent_with_model_selection/README.md)**. When using **`AGENT_RUNTIME=temporal`**, register the same named clients and selector mode on the worker.
 
 ### Streaming + conversation (event handling pattern)
 

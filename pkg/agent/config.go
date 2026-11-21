@@ -189,7 +189,7 @@ type ObservabilityConfig struct {
 //     WithRetrieverExecutionConfig, WithMemoryExecutionConfig, WithConversationExecutionConfig, WithSubAgentExecutionConfig,
 //     WithObservabilityConfig, WithTracer, WithMetrics, WithLogs, WithHooks,
 //     WithGuardrail, WithGuardrailExecutionConfig, WithActionPolicy, WithActionPolicyExecutionConfig,
-//     WithNamedLLMClients, WithErrorControl
+//     WithNamedLLMClients, WithErrorControl, WithLLMSelector
 //
 // When [WithObservabilityConfig] is set and a signal is not disabled, [buildAgentConfig] replaces
 // [WithTracer], [WithMetrics], and [WithLogs] for that signal with OTLP clients built from the config.
@@ -282,6 +282,8 @@ type agentConfig struct {
 
 	// errorControl is optional error-control wiring (hooks, FallbackLLMClient, circuit breaker). Nil = disabled.
 	errorControl *ErrorControlConfig
+	// llmSelector chooses a named client per run or per call. Nil = primary client.
+	llmSelector *LLMSelectorConfig
 }
 
 // Default Run/Stream deadlines when [WithTimeout] is unset: shorter for interactive sessions,
@@ -351,6 +353,21 @@ func WithNamedLLMClients(clients map[string]interfaces.LLMClient) Option {
 			return
 		}
 		c.namedLLMClients = cloneNamedLLMClients(clients)
+	}
+}
+
+// WithLLMSelector chooses a named LLM client for each run, or for each LLM call when
+// Mode is [LLMSelectPerCall]. The name must be a [WithNamedLLMClients] key.
+// An empty name selects the primary [WithLLMClient]. Applies to Agent and AgentWorker.
+//
+// Error-control fallback still wins for the rest of a run after a model failure.
+// A per-run LLMClient option on Run or Stream wins over the selector for that run.
+// The selector function itself is not part of the Temporal fingerprint; whether a
+// selector is set, and its mode, are. Register the same mode on the starter and the worker.
+func WithLLMSelector(cfg LLMSelectorConfig) Option {
+	return func(c *agentConfig) {
+		cp := cfg
+		c.llmSelector = &cp
 	}
 }
 
@@ -954,6 +971,9 @@ func buildAgentConfig(opts []Option) (*agentConfig, error) {
 	if err := c.validateErrorControl(); err != nil {
 		return nil, err
 	}
+	if err := c.validateLLMSelector(); err != nil {
+		return nil, err
+	}
 
 	// Snapshot injected OTLP clients before observability may replace them (WithTracer / WithMetrics / WithLogs).
 	injectedTracerBeforeObs := c.tracer
@@ -1501,6 +1521,7 @@ func (c *agentConfig) runtimeAgentConfig() runtime.AgentConfig {
 			Client: c.LLMClient,
 		},
 		NamedLLMClients:    cloneNamedLLMClients(c.namedLLMClients),
+		LLMSelector:        c.llmSelector,
 		ToolApprovalPolicy: c.toolApprovalPolicy,
 		Retrievers: runtime.AgentRetrievers{
 			Retrievers: c.retrievers,
@@ -1655,6 +1676,21 @@ func (c *agentConfig) validateNamedLLMClients() error {
 		}
 	}
 	return nil
+}
+
+func (c *agentConfig) validateLLMSelector() error {
+	if c.llmSelector == nil {
+		return nil
+	}
+	if c.llmSelector.Select == nil {
+		return fmt.Errorf("WithLLMSelector: Select is required")
+	}
+	switch c.llmSelector.Mode {
+	case LLMSelectPerRun, LLMSelectPerCall:
+		return nil
+	default:
+		return fmt.Errorf("WithLLMSelector: invalid mode %d", c.llmSelector.Mode)
+	}
 }
 
 func (c *agentConfig) validateErrorControl() error {
@@ -1824,6 +1860,25 @@ type errorControlFpShot struct {
 	PatternWindowSize       int    `json:"pattern_window_size,omitempty"`
 	ResetAfterNs            int64  `json:"reset_after_ns,omitempty"`
 	HasCircuitBreaker       bool   `json:"has_circuit_breaker,omitempty"`
+}
+
+type llmSelectorFpShot struct {
+	Set  bool `json:"set"`
+	Mode int  `json:"mode"`
+}
+
+// llmSelectorFingerprint returns a stable digest of whether a selector is set and its mode.
+// The function body is not included. Empty when no selector is configured.
+func llmSelectorFingerprint(cfg *LLMSelectorConfig) string {
+	if cfg == nil || cfg.Select == nil {
+		return ""
+	}
+	b, err := json.Marshal(llmSelectorFpShot{Set: true, Mode: int(cfg.Mode)})
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }
 
 // errorControlFingerprint returns a stable digest of hook slots (not bodies),

@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/sdk/contrib/workflowstreams"
+	"go.temporal.io/sdk/converter"
 	temporalmocks "go.temporal.io/sdk/mocks"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
@@ -1581,4 +1582,84 @@ func TestGuardrailActivityError_PassesOtherErrors(t *testing.T) {
 	other := errors.New("down")
 	require.Equal(t, other, guardrailActivityError(other))
 	require.Nil(t, guardrailActivityError(nil))
+}
+
+func TestAgentWorkflow_PerRunPinOnNextActivity(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	rt := testRuntimeForWorkflow(t)
+	rt.AgentConfig.LLMSelector = &sdkruntime.LLMSelectorConfig{
+		Select: func(context.Context, sdkruntime.LLMSelectInfo) (string, error) { return "local", nil },
+	}
+
+	var inputs []AgentLLMInput
+	env.RegisterWorkflow(rt.AgentWorkflow)
+	env.OnActivity(rt.AgentLLMActivity, mock.Anything, mock.Anything).Return(func(ctx context.Context, in AgentLLMInput) (*AgentLLMResult, error) {
+		inputs = append(inputs, in)
+		if len(inputs) == 1 {
+			return &AgentLLMResult{
+				Content:       "using tool",
+				LLMClientName: "local",
+				ToolCalls:     []ToolCallRequest{testWorkflowToolCall("tc-sel", "echo", types.ToolKindNative, nil)},
+			}, nil
+		}
+		return &AgentLLMResult{Content: "kept local", LLMClientName: in.LLMClientName}, nil
+	})
+	env.OnActivity(rt.AgentToolAuthorizeActivity, mock.Anything, mock.Anything).Return(AgentToolAuthorizeResult{Allowed: true}, nil)
+	env.OnActivity(rt.AgentToolExecuteActivity, mock.Anything, mock.Anything).Return("ok", nil)
+
+	env.ExecuteWorkflow(rt.AgentWorkflow, AgentWorkflowInput{UserPrompt: "run"})
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	require.GreaterOrEqual(t, len(inputs), 2)
+	require.False(t, inputs[0].LLMSelectionPinned)
+	require.True(t, inputs[1].LLMSelectionPinned)
+	require.Equal(t, "local", inputs[1].LLMClientName)
+	require.Equal(t, "local", inputs[1].CurrentLLMClient)
+}
+
+func TestAgentWorkflow_PinSurvivesContinueAsNew(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	rt := testRuntimeForWorkflow(t)
+	rt.AgentConfig.LLMSelector = &sdkruntime.LLMSelectorConfig{
+		Select: func(context.Context, sdkruntime.LLMSelectInfo) (string, error) { return "local", nil },
+	}
+	env.SetCurrentHistoryLength(agentWorkflowHistoryLength)
+	env.RegisterWorkflow(rt.AgentWorkflow)
+	env.OnActivity(rt.AgentLLMActivity, mock.Anything, mock.Anything).Return(&AgentLLMResult{
+		Content:       "using tool",
+		LLMClientName: "local",
+		ToolCalls:     []ToolCallRequest{testWorkflowToolCall("tc-can", "echo", types.ToolKindNative, nil)},
+	}, nil)
+	env.OnActivity(rt.AgentToolAuthorizeActivity, mock.Anything, mock.Anything).Return(AgentToolAuthorizeResult{Allowed: true}, nil)
+	env.OnActivity(rt.AgentToolExecuteActivity, mock.Anything, mock.Anything).Return("ok", nil)
+
+	env.ExecuteWorkflow(rt.AgentWorkflow, AgentWorkflowInput{UserPrompt: "run"})
+	require.True(t, env.IsWorkflowCompleted())
+	wfErr := env.GetWorkflowError()
+	var can *workflow.ContinueAsNewError
+	require.ErrorAs(t, wfErr, &can)
+
+	var next AgentWorkflowInput
+	require.NoError(t, converter.GetDefaultDataConverter().FromPayloads(can.Input, &next))
+	require.NotNil(t, next.State)
+	require.True(t, next.State.LLMSelectionPinned)
+	require.Equal(t, "local", next.State.LLMClientName)
+
+	var suite2 testsuite.WorkflowTestSuite
+	env2 := suite2.NewTestWorkflowEnvironment()
+	rt2 := testRuntimeForWorkflow(t)
+	rt2.AgentConfig.LLMSelector = rt.AgentConfig.LLMSelector
+	var got AgentLLMInput
+	env2.RegisterWorkflow(rt2.AgentWorkflow)
+	env2.OnActivity(rt2.AgentLLMActivity, mock.Anything, mock.Anything).Return(func(ctx context.Context, in AgentLLMInput) (*AgentLLMResult, error) {
+		got = in
+		return &AgentLLMResult{Content: "resumed", LLMClientName: in.LLMClientName}, nil
+	})
+	env2.ExecuteWorkflow(rt2.AgentWorkflow, next)
+	require.True(t, env2.IsWorkflowCompleted())
+	require.NoError(t, env2.GetWorkflowError())
+	require.True(t, got.LLMSelectionPinned)
+	require.Equal(t, "local", got.LLMClientName)
 }

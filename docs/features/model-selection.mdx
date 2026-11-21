@@ -1,0 +1,76 @@
+---
+title: "Model Selection"
+description: "Pick a named LLM client for a run, or for each model call."
+---
+
+Use model selection when one agent should call more than one model you already configured. A gateway in front of [`WithLLMClient`](/getting-started/llm-providers) is a better fit when you only need one endpoint to load-balance, rotate keys, or fail over. Selection does not replace that.
+
+Register the extra clients with [`WithNamedLLMClients`](/getting-started/configuration). The primary client from `WithLLMClient` stays the default. Its name is the empty string.
+
+## Choose for one run
+
+Pass `LLMClient` on [`AgentRunOptions`](https://pkg.go.dev/github.com/agenticenv/agent-sdk-go/pkg/agent#AgentRunOptions) or [`AgentStreamOptions`](https://pkg.go.dev/github.com/agenticenv/agent-sdk-go/pkg/agent#AgentStreamOptions). That name is used for every model call in the run. An empty value does not override anything.
+
+```go
+agentRun, err := a.Run(ctx, prompt, &agent.AgentRunOptions{
+    LLMClient: "local",
+})
+```
+
+`Run` and `Stream` return an error before the run starts when the name is not in `WithNamedLLMClients`.
+
+## Choose inside the run
+
+[`WithLLMSelector`](/getting-started/configuration) runs your function and uses the name it returns. Return `""` to keep the primary client. Return an error, or a name that is not registered, and the run stops. That failure does not switch to an [error-control](/features/error-control) fallback.
+
+```go
+agent.WithLLMSelector(agent.LLMSelectorConfig{
+    Select: func(ctx context.Context, info agent.LLMSelectInfo) (string, error) {
+        if containsSensitive(info.Request) {
+            return "local", nil
+        }
+        return "", nil
+    },
+})
+```
+
+`info.Request` is the request about to be sent, after `BeforeLLM` hooks. Do not edit it here. Change the request from a `BeforeLLM` hook. `info.Usage` is token usage so far in this run, before the call about to be made. `info.Current` is the client that answered the previous call (`""` is the primary). `info.FinalCall` is true on the last no-tools call after `MaxIterations`.
+
+Two modes:
+
+| Mode | When the function runs | What sticks |
+|---|---|---|
+| `LLMSelectPerRun` (default) | The first model call | That client, including `""`, for the rest of the run |
+| `LLMSelectPerCall` | Before every model call, including the final no-tools call | Only that call |
+
+A per-run choice is kept if the process restarts. On Temporal and Restate, values you stored on `context.Context` are not available inside the selector. Pass what you need on `LLMSelectInfo` (the request, usage, iteration) or set `LLMClient` on the run.
+
+The function can run again when a model call is retried. Keep it fast and free of side effects.
+
+## What wins
+
+For each model call, the first match is used:
+
+1. Error-control fallback, after a model failure asks to switch for the rest of the run
+2. `LLMClient` on this `Run` or `Stream`
+3. The selector
+4. The primary client
+
+A sub-agent does not inherit the parent's `LLMClient`. Give each sub-agent its own named clients and selector.
+
+`AgentRunResult.Model` stays the primary client's model. When a selector is set, or the run passed `LLMClient`, `Telemetry.Run.LLMCallsByClient` counts calls by name. The empty key is the primary. Fallback calls are counted under the fallback name.
+
+## Limits
+
+- **One price in the budget.** [`MaxCostUSD`](/features/budget) uses the single prompt and completion rates on the agent, even when calls go to different models. Token limits stay exact.
+- **Per-call switching has a cost.** Moving between models can drop prompt caching, and a later model may not accept the previous model's reasoning blocks or tool-call ids.
+- **Temporal token streaming follows the primary client.** Whether `Stream` emits token deltas is still decided by the primary client's stream support, not by the client selected for a call.
+- **Same mode on starter and worker.** On Temporal, register `WithLLMSelector` on both processes with the same mode. The function body is not compared. See [Distributed execution](/advanced/distributed-execution).
+
+## Example
+
+<CardGroup cols={2}>
+  <Card title="Model Selection" icon="play" href="/examples/model-selection" horizontal>
+    Per-run override, sensitive prompts, cheap tool rounds
+  </Card>
+</CardGroup>

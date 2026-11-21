@@ -139,6 +139,12 @@ func WithErrorControlFingerprint(fp string) Option {
 	return func(rt *TemporalRuntime) { rt.errorControlFingerprint = fp }
 }
 
+// WithLLMSelectorFingerprint sets the model-selector digest used with [ComputeAgentFingerprint].
+// Must match pkg/agent llmSelectorFingerprint for the same WithLLMSelector wiring.
+func WithLLMSelectorFingerprint(fp string) Option {
+	return func(rt *TemporalRuntime) { rt.llmSelectorFingerprint = fp }
+}
+
 // WithToolsResolver sets the callback that resolves tools at activity time on the worker runtime.
 func WithToolsResolver(fn ToolsResolver) Option {
 	return func(rt *TemporalRuntime) { rt.resolveToolsFn = fn }

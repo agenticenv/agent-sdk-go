@@ -51,6 +51,13 @@ Example: [Simple Agent](https://docs.agenticenv.ai/examples/simple-agent.md)
 3. Branch `OnLLMFailure` with `errors.As(*interfaces.LLMError)` — do not parse `err.Error()`
 4. Example: [Error Control](https://docs.agenticenv.ai/examples/error-control.md)
 
+### Choose a model for a run
+
+1. Read [Model Selection](https://docs.agenticenv.ai/features/model-selection.md)
+2. Register extra clients with `WithNamedLLMClients`
+3. Set `LLMClient` on `Run` or `Stream` for one run, or `WithLLMSelector` to choose inside the run
+4. Example: [Model Selection](https://docs.agenticenv.ai/examples/model-selection.md)
+
 ### Stream to a UI
 
 1. Read [Streaming](https://docs.agenticenv.ai/getting-started/streaming.md)

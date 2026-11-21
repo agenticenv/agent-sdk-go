@@ -122,6 +122,8 @@ For **in-process** streaming, a stream error (rare) will still deliver a termina
 When using Temporal for crash-recovery, always save both the run ID and offset before processing each event. If your process crashes between reading an event and saving its offset, only that one event will replay on reconnect.
 </Note>
 
+`LLMClient` on [`AgentStreamOptions`](https://pkg.go.dev/github.com/agenticenv/agent-sdk-go/pkg/agent#AgentStreamOptions) sends this stream to a named client. See [Model Selection](/features/model-selection). On Temporal, token deltas still follow whether the primary client supports streaming.
+
 ## Disable LLM token streaming
 
 By default, `Stream` enables **LLM token streaming** — the model emits partial text as `TEXT_MESSAGE_CONTENT` deltas. Lifecycle events (tools, approvals, `RUN_FINISHED`, …) still stream either way.

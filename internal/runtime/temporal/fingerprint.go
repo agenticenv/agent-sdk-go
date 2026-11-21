@@ -79,6 +79,10 @@ type AgentFingerprintPayload struct {
 	// pkg/agent [errorControlFingerprint] on caller and worker.
 	ErrorControlFingerprint string `json:"error_control_fingerprint,omitempty"`
 
+	// LLMSelectorFingerprint is the pkg/agent digest of whether a model selector is set
+	// and its mode. The selector function is not included. Omitted when empty.
+	LLMSelectorFingerprint string `json:"llm_selector_fingerprint,omitempty"`
+
 	Sampling *sdkruntime.LLMSampling `json:"sampling,omitempty"`
 
 	SessionSize int `json:"session_size"`
@@ -250,5 +254,6 @@ func computeAgentFingerprintFromRuntime(rt *TemporalRuntime, tools []interfaces.
 		rt.guardrailsFingerprint,
 	)
 	mat.ActionPolicyFingerprint = rt.actionPolicyFingerprint
+	mat.LLMSelectorFingerprint = rt.llmSelectorFingerprint
 	return ComputeAgentFingerprint(mat)
 }

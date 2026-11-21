@@ -82,6 +82,7 @@ type TemporalRuntime struct {
 	actionPolicyFingerprint string
 	namedLLMFingerprint     string
 	errorControlFingerprint string
+	llmSelectorFingerprint  string
 
 	// disableLocalWorker mirrors pkg/agent DisableLocalWorker: when false, the client embeds a worker
 	// so Execute/ExecuteStream skip DescribeTaskQueue poller checks.
@@ -453,6 +454,7 @@ func (rt *TemporalRuntime) Run(ctx context.Context, req *runtime.RunRequest) (ru
 		SubAgentDepth:    0,
 		SubAgentRoutes:   buildSubAgentRoutes(req.SubAgents),
 		MaxSubAgentDepth: req.MaxSubAgentDepth,
+		LLMClient:        req.LLMClient,
 	}
 
 	if !rt.skipHasWorkersPrecheck() {
@@ -797,6 +799,7 @@ func (rt *TemporalRuntime) Stream(ctx context.Context, req *runtime.RunRequest) 
 		SubAgentDepth:    0,
 		SubAgentRoutes:   buildSubAgentRoutes(req.SubAgents),
 		MaxSubAgentDepth: req.MaxSubAgentDepth,
+		LLMClient:        req.LLMClient,
 	}
 
 	// Fail fast when no pollers are on the task queue (skipped for embedded local workers).

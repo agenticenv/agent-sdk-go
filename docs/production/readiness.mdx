@@ -56,7 +56,7 @@ See [Timeouts & Modes](/advanced/timeouts-and-modes) for the full failure behavi
 
 - **Distributed execution** — When using [`DisableLocalWorker`](/advanced/distributed-execution), run [`NewAgentWorker`](/advanced/distributed-execution) with **matching configuration** on a separate process. Streaming and approvals work across processes with no extra option — the agent subscribes to the run's event stream directly through the Temporal client.
 - **Distributed conversation** — Use Redis (not in-memory) for conversation when client and worker are split. Same config on both processes.
-- **Config fingerprint** — Keep task queue, tools, MCP/A2A setup, memory, hooks, named LLM clients, error-control (hook slots, fallback name, breaker thresholds), and observability config aligned. Avoid [`WithDisableFingerprintCheck`](/getting-started/configuration) in production.
+- **Config fingerprint** — Keep task queue, tools, MCP/A2A setup, memory, hooks, named LLM clients, error-control (hook slots, fallback name, breaker thresholds), model selection (selector set, and its mode), and observability config aligned. Avoid [`WithDisableFingerprintCheck`](/getting-started/configuration) in production.
 - **Integration tests** — Exercise approval and streaming paths with split processes before deploy.
 - **Workflow replay** — After upgrading the SDK module, confirm existing workflows still replay in your Temporal environment.
 

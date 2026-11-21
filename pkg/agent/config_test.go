@@ -61,6 +61,7 @@ func agentConfigFingerprintTools(c *agentConfig, tools []interfaces.Tool) string
 		guardrailsFingerprint(c.guardrails),
 	)
 	mat.ActionPolicyFingerprint = actionPolicyFingerprint(c.actionPolicy)
+	mat.LLMSelectorFingerprint = llmSelectorFingerprint(c.llmSelector)
 	return temporal.ComputeAgentFingerprint(mat)
 }
 

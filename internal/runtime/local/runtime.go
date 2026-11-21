@@ -251,6 +251,7 @@ func (rt *LocalRuntime) buildDurableRunInput(ctx context.Context, req *sdkruntim
 		MemoryScope:      memoryScope,
 		Budget:           rt.AgentConfig.Limits.Budget,
 		Requester:        req.Requester,
+		LLMClient:        req.LLMClient,
 	}
 }
 
@@ -298,6 +299,7 @@ func (rt *LocalRuntime) driveRun(runCtx context.Context, req *sdkruntime.RunRequ
 		Tools:            req.Tools,
 		BudgetTracker:    budgetTracker,
 		EnforceBudget:    budgetTracker != nil,
+		LLMClient:        req.LLMClient,
 		Action:           base.ActionRunContext{Requester: req.Requester},
 	})
 	if err != nil {
@@ -489,6 +491,7 @@ func (rt *LocalRuntime) driveStream(
 		Tools:            req.Tools,
 		BudgetTracker:    streamBudgetTracker,
 		EnforceBudget:    streamBudgetTracker != nil,
+		LLMClient:        req.LLMClient,
 		Action:           base.ActionRunContext{Requester: req.Requester},
 	})
 	if loopErr != nil {
