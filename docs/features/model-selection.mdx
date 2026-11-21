@@ -3,7 +3,7 @@ title: "Model Selection"
 description: "Pick a named LLM client for a run, or for each model call."
 ---
 
-Use model selection when one agent should call more than one model you already configured. A gateway in front of [`WithLLMClient`](/getting-started/llm-providers) is a better fit when you only need one endpoint to load-balance, rotate keys, or fail over. Selection does not replace that.
+Use model selection to route a run, or each model call, to a registered LLM client. Each client is a provider and a model you already configured. A gateway in front of [`WithLLMClient`](/getting-started/llm-providers) is a better fit when you only need one endpoint to load-balance, rotate keys, or fail over. Selection does not replace that.
 
 Register the extra clients with [`WithNamedLLMClients`](/getting-started/configuration). The primary client from `WithLLMClient` stays the default. Its name is the empty string.
 
