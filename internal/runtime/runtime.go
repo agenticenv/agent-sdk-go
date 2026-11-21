@@ -10,6 +10,7 @@ import (
 	"github.com/agenticenv/agent-sdk-go/internal/events"
 	"github.com/agenticenv/agent-sdk-go/internal/hooks"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
+	"github.com/agenticenv/agent-sdk-go/pkg/guardrail"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/memory"
 )
@@ -185,6 +186,7 @@ type AgentConfig struct {
 	Limits             AgentLimits
 	ExecutionConfigs   ExecutionConfigs
 	Hooks              []hooks.HookGroup
+	Guardrails         []guardrail.Guardrail
 	NamedLLMClients    map[string]interfaces.LLMClient
 	ErrorControl       *types.ErrorControlConfig
 }
@@ -272,6 +274,7 @@ type ExecutionPolicies struct {
 	Memory       ExecutionPolicy
 	Conversation ExecutionPolicy
 	SubAgent     ExecutionPolicy
+	Guardrail    ExecutionPolicy
 }
 
 // ExecutionConfig is a partial override for timeout and retry budget on one agent loop operation.
@@ -293,6 +296,7 @@ type ExecutionConfigs struct {
 	Memory       ExecutionConfig
 	Conversation ExecutionConfig
 	SubAgent     ExecutionConfig
+	Guardrail    ExecutionConfig
 }
 
 const (
@@ -313,6 +317,8 @@ const (
 	defaultConversationExecTimeout = 30 * time.Second
 	defaultConversationMaxAttempts = 1
 	defaultSubAgentMaxAttempts     = 1
+	defaultGuardrailExecTimeout    = 5 * time.Minute
+	defaultGuardrailMaxAttempts    = 3
 
 	defaultRetryInitialInterval    = time.Second
 	defaultRetryBackoffCoefficient = 2.0
@@ -332,6 +338,7 @@ func defaultExecutionConfigs() ExecutionConfigs {
 		Memory:       ExecutionConfig{Timeout: defaultMemoryExecTimeout, MaxAttempts: defaultMemoryMaxAttempts},
 		Conversation: ExecutionConfig{Timeout: defaultConversationExecTimeout, MaxAttempts: defaultConversationMaxAttempts},
 		SubAgent:     ExecutionConfig{MaxAttempts: defaultSubAgentMaxAttempts},
+		Guardrail:    ExecutionConfig{Timeout: defaultGuardrailExecTimeout, MaxAttempts: defaultGuardrailMaxAttempts},
 	}
 }
 
@@ -387,5 +394,6 @@ func ResolveExecutionPolicies(execConfigs ExecutionConfigs) ExecutionPolicies {
 		Memory:       resolveExecutionConfig(execConfigs.Memory, defaultConfigs.Memory).ToPolicy(),
 		Conversation: resolveExecutionConfig(execConfigs.Conversation, defaultConfigs.Conversation).ToPolicy(),
 		SubAgent:     resolveExecutionConfig(execConfigs.SubAgent, defaultConfigs.SubAgent).ToPolicy(),
+		Guardrail:    resolveExecutionConfig(execConfigs.Guardrail, defaultConfigs.Guardrail).ToPolicy(),
 	}
 }

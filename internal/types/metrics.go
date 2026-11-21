@@ -113,6 +113,10 @@ const (
 	MetricBudgetApprovalUnavailable = "agent.budget.approval.unavailable"
 	MetricBudgetApprovalExhausted   = "agent.budget.approval.exhausted"
 
+	// Runtime — one sample per guardrail evaluation. Action is allow, deny, modify, or error.
+	// The checked text is never an attribute.
+	MetricGuardrailEvaluated = "agent.guardrail.evaluated"
+
 	// Attribute keys used on both metrics and spans.
 	MetricAttrModel      = "model"
 	MetricAttrProvider   = "provider"
@@ -123,4 +127,9 @@ const (
 	MetricAttrMemoryDedup  = "memory.dedup"
 	MetricAttrBudgetKind   = "budget.kind"   // "tokens" or "cost_usd"
 	MetricAttrBudgetAction = "budget.action" // "stop_run" or "wait_for_approval"
+	MetricAttrGuardrail    = "guardrail"
+	// MetricAttrGuardrailStage is "input" or "output".
+	MetricAttrGuardrailStage = "guardrail.stage"
+	// MetricAttrGuardrailAction is allow, deny, modify, or error.
+	MetricAttrGuardrailAction = "guardrail.action"
 )

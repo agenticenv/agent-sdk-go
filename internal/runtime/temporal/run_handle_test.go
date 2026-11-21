@@ -336,6 +336,12 @@ func TestMapWorkflowError_BudgetExceeded(t *testing.T) {
 
 	require.Equal(t, context.Canceled, mapWorkflowError(context.Canceled))
 	require.Nil(t, mapWorkflowError(nil))
+
+	blocked := errors.New(`workflow: agent: guardrail blocked: "pii" (input): no secrets`)
+	require.ErrorIs(t, mapWorkflowError(blocked), types.ErrGuardrailBlocked)
+	require.ErrorIs(t, mapWorkflowError(types.ErrGuardrailBlocked), types.ErrGuardrailBlocked)
+	plain := errors.New(`agent: guardrail "pii" (input): evaluate: down`)
+	require.NotErrorIs(t, mapWorkflowError(plain), types.ErrGuardrailBlocked)
 }
 
 func TestRunHandle_Get_RemapsBudgetExceeded(t *testing.T) {

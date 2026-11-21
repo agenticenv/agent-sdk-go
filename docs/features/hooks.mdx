@@ -67,7 +67,9 @@ Every hook receives [`RunMeta`](https://pkg.go.dev/github.com/agenticenv/agent-s
 
 ### Guardrails and safety
 
-Block unsafe inputs before they reach the LLM and filter toxic outputs before they reach the user:
+For a check that redacts or stops the run, use [Guardrails](/features/guardrails). Guardrails run before hooks on the user prompt and after `AfterLLM` on the model response. `WithHooks("guardrails", ...)` is still a normal hook group.
+
+Hooks can also block unsafe inputs before they reach the LLM and filter outputs before they reach the user:
 
 ```go
 agent.WithHooks("safety", agent.AgentHooks{

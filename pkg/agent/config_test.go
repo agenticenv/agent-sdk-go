@@ -58,6 +58,7 @@ func agentConfigFingerprintTools(c *agentConfig, tools []interfaces.Tool) string
 		hookGroupsFingerprint(c.hooks),
 		namedLLMClientsFingerprint(c.namedLLMClients),
 		errorControlFingerprint(c.errorControl),
+		guardrailsFingerprint(c.guardrails),
 	))
 }
 

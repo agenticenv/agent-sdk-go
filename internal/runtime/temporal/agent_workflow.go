@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	agentrt "github.com/agenticenv/agent-sdk-go/internal/runtime"
 	"github.com/agenticenv/agent-sdk-go/internal/runtime/base"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
+	"github.com/agenticenv/agent-sdk-go/pkg/guardrail"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/google/uuid"
 	enumspb "go.temporal.io/api/enums/v1"
@@ -473,6 +475,22 @@ func (rt *TemporalRuntime) AgentWorkflow(ctx workflow.Context, input AgentWorkfl
 	}
 
 	useStreaming := input.StreamingEnabled && rt.AgentConfig.LLM.Client.IsStreamSupported()
+
+	// Input guardrails run once, before history is built. ContinueAsNew restores State,
+	// so the activity is not repeated; the modified prompt is already on the carried input.
+	if input.State == nil && rt.HasGuardrails(guardrail.StageInput) {
+		guardActCtx := workflow.WithActivityOptions(ctx, execActivityOptions(policies.Guardrail, "AgentGuardrailActivity_"+activityIDSuffix, false))
+		var guarded AgentGuardrailResult
+		if err := workflow.ExecuteActivity(guardActCtx, rt.AgentGuardrailActivity, AgentGuardrailInput{
+			AgentFingerprint: input.AgentFingerprint,
+			RunID:            input.RunID,
+			Stage:            string(guardrail.StageInput),
+			Text:             input.UserPrompt,
+		}).Get(guardActCtx, &guarded); err != nil {
+			return nil, err
+		}
+		input.UserPrompt = guarded.Text
+	}
 
 	// State restored after ContinueAsNew (iteration, messages, run telemetry).
 	if input.State == nil {
@@ -1433,6 +1451,50 @@ func (rt *TemporalRuntime) AgentMemoryStoreActivity(ctx context.Context, input A
 	})
 }
 
+// AgentGuardrailInput is the input to AgentGuardrailActivity.
+type AgentGuardrailInput struct {
+	AgentFingerprint string `json:"agent_fingerprint,omitempty"`
+	RunID            string `json:"run_id,omitempty"`
+	Stage            string `json:"stage,omitempty"`
+	Text             string `json:"text,omitempty"`
+}
+
+// AgentGuardrailResult is the text the rest of the run should use.
+type AgentGuardrailResult struct {
+	Text string `json:"text,omitempty"`
+}
+
+// AgentGuardrailActivity runs input guardrails on the worker. A deny is a non-retryable
+// GuardrailBlocked application error.
+func (rt *TemporalRuntime) AgentGuardrailActivity(ctx context.Context, input AgentGuardrailInput) (*AgentGuardrailResult, error) {
+	tools, err := rt.fetchTools(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := rt.verifyAgentFingerprint(ctx, input.AgentFingerprint, tools); err != nil {
+		return nil, err
+	}
+	text, err := rt.ApplyInputGuardrails(ctx, base.ApplyInputGuardrailsInput{
+		Logger:    newActivityLogger(activity.GetLogger(ctx)),
+		AgentName: strings.TrimSpace(rt.AgentSpec.Name),
+		RunID:     input.RunID,
+		Text:      input.Text,
+	})
+	if err != nil {
+		return nil, guardrailActivityError(err)
+	}
+	return &AgentGuardrailResult{Text: text}, nil
+}
+
+// guardrailActivityError converts a guardrail deny into a non-retryable Temporal application error.
+// Other errors are returned unchanged so the activity retry policy still applies.
+func guardrailActivityError(err error) error {
+	if err == nil || !errors.Is(err, types.ErrGuardrailBlocked) {
+		return err
+	}
+	return temporal.NewNonRetryableApplicationError(err.Error(), "GuardrailBlocked", nil)
+}
+
 // AgentLLMActivity calls the LLM and returns content plus any tool calls.
 // When input.ConversationID is set, fetches from store and adds assistant message on completion.
 // Events (e.g. reasoning) are published to the WorkflowStream when StreamWorkflowID is set.
@@ -1527,6 +1589,9 @@ func (rt *TemporalRuntime) runLLMActivity(ctx context.Context, input AgentLLMInp
 	}
 	if err == nil {
 		return rt.finishLLMActivityResult(ctx, result, input.UseFallback), nil
+	}
+	if errors.Is(err, types.ErrGuardrailBlocked) {
+		return nil, guardrailActivityError(err)
 	}
 	if input.UseFallback || !rt.llmActivityLastAttempt(ctx) {
 		return nil, err

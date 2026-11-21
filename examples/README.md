@@ -114,6 +114,7 @@ These examples run with `AGENT_RUNTIME=local` (default), `AGENT_RUNTIME=temporal
 | `agent_with_retriever` | **`weaviate/`** or **`pgvector/`**; **`RETRIEVER_MODE`** — **[README](agent_with_retriever/README.md)** | `infra:weaviate:up` or `infra:pgvector:up` |
 | `agent_with_memory` | **`weaviate/`** or **`pgvector/`** — **[README](agent_with_memory/README.md)**; `MEMORY_STORE_MODE=always\|ondemand` | `infra:weaviate:up` or `infra:pgvector:up` |
 | `agent_with_hooks` | All middleware hooks — PII scrubbing, retrieval filtering, memory tenant checks; **[README](agent_with_hooks/README.md)** | — |
+| `agent_with_guardrails` | Input and output guardrails — redact, length cap, and a custom deny; **[README](agent_with_guardrails/README.md)** | — |
 | `agent_with_execution_config` | Execution config — `WithLLMExecutionConfig`, `WithToolExecutionConfig`, `WithSubAgentExecutionConfig`; SDK defaults and partial overrides | — |
 | `agent_with_workflows` | Deterministic workflow execution via `run_workflow` tool — `WorkflowRunner` interface; `inprocess_runner.go` (default, no infra) and `temporal_runner.go` (`ORCHESTRATION_ENGINE=temporal`) | `infra:temporal:up`, `infra:temporal:wait` (Temporal engine only) |
 | `agent_with_code_execution` | Sandboxed code execution via `execute_code` tool — `SandboxRuntime` interface; `local_runner.go` (default, needs Python/Node) and `docker_runner.go` (`SANDBOX_ENV=docker`) | Docker (Docker runner only) |
@@ -228,6 +229,17 @@ go run ./agent_with_hooks "My email is alice@example.com. What is the return pol
 ```
 
 See **[agent_with_hooks/README.md](agent_with_hooks/README.md)**. When using **`AGENT_RUNTIME=temporal`**, register the same hook groups on both the agent starter and the worker. On Restate, hooks run in the process that serves the embedded endpoint.
+
+### Agent with guardrails
+
+Redacts Social Security numbers, caps the prompt length, and denies a prompt that contains `MODERATION_BLOCK`.
+
+```bash
+go run ./agent_with_guardrails
+go run ./agent_with_guardrails "My SSN is 123-45-6789. What is the return policy?"
+```
+
+See **[agent_with_guardrails/README.md](agent_with_guardrails/README.md)**. On Temporal, register the same guardrails in the same order on the starter and the worker.
 
 ### Streaming (partial content as tokens arrive)
 

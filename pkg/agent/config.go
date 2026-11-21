@@ -19,6 +19,7 @@ import (
 	"github.com/agenticenv/agent-sdk-go/internal/types"
 	agentruntime "github.com/agenticenv/agent-sdk-go/pkg/agent/runtime"
 	"github.com/agenticenv/agent-sdk-go/pkg/conversation"
+	"github.com/agenticenv/agent-sdk-go/pkg/guardrail"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
 	"github.com/agenticenv/agent-sdk-go/pkg/memory"
@@ -186,6 +187,7 @@ type ObservabilityConfig struct {
 //     WithLLMExecutionConfig, WithToolAuthExecutionConfig, WithToolExecutionConfig, WithMCPExecutionConfig, WithA2AExecutionConfig,
 //     WithRetrieverExecutionConfig, WithMemoryExecutionConfig, WithConversationExecutionConfig, WithSubAgentExecutionConfig,
 //     WithObservabilityConfig, WithTracer, WithMetrics, WithLogs, WithHooks,
+//     WithGuardrail, WithGuardrailExecutionConfig,
 //     WithNamedLLMClients, WithErrorControl
 //
 // When [WithObservabilityConfig] is set and a signal is not disabled, [buildAgentConfig] replaces
@@ -272,7 +274,8 @@ type agentConfig struct {
 	logs                interfaces.Logs
 
 	// Hooks: named middleware hook groups for the agent execution lifecycle.
-	hooks []hooks.HookGroup
+	hooks      []hooks.HookGroup
+	guardrails []guardrail.Guardrail
 
 	// errorControl is optional error-control wiring (hooks, FallbackLLMClient, circuit breaker). Nil = disabled.
 	errorControl *ErrorControlConfig
@@ -511,6 +514,13 @@ func WithSubAgentExecutionConfig(cfg ExecutionConfig) Option {
 	return func(c *agentConfig) { c.executionConfigs.SubAgent = cfg }
 }
 
+// WithGuardrailExecutionConfig overrides timeout and max attempts for the input guardrail step.
+// Zero fields keep the SDK default (Timeout: 5m, MaxAttempts: 3). Output guardrails run inside
+// the LLM step and use [WithLLMExecutionConfig]. Applies to Agent and AgentWorker.
+func WithGuardrailExecutionConfig(cfg ExecutionConfig) Option {
+	return func(c *agentConfig) { c.executionConfigs.Guardrail = cfg }
+}
+
 // DisableLocalWorker marks to skip local worker creation. Agent only. Use with NewAgentWorker.
 func DisableLocalWorker() Option {
 	return func(c *agentConfig) { c.disableLocalWorker = true }
@@ -725,11 +735,11 @@ func WithLogs(l interfaces.Logs) Option {
 // run correlation (see [RunMeta]). Can be called multiple times; each call appends a new group
 // that runs independently with its own [RunMeta].HooksGroup value, preserving declaration order.
 //
-// Use hooks to intercept and modify agent behavior at runtime — for example guardrails and PII
+// Use hooks to intercept and modify agent behavior at runtime — for example PII
 // scrubbing on [BeforeLLMHook]/[AfterLLMHook], tool input scrubbing on [BeforeToolHook]/[AfterToolHook],
 // retrieval filtering on [AfterRetrieveHook], and memory tenant isolation on
 // [BeforeMemoryLoadHook]/[BeforeMemoryStoreHook]. See [AgentHooks] for the full list of hook
-// points and common use cases.
+// points and common use cases. For input and output checks that end the run, use [WithGuardrail].
 func WithHooks(name string, agentHooks AgentHooks) Option {
 	return func(c *agentConfig) {
 		c.hooks = append(c.hooks, hooks.HookGroup{
@@ -746,6 +756,15 @@ func (c *agentConfig) mergedHooks() AgentHooks {
 		out = out.Merge(g.Hooks)
 	}
 	return out
+}
+
+// WithGuardrail appends guardrails in call order. Order is significant: a modify is the text
+// the next guardrail sees, and the first deny stops the run. Each guardrail runs only at the
+// stages it declares. Applies to Agent and AgentWorker.
+func WithGuardrail(gs ...guardrail.Guardrail) Option {
+	return func(c *agentConfig) {
+		c.guardrails = append(c.guardrails, gs...)
+	}
 }
 
 // otlpLogsClientConfigured reports whether logs holds a concrete OTLP [*observability.Logs] client
@@ -801,6 +820,9 @@ func buildAgentConfig(opts []Option) (*agentConfig, error) {
 		c.toolApprovalPolicy = RequireAllToolApprovalPolicy{}
 	}
 	if err := c.validateHookGroups(); err != nil {
+		return nil, err
+	}
+	if err := c.validateGuardrails(); err != nil {
 		return nil, err
 	}
 	// Runtime factory validation: only when the caller opts in via
@@ -1304,6 +1326,38 @@ func validateToolNames(tools []interfaces.Tool) error {
 	return nil
 }
 
+func (c *agentConfig) validateGuardrails() error {
+	seen := make(map[string]struct{}, len(c.guardrails))
+	for _, g := range c.guardrails {
+		if g == nil {
+			return errors.New("WithGuardrail: guardrail is nil")
+		}
+		name := g.Name()
+		if name == "" {
+			return errors.New("WithGuardrail: name is required")
+		}
+		if _, dup := seen[name]; dup {
+			return fmt.Errorf("WithGuardrail: duplicate guardrail name %q", name)
+		}
+		seen[name] = struct{}{}
+		stages := g.Stages()
+		if len(stages) == 0 {
+			return fmt.Errorf("WithGuardrail: %q has no stages", name)
+		}
+		stageSeen := make(map[guardrail.Stage]struct{}, len(stages))
+		for _, stage := range stages {
+			if stage != guardrail.StageInput && stage != guardrail.StageOutput {
+				return fmt.Errorf("WithGuardrail: %q has invalid stage %q", name, stage)
+			}
+			if _, dup := stageSeen[stage]; dup {
+				return fmt.Errorf("WithGuardrail: %q lists stage %q more than once", name, stage)
+			}
+			stageSeen[stage] = struct{}{}
+		}
+	}
+	return nil
+}
+
 func (c *agentConfig) validateHookGroups() error {
 	seen := make(map[string]struct{}, len(c.hooks))
 	for _, g := range c.hooks {
@@ -1431,6 +1485,7 @@ func (c *agentConfig) runtimeAgentConfig() runtime.AgentConfig {
 		},
 		ExecutionConfigs: c.executionConfigs,
 		Hooks:            c.runtimeHookGroups(),
+		Guardrails:       c.runtimeGuardrails(),
 		ErrorControl:     c.errorControl,
 	}
 	if c.llmSampling != nil {
@@ -1443,6 +1498,16 @@ func (c *agentConfig) runtimeAgentConfig() runtime.AgentConfig {
 		}
 	}
 	return d
+}
+
+// runtimeGuardrails copies configured guardrails onto the runtime view.
+func (c *agentConfig) runtimeGuardrails() []guardrail.Guardrail {
+	if len(c.guardrails) == 0 {
+		return nil
+	}
+	out := make([]guardrail.Guardrail, len(c.guardrails))
+	copy(out, c.guardrails)
+	return out
 }
 
 // runtimeHookGroups copies configured hook groups onto the runtime view.
@@ -1582,6 +1647,43 @@ func hookGroupsFingerprint(groups []hooks.HookGroup) string {
 	}
 	sort.Strings(names)
 	b, err := json.Marshal(names)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
+type guardrailFPShot struct {
+	Name   string   `json:"name"`
+	Stages []string `json:"stages"`
+}
+
+// guardrailsFingerprint returns a SHA-256 digest of guardrail names and stages in registration
+// order. Stages within one guardrail are sorted. Order of guardrails is not sorted, because it
+// changes modify results. Returns "" when none are configured. The check logic is not hashed —
+// on Temporal the starter and the worker must register the same guardrails in the same order.
+func guardrailsFingerprint(gs []guardrail.Guardrail) string {
+	if len(gs) == 0 {
+		return ""
+	}
+	shot := make([]guardrailFPShot, 0, len(gs))
+	for _, g := range gs {
+		if g == nil {
+			continue
+		}
+		stages := g.Stages()
+		sorted := make([]string, len(stages))
+		for i, stage := range stages {
+			sorted[i] = string(stage)
+		}
+		sort.Strings(sorted)
+		shot = append(shot, guardrailFPShot{Name: g.Name(), Stages: sorted})
+	}
+	if len(shot) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(shot)
 	if err != nil {
 		return ""
 	}

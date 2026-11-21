@@ -1,0 +1,104 @@
+---
+title: "Guardrails"
+description: "Check the user prompt once and each model response before the user sees it"
+---
+
+Guardrails check the user prompt and the model's text. Register them with [`WithGuardrail`](/getting-started/configuration). A deny ends the run. A modify replaces the text the rest of the run uses.
+
+Hooks still run. They do not see the original user prompt, and they cannot undo an output deny or an output modification. See [Hooks](/features/hooks) for tool arguments, tool results, retrieved documents, and memory.
+
+## Register
+
+```go
+redact, err := guardrail.RegexRedact("pii", `\b\d{3}-\d{2}-\d{4}\b`, "[ssn]", guardrail.StageInput, guardrail.StageOutput)
+if err != nil {
+    log.Fatal(err)
+}
+limit, err := guardrail.MaxLength("limit", 8000, guardrail.StageInput)
+if err != nil {
+    log.Fatal(err)
+}
+
+a, err := agent.NewAgent(
+    agent.WithLLMClient(llmClient),
+    agent.WithGuardrail(redact, limit),
+    agent.WithGuardrail(guardrail.New("moderation", moderate, guardrail.StageInput)),
+)
+```
+
+Order matters. A modify is the text the next guardrail sees, and the first deny stops the chain. Call `WithGuardrail` more than once to append.
+
+On Temporal, the starter and the worker must register the same guardrails in the same order.
+
+## What is checked
+
+The input stage runs once, before conversation history, memory recall, and retrieval. The model, the recall query, the retriever query, and anything persisted all see the modified prompt. An input deny writes nothing and does not call the model.
+
+The output stage runs on every model response, after your `AfterLLM` hooks. It is skipped when the response has tool calls and empty text. `Input.Final` is true when the response has no tool calls.
+
+`AfterLLM` hooks see the model's original text. A logging hook there records text that an output guardrail may still redact. Put that redaction in the hook when the log must be redacted too.
+
+Text a `BeforeLLM` hook writes into the request is not checked again. Input guardrails cover the user prompt.
+
+Each agent checks its own loop. A sub-agent's input stage sees the delegated query. Parent guardrails are not copied onto the child.
+
+## Decisions
+
+| Action | Result |
+|---|---|
+| Allow | The current text continues |
+| Modify | The returned text replaces the current text. It may be empty |
+| Deny | The run stops with [`agent.ErrGuardrailBlocked`](https://pkg.go.dev/github.com/agenticenv/agent-sdk-go/pkg/agent#ErrGuardrailBlocked) |
+
+```go
+if errors.Is(err, agent.ErrGuardrailBlocked) {
+    log.Printf("blocked: %v", err)
+}
+```
+
+`errors.Is(err, agent.ErrGuardrailBlocked)` works on the local, Temporal, and Restate runtimes. On the local runtime, `errors.As` also yields `*guardrail.Error` with the guardrail name, stage, and reason.
+
+A deny is not retried and is not sent to error-control fallback. If `Evaluate` returns an error, or the decision action is empty or unknown, the step fails and retries under that step's policy. That failure is not `ErrGuardrailBlocked`.
+
+An output-stage error retries the whole model call, so the model runs again. Keep output guardrails local, or make them handle their own retries.
+
+## Built-in checks
+
+All of these use the standard library. Pass `guardrail.StageInput`, `guardrail.StageOutput`, or both, except `JSON`, which is output only.
+
+| Constructor | Behavior |
+|---|---|
+| `RegexDeny(name, pattern, reason, stages...)` | Deny when the pattern matches. Empty and invalid patterns return an error |
+| `RegexRedact(name, pattern, replacement, stages...)` | Replace every match. Reason is `redacted`. An empty replacement erases the match |
+| `MaxLength(name, maxRunes, stages...)` | Deny when the text has more than `maxRunes` Unicode code points |
+| `DenyList(name, terms, stages...)` | Deny on a case-insensitive substring, in the order given. A term of `" "` is valid. An empty list or an empty term returns an error |
+| `JSON(name)` | Allow while the response still has tool calls. Deny a final response that is not JSON |
+
+The deny reasons for `MaxLength`, `DenyList`, and `JSON` do not include the user text.
+
+## Custom checks
+
+```go
+func moderate(ctx context.Context, in guardrail.Input) (guardrail.Decision, error) {
+    if in.Stage == guardrail.StageInput && blocked(ctx, in.Text) {
+        return guardrail.Deny("moderation"), nil
+    }
+    return guardrail.Allow(), nil
+}
+```
+
+`guardrail.New` does not check the function. A nil function fails the step when it runs. Guardrails must be safe for concurrent `Run` and `Stream` calls.
+
+## Streaming
+
+When any output guardrail is registered, assistant text is held and sent once, after the check. A modify is that one message. A deny sends no assistant text. Reasoning deltas still stream and are not checked.
+
+Input-only guardrails leave token streaming unchanged.
+
+## Timeouts
+
+`WithGuardrailExecutionConfig` sets the timeout and attempts for the input check. The default is 5 minutes and 3 attempts. Output checks run inside the model call and use `WithLLMExecutionConfig`.
+
+## Not checked
+
+Tool-call arguments, tool results, retrieved documents, memory context, the system prompt, and reasoning deltas are not checked. Use [hooks](/features/hooks) for those.

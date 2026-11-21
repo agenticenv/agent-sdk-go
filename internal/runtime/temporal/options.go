@@ -114,6 +114,13 @@ func WithHooksFingerprint(fp string) Option {
 	return func(rt *TemporalRuntime) { rt.hooksFingerprint = fp }
 }
 
+// WithGuardrailsFingerprint sets the guardrail name-and-stage digest used with [ComputeAgentFingerprint].
+// Must match pkg/agent [guardrailsFingerprint] for the same WithGuardrail wiring.
+// The starter and the worker must register the same guardrails in the same order.
+func WithGuardrailsFingerprint(fp string) Option {
+	return func(rt *TemporalRuntime) { rt.guardrailsFingerprint = fp }
+}
+
 // WithNamedLLMFingerprint sets the named LLM clients digest used with [ComputeAgentFingerprint].
 // Must match pkg/agent [namedLLMClientsFingerprint] for the same WithNamedLLMClients wiring.
 func WithNamedLLMFingerprint(fp string) Option {

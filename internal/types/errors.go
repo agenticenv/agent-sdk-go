@@ -1,6 +1,10 @@
 package types
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+	"strings"
+)
 
 // ErrTemporalDialTimeout is returned when the Temporal server connection cannot be established
 // within the configured dial timeout.
@@ -52,3 +56,20 @@ var ErrBudgetExceeded = errors.New("agent: per-run budget exceeded")
 // (e.g. no subscriber connected). This is a transient infrastructure failure, not a
 // budget denial. Callers may retry the run; the budget limit remains in effect.
 var ErrBudgetApprovalUnavailable = errors.New("agent: budget approval unavailable (stream not connected)")
+
+// ErrGuardrailBlocked is returned when a guardrail denies input or output.
+// The run stops. The error is not retried and is not passed to LLM failure handling.
+var ErrGuardrailBlocked = errors.New("agent: guardrail blocked")
+
+// RestoreGuardrailBlocked re-wraps ErrGuardrailBlocked when err's message contains the
+// sentinel text but the Go error chain was dropped (Temporal and Restate serialization).
+// A nil err, an err that already matches the sentinel, and any other err are returned unchanged.
+func RestoreGuardrailBlocked(err error) error {
+	if err == nil || errors.Is(err, ErrGuardrailBlocked) {
+		return err
+	}
+	if strings.Contains(err.Error(), ErrGuardrailBlocked.Error()) {
+		return fmt.Errorf("%w: %v", ErrGuardrailBlocked, err)
+	}
+	return err
+}

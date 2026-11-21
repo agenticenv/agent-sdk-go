@@ -22,6 +22,7 @@ import (
 	"github.com/agenticenv/agent-sdk-go/internal/runtime/base"
 	testutil "github.com/agenticenv/agent-sdk-go/internal/testing"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
+	"github.com/agenticenv/agent-sdk-go/pkg/guardrail"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces/mocks"
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
@@ -1518,4 +1519,66 @@ func TestAgentWorkflowCleanupActivity_RequiresClient(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "requires a Temporal client")
+}
+
+func TestAgentWorkflow_InputGuardrailRunsOnceAndSkipsContinueAsNew(t *testing.T) {
+	g := guardrail.New("in", func(context.Context, guardrail.Input) (guardrail.Decision, error) {
+		return guardrail.Allow(), nil
+	}, guardrail.StageInput)
+
+	var calls int
+	run := func(state *AgentWorkflowState) {
+		t.Helper()
+		var suite testsuite.WorkflowTestSuite
+		env := suite.NewTestWorkflowEnvironment()
+		rt := testRuntimeForWorkflow(t)
+		rt.AgentConfig.Guardrails = []guardrail.Guardrail{g}
+		env.RegisterWorkflow(rt.AgentWorkflow)
+		env.OnActivity(rt.AgentGuardrailActivity, mock.Anything, mock.Anything).Return(
+			func(context.Context, AgentGuardrailInput) (*AgentGuardrailResult, error) {
+				calls++
+				return &AgentGuardrailResult{Text: "safe prompt"}, nil
+			},
+		)
+		env.OnActivity(rt.AgentLLMActivity, mock.Anything, mock.Anything).Return(
+			func(_ context.Context, in AgentLLMInput) (*AgentLLMResult, error) {
+				if state == nil && (len(in.Messages) == 0 || in.Messages[0].Content != "safe prompt") {
+					t.Errorf("llm saw %#v", in.Messages)
+				}
+				return &AgentLLMResult{Content: "ok"}, nil
+			},
+		)
+		env.ExecuteWorkflow(rt.AgentWorkflow, AgentWorkflowInput{UserPrompt: "raw prompt", State: state})
+		require.True(t, env.IsWorkflowCompleted())
+		require.NoError(t, env.GetWorkflowError())
+	}
+
+	run(nil)
+	require.Equal(t, 1, calls)
+	run(&AgentWorkflowState{
+		Messages: []interfaces.Message{{Role: interfaces.MessageRoleUser, Content: "safe prompt"}},
+	})
+	require.Equal(t, 1, calls)
+}
+
+func TestAgentGuardrailActivity_BlockIsNonRetryable(t *testing.T) {
+	deny, err := guardrail.RegexDeny("pii", "secret", "no secrets", guardrail.StageInput)
+	require.NoError(t, err)
+	rt := testRuntimeForWorkflow(t)
+	rt.AgentConfig.Guardrails = []guardrail.Guardrail{deny}
+	actEnv := newActivityTestEnv(t)
+	actEnv.RegisterActivity(rt.AgentGuardrailActivity)
+	_, err = actEnv.ExecuteActivity(rt.AgentGuardrailActivity, AgentGuardrailInput{Text: "secret value"})
+	require.Error(t, err)
+	var appErr *temporal.ApplicationError
+	require.ErrorAs(t, err, &appErr)
+	require.True(t, appErr.NonRetryable())
+	require.Equal(t, "GuardrailBlocked", appErr.Type())
+	require.Contains(t, err.Error(), "agent: guardrail blocked")
+}
+
+func TestGuardrailActivityError_PassesOtherErrors(t *testing.T) {
+	other := errors.New("down")
+	require.Equal(t, other, guardrailActivityError(other))
+	require.Nil(t, guardrailActivityError(nil))
 }

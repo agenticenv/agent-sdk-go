@@ -3,16 +3,19 @@ package local
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/agenticenv/agent-sdk-go/internal/events"
+	"github.com/agenticenv/agent-sdk-go/internal/hooks"
 	sdkruntime "github.com/agenticenv/agent-sdk-go/internal/runtime"
 	"github.com/agenticenv/agent-sdk-go/internal/runtime/base"
 	testutil "github.com/agenticenv/agent-sdk-go/internal/testing"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
+	"github.com/agenticenv/agent-sdk-go/pkg/guardrail"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	ifmocks "github.com/agenticenv/agent-sdk-go/pkg/interfaces/mocks"
 	"github.com/agenticenv/agent-sdk-go/pkg/logger"
@@ -1316,3 +1319,229 @@ func (a authorizerStubLocal) Execute(_ context.Context, _ map[string]any) (any, 
 func (a authorizerStubLocal) Authorize(_ context.Context, _ map[string]any) (interfaces.ToolAuthorizationDecision, error) {
 	return interfaces.ToolAuthorizationDecision{Allow: a.allow, Reason: a.reason}, a.authErr
 }
+
+func TestExecuteAgentLoop_InputModifyReachesDownstream(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	conv := ifmocks.NewMockConversation(ctrl)
+	conv.EXPECT().ListMessages(gomock.Any(), "conv", gomock.Any()).Return(nil, nil)
+	var saved []interfaces.Message
+	conv.EXPECT().AddMessage(gomock.Any(), "conv", gomock.Any()).DoAndReturn(
+		func(_ context.Context, _ string, msg interfaces.Message) error {
+			saved = append(saved, msg)
+			return nil
+		},
+	).AnyTimes()
+
+	ret := ifmocks.NewMockRetriever(ctrl)
+	ret.EXPECT().Name().Return("kb").AnyTimes()
+	ret.EXPECT().Search(gomock.Any(), "redacted question").Return(nil, nil)
+
+	mem := &queryMemory{}
+	memCfg := memory.DefaultConfig(mem)
+	redact, err := guardrail.RegexRedact("pii", "secret", "redacted", guardrail.StageInput)
+	require.NoError(t, err)
+	client := &captureReqLLM{seqLLMClient: seqLLMClient{
+		responses: []*interfaces.LLMResponse{{Content: "ok"}},
+	}}
+	rt, err := NewLocalRuntime(
+		testNoDurability(),
+		WithLogger(logger.NoopLogger()),
+		WithAgentConfig(sdkruntime.AgentConfig{
+			LLM:        sdkruntime.AgentLLM{Client: client},
+			Session:    sdkruntime.AgentSession{Conversation: conv},
+			Memory:     sdkruntime.AgentMemory{Config: &memCfg},
+			Retrievers: sdkruntime.AgentRetrievers{Mode: types.RetrieverModePrefetch, Retrievers: []interfaces.Retriever{ret}},
+			Guardrails: []guardrail.Guardrail{redact},
+			Limits:     sdkruntime.AgentLimits{MaxIterations: 3, Timeout: 5 * time.Second},
+		}),
+	)
+	require.NoError(t, err)
+	_, err = rt.executeAgentLoop(context.Background(), AgentLoopInput{
+		UserPrompt:     "secret question",
+		ConversationID: "conv",
+		MemoryScope:    interfaces.MemoryScope{UserID: "u"},
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, client.reqs)
+	require.Contains(t, messageText(client.reqs[0].Messages), "redacted question")
+	require.NotContains(t, messageText(client.reqs[0].Messages), "secret")
+	require.Equal(t, []string{"redacted question"}, mem.queries)
+	var user string
+	for _, msg := range saved {
+		if msg.Role == interfaces.MessageRoleUser {
+			user = msg.Content
+		}
+	}
+	require.Equal(t, "redacted question", user)
+}
+
+func TestExecuteAgentLoop_InputDenyPersistsNothing(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	conv := ifmocks.NewMockConversation(ctrl)
+	deny, err := guardrail.RegexDeny("pii", "secret", "no", guardrail.StageInput)
+	require.NoError(t, err)
+	client := &seqLLMClient{responses: []*interfaces.LLMResponse{{Content: "ok"}}}
+	rt, err := NewLocalRuntime(
+		testNoDurability(),
+		WithLogger(logger.NoopLogger()),
+		WithAgentConfig(sdkruntime.AgentConfig{
+			LLM:        sdkruntime.AgentLLM{Client: client},
+			Session:    sdkruntime.AgentSession{Conversation: conv},
+			Guardrails: []guardrail.Guardrail{deny},
+			Limits:     sdkruntime.AgentLimits{MaxIterations: 3, Timeout: 5 * time.Second},
+		}),
+	)
+	require.NoError(t, err)
+	_, err = rt.executeAgentLoop(context.Background(), AgentLoopInput{
+		UserPrompt:     "secret",
+		ConversationID: "conv",
+	})
+	require.ErrorIs(t, err, types.ErrGuardrailBlocked)
+	require.Equal(t, 0, client.call)
+}
+
+func TestExecuteAgentLoop_OutputDenySkipsLLMFailure(t *testing.T) {
+	var failures int
+	deny, err := guardrail.RegexDeny("out", "bad", "no", guardrail.StageOutput)
+	require.NoError(t, err)
+	client := &seqLLMClient{responses: []*interfaces.LLMResponse{{Content: "bad answer"}}}
+	rt, err := NewLocalRuntime(
+		testNoDurability(),
+		WithLogger(logger.NoopLogger()),
+		WithAgentConfig(sdkruntime.AgentConfig{
+			LLM:        sdkruntime.AgentLLM{Client: client},
+			Guardrails: []guardrail.Guardrail{deny},
+			ErrorControl: &types.ErrorControlConfig{Hooks: types.AgentErrorHooks{
+				OnLLMFailure: func(context.Context, types.LLMFailureInfo) types.ErrorControlDecision {
+					failures++
+					return types.ErrorControlDecision{}
+				},
+			}},
+			Limits: sdkruntime.AgentLimits{MaxIterations: 3, Timeout: 5 * time.Second},
+		}),
+	)
+	require.NoError(t, err)
+	_, err = rt.executeAgentLoop(context.Background(), AgentLoopInput{UserPrompt: "hi"})
+	require.ErrorIs(t, err, types.ErrGuardrailBlocked)
+	require.Equal(t, 1, client.call)
+	require.Equal(t, 0, failures)
+}
+
+func TestExecuteAgentLoop_InputGuardrailOnceAcrossToolRounds(t *testing.T) {
+	var n int
+	g := guardrail.New("once", func(_ context.Context, in guardrail.Input) (guardrail.Decision, error) {
+		if in.Stage == guardrail.StageInput {
+			n++
+		}
+		return guardrail.Allow(), nil
+	}, guardrail.StageInput)
+	client := &seqLLMClient{responses: []*interfaces.LLMResponse{
+		{ToolCalls: []*interfaces.ToolCall{{ToolCallID: "c1", ToolName: "echo", Args: map[string]any{}}}},
+		{Content: "done"},
+	}}
+	rt, tools := newLoopRT(t, 4, client, stubTool{name: "echo", result: "ok"})
+	rt.AgentConfig.Guardrails = []guardrail.Guardrail{g}
+	_, err := runLoop(context.Background(), rt, tools, AgentLoopInput{UserPrompt: "go"})
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+	require.Equal(t, 2, client.call)
+}
+
+func TestExecuteAgentLoop_BeforeLLMSeesRedactedPrompt(t *testing.T) {
+	redact, err := guardrail.RegexRedact("pii", "secret", "redacted", guardrail.StageInput)
+	require.NoError(t, err)
+	var seen []string
+	client := &seqLLMClient{responses: []*interfaces.LLMResponse{
+		{ToolCalls: []*interfaces.ToolCall{{ToolCallID: "c1", ToolName: "echo", Args: map[string]any{}}}},
+		{Content: "done"},
+	}}
+	rt, tools := newLoopRT(t, 4, client, stubTool{name: "echo", result: "ok"})
+	rt.AgentConfig.Guardrails = []guardrail.Guardrail{redact}
+	rt.AgentConfig.Hooks = []hooks.HookGroup{{
+		Name: "see",
+		Hooks: hooks.AgentHooks{BeforeLLM: []hooks.BeforeLLMHook{
+			func(_ context.Context, in hooks.BeforeLLMHookInput) (hooks.BeforeLLMHookOutput, error) {
+				seen = append(seen, messageText(in.Request.Messages))
+				return hooks.BeforeLLMHookOutput{Request: in.Request}, nil
+			},
+		}},
+	}}
+	_, err = runLoop(context.Background(), rt, tools, AgentLoopInput{UserPrompt: "secret please"})
+	require.NoError(t, err)
+	require.Len(t, seen, 2)
+	for _, text := range seen {
+		require.Contains(t, text, "redacted please")
+		require.NotContains(t, text, "secret")
+	}
+}
+
+func TestExecuteAgentLoop_SubAgentGuardrailSeesDelegatedQuery(t *testing.T) {
+	var seen []string
+	child := guardrail.New("child", func(_ context.Context, in guardrail.Input) (guardrail.Decision, error) {
+		seen = append(seen, in.Text)
+		return guardrail.Allow(), nil
+	}, guardrail.StageInput)
+	childClient := &seqLLMClient{responses: []*interfaces.LLMResponse{{Content: "child done"}}}
+	childRT, _ := newLoopRT(t, 2, childClient)
+	childRT.AgentConfig.Guardrails = []guardrail.Guardrail{child}
+
+	parentClient := &seqLLMClient{responses: []*interfaces.LLMResponse{
+		{ToolCalls: []*interfaces.ToolCall{{
+			ToolCallID: "c1",
+			ToolName:   "research",
+			Args:       map[string]any{"query": "delegated question"},
+		}}},
+		{Content: "parent done"},
+	}}
+	parentRT, _ := newLoopRT(t, 3, parentClient, stubTool{name: "research", result: "unused"})
+	_, err := parentRT.executeAgentLoop(context.Background(), AgentLoopInput{
+		UserPrompt:       "parent prompt",
+		Tools:            []interfaces.Tool{stubTool{name: "research", result: "unused"}},
+		MaxSubAgentDepth: 2,
+		SubAgentRoutes: map[string]subAgentRoute{
+			"research": {name: "researcher", runtime: childRT},
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"delegated question"}, seen)
+}
+
+type captureReqLLM struct {
+	seqLLMClient
+	reqs []*interfaces.LLMRequest
+}
+
+func (c *captureReqLLM) Generate(ctx context.Context, req *interfaces.LLMRequest) (*interfaces.LLMResponse, error) {
+	if req != nil {
+		cp := *req
+		c.reqs = append(c.reqs, &cp)
+	}
+	return c.seqLLMClient.Generate(ctx, req)
+}
+
+func messageText(msgs []interfaces.Message) string {
+	var b strings.Builder
+	for _, msg := range msgs {
+		b.WriteString(msg.Content)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+type queryMemory struct {
+	queries []string
+}
+
+func (m *queryMemory) Store(context.Context, interfaces.MemoryScope, interfaces.MemoryRecord, ...interfaces.StoreMemoryOption) (string, error) {
+	return "id", nil
+}
+
+func (m *queryMemory) Load(_ context.Context, _ interfaces.MemoryScope, query string, _ ...interfaces.LoadMemoryOption) ([]interfaces.MemoryEntry, error) {
+	if query != "" {
+		m.queries = append(m.queries, query)
+		return []interfaces.MemoryEntry{{ID: "1", Text: "remembered"}}, nil
+	}
+	return nil, nil
+}
+
+func (m *queryMemory) Clear(context.Context, interfaces.MemoryScope) error { return nil }

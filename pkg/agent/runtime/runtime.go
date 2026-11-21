@@ -51,6 +51,7 @@ type RuntimeParams struct {
 	ObservabilityFingerprint string
 	RetrieverFingerprint     string
 	HooksFingerprint         string
+	GuardrailsFingerprint    string
 	NamedLLMFingerprint      string
 	ErrorControlFingerprint  string
 	AgentMode                string

@@ -107,6 +107,7 @@ func (cfg *agentConfig) runtimeParams() *agentruntime.RuntimeParams {
 		ObservabilityFingerprint: observabilityConfigFingerprint(cfg.observabilityConfig),
 		RetrieverFingerprint:     retrieverConfigFingerprint(cfg.retrieverMode, cfg.retrievers),
 		HooksFingerprint:         hookGroupsFingerprint(cfg.hooks),
+		GuardrailsFingerprint:    guardrailsFingerprint(cfg.guardrails),
 		NamedLLMFingerprint:      namedLLMClientsFingerprint(cfg.namedLLMClients),
 		ErrorControlFingerprint:  errorControlFingerprint(cfg.errorControl),
 		AgentMode:                string(cfg.agentMode),

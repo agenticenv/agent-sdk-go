@@ -45,7 +45,9 @@ flowchart LR
 
 **Capabilities** — plugged into the Runtime at construction. Tools, MCP servers, and A2A agents form the tool surface the LLM can call. Memory, Conversation, and Retrieval shape the context the LLM receives.
 
-**Hooks** — middleware callbacks that fire before and after LLM calls, tool execution, retrieval, and memory operations. Use them for logging, PII scrubbing, guardrails, and cost tracking without modifying agent logic. See [Hooks](/features/hooks).
+**Hooks** — middleware callbacks that fire before and after LLM calls, tool execution, retrieval, and memory operations. Use them for logging, PII scrubbing, and cost tracking without modifying agent logic. See [Hooks](/features/hooks).
+
+**Guardrails** — check the user prompt once, before history and retrieval, and check each model response after hooks. A deny stops the run. See [Guardrails](/features/guardrails).
 
 **Error control** — post-retry decisions: fallback LLM, extra iterations, and a per-tool circuit breaker. Separate from lifecycle hooks. See [Error Control](/features/error-control).
 

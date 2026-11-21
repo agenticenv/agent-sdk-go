@@ -5,6 +5,7 @@ import (
 
 	"github.com/agenticenv/agent-sdk-go/internal/hooks"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
+	"github.com/agenticenv/agent-sdk-go/pkg/guardrail"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 )
 
@@ -28,14 +29,34 @@ func (rt *Runtime) runBeforeLLMRequest(ctx context.Context, input ExecuteLLMInpu
 }
 
 func (rt *Runtime) runAfterLLMResponse(ctx context.Context, input ExecuteLLMInput, resp *interfaces.LLMResponse) error {
-	if resp == nil || len(rt.AgentConfig.Hooks) == 0 {
+	if resp == nil {
 		return nil
 	}
-	hooked, err := hooks.RunAfterLLM(ctx, rt.AgentConfig.Hooks, hookRunMeta(input.RunID, input.Iteration), *resp)
+	if len(rt.AgentConfig.Hooks) > 0 {
+		hooked, err := hooks.RunAfterLLM(ctx, rt.AgentConfig.Hooks, hookRunMeta(input.RunID, input.Iteration), *resp)
+		if err != nil {
+			return err
+		}
+		*resp = hooked
+	}
+	if !rt.HasGuardrails(guardrail.StageOutput) {
+		return nil
+	}
+	if len(resp.ToolCalls) > 0 && resp.Content == "" {
+		return nil
+	}
+	text, err := rt.evaluateGuardrails(ctx, input.Logger, guardrail.Input{
+		Stage:     guardrail.StageOutput,
+		Text:      resp.Content,
+		Final:     len(resp.ToolCalls) == 0,
+		AgentName: input.AgentName,
+		RunID:     input.RunID,
+		Iteration: input.Iteration,
+	})
 	if err != nil {
 		return err
 	}
-	*resp = hooked
+	resp.Content = text
 	return nil
 }
 
