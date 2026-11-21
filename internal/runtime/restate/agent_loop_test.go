@@ -236,7 +236,7 @@ func TestExecuteSingleTool_UnknownToolContinues(t *testing.T) {
 	ctx := mocks.NewMockContext(t)
 	res, err := rt.executeSingleTool(restatesdk.WithMockContext(ctx), AgentLoopInput{agentLoopCore: agentLoopCore{RunID: "r"}}, "mid", 0,
 		base.ToolCallRequest{ToolCallID: "tc", ToolName: "missing", ToolKind: types.ToolKindNative},
-		sdkruntime.ResolveExecutionPolicies(sdkruntime.ExecutionConfigs{}), func(events.AgentEvent) {})
+		sdkruntime.ResolveExecutionPolicies(sdkruntime.ExecutionConfigs{}), func(events.AgentEvent) {}, nil)
 	require.NoError(t, err)
 	require.Equal(t, base.UnknownToolMessage("missing"), res.message.Content)
 	require.False(t, res.failed)
@@ -257,7 +257,7 @@ func TestExecuteSingleTool_CircuitBreakerSkip(t *testing.T) {
 		circuitNow:     now,
 	}, "mid", 0,
 		base.ToolCallRequest{ToolCallID: "tc", ToolName: "echo", ToolKind: types.ToolKindNative, Args: map[string]any{"n": 1}},
-		sdkruntime.ResolveExecutionPolicies(sdkruntime.ExecutionConfigs{}), func(events.AgentEvent) {})
+		sdkruntime.ResolveExecutionPolicies(sdkruntime.ExecutionConfigs{}), func(events.AgentEvent) {}, nil)
 	require.NoError(t, err)
 	require.Equal(t, base.CircuitBreakerSkippedMessage("echo"), res.message.Content)
 	require.False(t, res.failed)

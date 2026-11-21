@@ -10,6 +10,7 @@ import (
 	"github.com/agenticenv/agent-sdk-go/internal/events"
 	"github.com/agenticenv/agent-sdk-go/internal/hooks"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
+	"github.com/agenticenv/agent-sdk-go/pkg/actionpolicy"
 	"github.com/agenticenv/agent-sdk-go/pkg/guardrail"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/memory"
@@ -128,8 +129,13 @@ type StreamHandle interface {
 
 	// Approve completes a tool approval request using the token from the approval event
 	// and the chosen status (e.g., [ApprovalStatusApproved] or [ApprovalStatusRejected]).
+	// A token issued under an action policy records the resolution as method human.
 	// Returns [ErrApprovalAlreadyResolved] when the token was already completed.
 	Approve(ctx context.Context, approvalToken string, status types.ApprovalStatus) error
+
+	// Resolve completes an action-policy pause with the full resolution.
+	// The token must be one issued under an action policy.
+	Resolve(ctx context.Context, approvalToken string, resolution types.ActionResolution) error
 
 	// Events subscribes to this run's event stream starting at fromOffset.
 	// fromOffset == 0 means from the beginning of the run (first-time subscriber).
@@ -187,6 +193,7 @@ type AgentConfig struct {
 	ExecutionConfigs   ExecutionConfigs
 	Hooks              []hooks.HookGroup
 	Guardrails         []guardrail.Guardrail
+	ActionPolicy       *actionpolicy.Config
 	NamedLLMClients    map[string]interfaces.LLMClient
 	ErrorControl       *types.ErrorControlConfig
 }
@@ -244,6 +251,8 @@ type RunRequest struct {
 	EventTypes       []events.AgentEventType `json:"event_types,omitempty"`
 	SubAgents        []*SubAgentSpec         `json:"sub_agents,omitempty"`
 	MaxSubAgentDepth int                     `json:"max_sub_agent_depth"`
+	// Requester is the caller captured at Agent.Run or Agent.Stream.
+	Requester actionpolicy.Requester `json:"requester,omitempty"`
 
 	// Tools is the registry-resolved tool list for this run.
 	Tools []interfaces.Tool `json:"-"`
@@ -275,6 +284,7 @@ type ExecutionPolicies struct {
 	Conversation ExecutionPolicy
 	SubAgent     ExecutionPolicy
 	Guardrail    ExecutionPolicy
+	ActionPolicy ExecutionPolicy
 }
 
 // ExecutionConfig is a partial override for timeout and retry budget on one agent loop operation.
@@ -297,6 +307,7 @@ type ExecutionConfigs struct {
 	Conversation ExecutionConfig
 	SubAgent     ExecutionConfig
 	Guardrail    ExecutionConfig
+	ActionPolicy ExecutionConfig
 }
 
 const (
@@ -319,6 +330,8 @@ const (
 	defaultSubAgentMaxAttempts     = 1
 	defaultGuardrailExecTimeout    = 5 * time.Minute
 	defaultGuardrailMaxAttempts    = 3
+	defaultActionPolicyExecTimeout = time.Minute
+	defaultActionPolicyMaxAttempts = 3
 
 	defaultRetryInitialInterval    = time.Second
 	defaultRetryBackoffCoefficient = 2.0
@@ -339,6 +352,7 @@ func defaultExecutionConfigs() ExecutionConfigs {
 		Conversation: ExecutionConfig{Timeout: defaultConversationExecTimeout, MaxAttempts: defaultConversationMaxAttempts},
 		SubAgent:     ExecutionConfig{MaxAttempts: defaultSubAgentMaxAttempts},
 		Guardrail:    ExecutionConfig{Timeout: defaultGuardrailExecTimeout, MaxAttempts: defaultGuardrailMaxAttempts},
+		ActionPolicy: ExecutionConfig{Timeout: defaultActionPolicyExecTimeout, MaxAttempts: defaultActionPolicyMaxAttempts},
 	}
 }
 
@@ -395,5 +409,6 @@ func ResolveExecutionPolicies(execConfigs ExecutionConfigs) ExecutionPolicies {
 		Conversation: resolveExecutionConfig(execConfigs.Conversation, defaultConfigs.Conversation).ToPolicy(),
 		SubAgent:     resolveExecutionConfig(execConfigs.SubAgent, defaultConfigs.SubAgent).ToPolicy(),
 		Guardrail:    resolveExecutionConfig(execConfigs.Guardrail, defaultConfigs.Guardrail).ToPolicy(),
+		ActionPolicy: resolveExecutionConfig(execConfigs.ActionPolicy, defaultConfigs.ActionPolicy).ToPolicy(),
 	}
 }

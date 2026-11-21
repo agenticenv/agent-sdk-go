@@ -61,6 +61,14 @@ var ErrBudgetApprovalUnavailable = errors.New("agent: budget approval unavailabl
 // The run stops. The error is not retried and is not passed to LLM failure handling.
 var ErrGuardrailBlocked = errors.New("agent: guardrail blocked")
 
+// ErrActionPolicyUnavailable is returned when a decision or outcome cannot be signed
+// or stored. The run stops. No tool in the failed gate batch is executed.
+var ErrActionPolicyUnavailable = errors.New("agent: action policy unavailable")
+
+// ErrIdentityUnverified is returned when a run requires a verified caller and the
+// caller is missing, unverified, or the verifier returns an error.
+var ErrIdentityUnverified = errors.New("agent: identity unverified")
+
 // RestoreGuardrailBlocked re-wraps ErrGuardrailBlocked when err's message contains the
 // sentinel text but the Go error chain was dropped (Temporal and Restate serialization).
 // A nil err, an err that already matches the sentinel, and any other err are returned unchanged.
@@ -70,6 +78,27 @@ func RestoreGuardrailBlocked(err error) error {
 	}
 	if strings.Contains(err.Error(), ErrGuardrailBlocked.Error()) {
 		return fmt.Errorf("%w: %v", ErrGuardrailBlocked, err)
+	}
+	return err
+}
+
+// RestoreActionPolicyUnavailable re-wraps ErrActionPolicyUnavailable when err's message
+// contains the sentinel text but the Go error chain was dropped.
+func RestoreActionPolicyUnavailable(err error) error {
+	return restoreSentinel(err, ErrActionPolicyUnavailable)
+}
+
+// RestoreIdentityUnverified re-wraps ErrIdentityUnverified when the error chain was dropped.
+func RestoreIdentityUnverified(err error) error {
+	return restoreSentinel(err, ErrIdentityUnverified)
+}
+
+func restoreSentinel(err, sentinel error) error {
+	if err == nil || errors.Is(err, sentinel) {
+		return err
+	}
+	if strings.Contains(err.Error(), sentinel.Error()) {
+		return fmt.Errorf("%w: %v", sentinel, err)
 	}
 	return err
 }

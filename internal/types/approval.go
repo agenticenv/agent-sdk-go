@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/agenticenv/agent-sdk-go/pkg/actionpolicy"
 )
 
 // maxApprovalTimeout caps how long a single approval wait may last in the run.
@@ -40,33 +42,73 @@ const (
 	ApprovalRequestNameTool     ApprovalRequestName = "tool_approval"
 	ApprovalRequestNameSubAgent ApprovalRequestName = "sub_agent_delegation"
 	ApprovalRequestNameBudget   ApprovalRequestName = "budget_approval"
+	ApprovalRequestNameDeferral ApprovalRequestName = "action_deferred"
 )
 
-// ApprovalRequest is one pending approval callback. Name + Value match CUSTOM semantics;
-// Value is a [ToolApprovalRequestValue], [SubAgentDelegationApprovalRequestValue], or [BudgetApprovalRequestValue].
-// Set Respond before invoking the handler.
+// ApprovalRequest is one pending approval callback. Name + Value match CUSTOM semantics.
+// Respond is always set. Resolve is set when an action policy issued the pause.
 type ApprovalRequest struct {
 	Name    ApprovalRequestName `json:"name,omitempty"`
 	Value   any                 `json:"value,omitempty"`
 	Respond ApprovalSender      `json:"-"`
+	Resolve ActionResolver      `json:"-"`
+}
+
+// ActionResolution closes a policy pause. Method is human, automated, timeout, or unavailable.
+// A deferred call approved with method human does not pause again for tool approval.
+type ActionResolution struct {
+	Status   ApprovalStatus `json:"status"`
+	Resolver string         `json:"resolver,omitempty"`
+	Method   string         `json:"method,omitempty"`
+	Note     string         `json:"note,omitempty"`
+}
+
+// ActionResolver completes one policy pause. Call it once.
+type ActionResolver func(ActionResolution) error
+
+// ActionApprovalInfo is the policy context included on an approval or deferral request.
+type ActionApprovalInfo struct {
+	Decision     actionpolicy.Result        `json:"decision,omitempty"`
+	Reason       string                     `json:"reason,omitempty"`
+	Rule         string                     `json:"rule,omitempty"`
+	Intent       string                     `json:"intent,omitempty"`
+	Requester    actionpolicy.Requester     `json:"requester"`
+	PriorActions []actionpolicy.PriorAction `json:"priorActions,omitempty"`
+	Labels       []string                   `json:"labels,omitempty"`
 }
 
 // ToolApprovalRequestValue is the JSON payload for tool approval (same wire shape as CUSTOM approval value).
 type ToolApprovalRequestValue struct {
-	AgentName       string         `json:"agentName,omitempty"`
-	ToolCallID      string         `json:"toolCallId,omitempty"`
-	ToolName        string         `json:"toolName"`
-	ToolDisplayName string         `json:"toolDisplayName,omitempty"`
-	Args            map[string]any `json:"args,omitempty"`
-	ApprovalToken   string         `json:"approvalToken,omitempty"`
+	AgentName       string              `json:"agentName,omitempty"`
+	ToolCallID      string              `json:"toolCallId,omitempty"`
+	ToolName        string              `json:"toolName"`
+	ToolDisplayName string              `json:"toolDisplayName,omitempty"`
+	Args            map[string]any      `json:"args,omitempty"`
+	ApprovalToken   string              `json:"approvalToken,omitempty"`
+	Policy          *ActionApprovalInfo `json:"policy,omitempty"`
 }
 
 // SubAgentDelegationApprovalRequestValue is the JSON payload for sub-agent delegation approval.
 type SubAgentDelegationApprovalRequestValue struct {
-	AgentName     string         `json:"agentName,omitempty"`
-	SubAgentName  string         `json:"subAgentName,omitempty"`
-	Args          map[string]any `json:"args,omitempty"`
-	ApprovalToken string         `json:"approvalToken,omitempty"`
+	AgentName     string              `json:"agentName,omitempty"`
+	SubAgentName  string              `json:"subAgentName,omitempty"`
+	Args          map[string]any      `json:"args,omitempty"`
+	ApprovalToken string              `json:"approvalToken,omitempty"`
+	Policy        *ActionApprovalInfo `json:"policy,omitempty"`
+}
+
+// ActionDeferredRequestValue is the payload for an action-policy deferral.
+// It carries the same tool identity as a tool approval, plus the policy reason and context.
+type ActionDeferredRequestValue struct {
+	AgentName       string              `json:"agentName,omitempty"`
+	ToolCallID      string              `json:"toolCallId,omitempty"`
+	ToolName        string              `json:"toolName"`
+	ToolDisplayName string              `json:"toolDisplayName,omitempty"`
+	Args            map[string]any      `json:"args,omitempty"`
+	ApprovalToken   string              `json:"approvalToken,omitempty"`
+	Reason          string              `json:"reason,omitempty"`
+	Rule            string              `json:"rule,omitempty"`
+	Policy          *ActionApprovalInfo `json:"policy,omitempty"`
 }
 
 // BudgetApprovalRequestValue is the JSON payload for a per-run budget approval.
@@ -142,4 +184,18 @@ func ParseBudgetApproval(req *ApprovalRequest) (BudgetApprovalRequestValue, erro
 		return BudgetApprovalRequestValue{}, errors.New("types: budget approval request has empty value")
 	}
 	return parseApprovalPayload[BudgetApprovalRequestValue](req.Value)
+}
+
+// ParseActionDeferred decodes Value for ApprovalRequestNameDeferral.
+func ParseActionDeferred(req *ApprovalRequest) (ActionDeferredRequestValue, error) {
+	if req == nil {
+		return ActionDeferredRequestValue{}, errors.New("types: nil approval request")
+	}
+	if req.Name != ApprovalRequestNameDeferral {
+		return ActionDeferredRequestValue{}, errors.New("types: not an action deferral request")
+	}
+	if req.Value == nil {
+		return ActionDeferredRequestValue{}, errors.New("types: action deferral request has empty value")
+	}
+	return parseApprovalPayload[ActionDeferredRequestValue](req.Value)
 }

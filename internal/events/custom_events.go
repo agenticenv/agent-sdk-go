@@ -49,6 +49,8 @@ const (
 	AgentCustomEventNameToolApproval       AgentCustomEventName = "tool_approval"
 	AgentCustomEventNameSubAgentDelegation AgentCustomEventName = "sub_agent_delegation"
 	AgentCustomEventNameBudget             AgentCustomEventName = "budget_approval"
+	AgentCustomEventNameActionDeferred     AgentCustomEventName = "action_deferred"
+	AgentCustomEventNameActionDecision     AgentCustomEventName = "action_decision"
 	// AgentCustomEventNameStepReplayed is emitted once per already-completed durable-go
 	// step when a LocalRuntime durable stream reconnects (GetStreamHandle) after a
 	// process restart. It is a coarse, step-granularity replay marker — not the original
@@ -77,6 +79,7 @@ type AgentCustomEventApprovalValue struct {
 	ToolDisplayName string         `json:"toolDisplayName,omitempty"`
 	Args            map[string]any `json:"args,omitempty"`
 	ApprovalToken   string         `json:"approvalToken,omitempty"`
+	Policy          any            `json:"policy,omitempty"`
 }
 
 func NewAgentCustomEventApprovalValue(toolName, approvalToken string) *AgentCustomEventApprovalValue {
@@ -95,6 +98,7 @@ type AgentCustomEventDelegationValue struct {
 	ToolCallID    string         `json:"toolCallId,omitempty"` // workflow-side ID; used for pending-approval tracking on Events/reconnect
 	Args          map[string]any `json:"args,omitempty"`
 	ApprovalToken string         `json:"approvalToken,omitempty"`
+	Policy        any            `json:"policy,omitempty"`
 }
 
 func NewAgentCustomEventDelegationValue(subAgentName, approvalToken string) *AgentCustomEventDelegationValue {
@@ -185,4 +189,24 @@ func ParseCustomEventStepReplayed(ev *AgentCustomEvent) (AgentCustomEventStepRep
 		return AgentCustomEventStepReplayedValue{}, fmt.Errorf("events: not a step-replayed custom event")
 	}
 	return parseCustomPayload[AgentCustomEventStepReplayedValue](ev)
+}
+
+// AgentCustomEventActionDecisionValue is the JSON shape for CUSTOM name=action_decision.
+type AgentCustomEventActionDecisionValue struct {
+	ToolCallID string `json:"toolCallId,omitempty"`
+	Result     string `json:"result,omitempty"`
+	Rule       string `json:"rule,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+	ReceiptID  string `json:"receiptId,omitempty"`
+}
+
+// ParseCustomEventActionDecision returns the typed value for CUSTOM name=action_decision.
+func ParseCustomEventActionDecision(ev *AgentCustomEvent) (AgentCustomEventActionDecisionValue, error) {
+	if ev == nil {
+		return AgentCustomEventActionDecisionValue{}, fmt.Errorf("events: nil custom event")
+	}
+	if ev.Name != string(AgentCustomEventNameActionDecision) {
+		return AgentCustomEventActionDecisionValue{}, fmt.Errorf("events: not an action decision custom event")
+	}
+	return parseCustomPayload[AgentCustomEventActionDecisionValue](ev)
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/agenticenv/agent-sdk-go/internal/runtime"
 	"github.com/agenticenv/agent-sdk-go/internal/store"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
+	"github.com/agenticenv/agent-sdk-go/pkg/actionpolicy"
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
 	"github.com/agenticenv/agent-sdk-go/pkg/memory"
 )
@@ -197,6 +198,10 @@ func (a *Agent) Run(ctx context.Context, input string, opts *AgentRunOptions) (A
 	if err != nil {
 		return nil, err
 	}
+	requester, err := a.callerForRun(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	start := time.Now()
 	ctx, sp := a.tracer.StartSpan(ctx, "agent.run",
@@ -206,7 +211,7 @@ func (a *Agent) Run(ctx context.Context, input string, opts *AgentRunOptions) (A
 	defer sp.End()
 	a.metrics.IncrementCounter(ctx, types.MetricRunStarted)
 
-	req := a.createRunRequest(input, conversationID, false, tools, subAgents)
+	req := a.createRunRequest(input, conversationID, false, tools, subAgents, requester)
 	rh, err := a.runtime.Run(ctx, req)
 	elapsed := float64(time.Since(start).Milliseconds())
 	if err != nil {
@@ -284,7 +289,14 @@ func (a *Agent) Stream(ctx context.Context, input string, opts *AgentStreamOptio
 	}
 
 	enableLLMStream := opts == nil || !opts.DisableTokenStreaming
-	req := a.createRunRequest(input, conversationID, enableLLMStream, tools, subAgents)
+	requester, err := a.callerForRun(ctx)
+	if err != nil {
+		sp.RecordError(err)
+		a.metrics.IncrementCounter(ctx, types.MetricStreamFailed, interfaces.Attribute{Key: "error", Value: "identity_unverified"})
+		a.metrics.RecordHistogram(ctx, types.MetricStreamDurationMs, float64(time.Since(start).Milliseconds()))
+		return nil, err
+	}
+	req := a.createRunRequest(input, conversationID, enableLLMStream, tools, subAgents, requester)
 	sh, err := a.runtime.Stream(ctx, req)
 	elapsed := float64(time.Since(start).Milliseconds())
 	if err != nil {
@@ -445,6 +457,7 @@ func (a *Agent) createRunRequest(
 	enableLLMStream bool,
 	tools []interfaces.Tool,
 	subAgents []*runtime.SubAgentSpec,
+	requester actionpolicy.Requester,
 ) *runtime.RunRequest {
 	return &runtime.RunRequest{
 		UserPrompt:       userPrompt,
@@ -453,7 +466,29 @@ func (a *Agent) createRunRequest(
 		SubAgents:        subAgents,
 		MaxSubAgentDepth: a.maxSubAgentDepth,
 		Tools:            tools,
+		Requester:        requester,
 	}
+}
+
+// callerForRun reads the requester once. A verifier replaces it. Delegated runs do not call this again.
+func (a *Agent) callerForRun(ctx context.Context) (actionpolicy.Requester, error) {
+	if a.actionPolicy == nil {
+		return actionpolicy.Requester{}, nil
+	}
+	requester, found := actionpolicy.RequesterFromContext(ctx)
+	cfg := a.actionPolicy.Resolved()
+	if cfg.IdentityVerifier != nil {
+		verified, err := cfg.IdentityVerifier.Verify(ctx, requester)
+		if err != nil {
+			return actionpolicy.Requester{}, fmt.Errorf("%w: %w", ErrIdentityUnverified, err)
+		}
+		requester = verified
+		found = true
+	}
+	if cfg.RequireVerifiedIdentity && (!found || !requester.Verified) {
+		return actionpolicy.Requester{}, ErrIdentityUnverified
+	}
+	return requester, nil
 }
 
 // resolveSubAgentSpecs builds the runtime-agnostic sub-agent spec tree for this agent.

@@ -120,6 +120,9 @@ type ExecuteToolInput struct {
 	ToolCallID string
 	RunID      string
 	Iteration  int
+	// Action is set when an action policy is active. executeTool records the
+	// outcome here and rechecks arguments a before-hook changed.
+	Action *ActionObservation
 }
 
 // IdempotencyKey returns a stable 32-char hex key for a tool invocation,

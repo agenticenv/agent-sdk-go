@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/agenticenv/agent-sdk-go/internal/types"
+	"github.com/agenticenv/agent-sdk-go/pkg/actionpolicy"
 )
 
 // ErrApprovalAlreadyResolved is returned by [AgentStream.Approve] (and the deprecated
@@ -42,6 +43,7 @@ const (
 	ApprovalRequestNameTool     = types.ApprovalRequestNameTool
 	ApprovalRequestNameSubAgent = types.ApprovalRequestNameSubAgent
 	ApprovalRequestNameBudget   = types.ApprovalRequestNameBudget
+	ApprovalRequestNameDeferral = types.ApprovalRequestNameDeferral
 )
 
 // ApprovalRequest describes a pending approval for [Agent.Run].
@@ -58,6 +60,21 @@ type SubAgentDelegationApprovalRequestValue = types.SubAgentDelegationApprovalRe
 
 // BudgetApprovalRequestValue is the decoded Value for budget approvals.
 type BudgetApprovalRequestValue = types.BudgetApprovalRequestValue
+
+// ActionResolution closes a pause issued under an action policy.
+type ActionResolution = types.ActionResolution
+
+// ActionDeferredRequestValue is the decoded value for an action deferral.
+type ActionDeferredRequestValue = types.ActionDeferredRequestValue
+
+// ErrActionPolicyUnavailable is returned when a decision or outcome cannot be signed or stored.
+var ErrActionPolicyUnavailable = types.ErrActionPolicyUnavailable
+
+// ErrIdentityUnverified is returned when the caller is missing or not verified.
+var ErrIdentityUnverified = types.ErrIdentityUnverified
+
+// ErrSessionConflict is returned when two runs commit the same conversation ledger.
+var ErrSessionConflict = actionpolicy.ErrSessionConflict
 
 // ParseToolApproval decodes Value when Name is [ApprovalRequestNameTool] (handles map[string]any from JSON).
 func ParseToolApproval(req *ApprovalRequest) (ToolApprovalRequestValue, error) {

@@ -65,6 +65,10 @@ type AgentFingerprintPayload struct {
 	// in the same order; the check bodies are not part of the digest.
 	GuardrailsFingerprint string `json:"guardrails_fingerprint,omitempty"`
 
+	// ActionPolicyFingerprint is the pkg/agent digest of the action policy identity and limits.
+	// Omitted when the agent has no action policy.
+	ActionPolicyFingerprint string `json:"action_policy_fingerprint,omitempty"`
+
 	// NamedLLMFingerprint is the pkg/agent digest of WithNamedLLMClients names plus each
 	// client's model/provider. Omitted when empty. Must match pkg/agent [namedLLMClientsFingerprint]
 	// on caller and worker.
@@ -245,5 +249,6 @@ func computeAgentFingerprintFromRuntime(rt *TemporalRuntime, tools []interfaces.
 		rt.errorControlFingerprint,
 		rt.guardrailsFingerprint,
 	)
+	mat.ActionPolicyFingerprint = rt.actionPolicyFingerprint
 	return ComputeAgentFingerprint(mat)
 }

@@ -98,8 +98,13 @@ type AgentStream interface {
 
 	// Approve completes a tool or delegation approval using the token from the CUSTOM approval
 	// event and the chosen status ([ApprovalStatusApproved] or [ApprovalStatusRejected]).
+	// A token issued under an action policy is recorded as a human resolution.
 	// Returns [ErrApprovalAlreadyResolved] when the token was already completed.
 	Approve(ctx context.Context, approvalToken string, status ApprovalStatus) error
+
+	// Resolve completes an action-policy pause with the caller, method, and note.
+	// The token must be one issued under an action policy.
+	Resolve(ctx context.Context, approvalToken string, resolution ActionResolution) error
 
 	// Events subscribes to the agent event stream and returns a receive-only channel.
 	// The channel is closed after the terminal lifecycle event (RUN_FINISHED / RUN_ERROR),
@@ -193,6 +198,15 @@ func (s *agentStream) Approve(ctx context.Context, approvalToken string, status 
 		return ErrRunNotFound
 	}
 	return s.sh.Approve(ctx, approvalToken, status)
+}
+
+// Resolve completes an action-policy pause. Approve remains valid for every token and
+// records a human resolution when the token was issued under a policy.
+func (s *agentStream) Resolve(ctx context.Context, approvalToken string, resolution ActionResolution) error {
+	if s.sh == nil {
+		return ErrRunNotFound
+	}
+	return s.sh.Resolve(ctx, approvalToken, resolution)
 }
 
 // Events resolves opts into an offset, then delegates to [runtime.StreamHandle.Events].

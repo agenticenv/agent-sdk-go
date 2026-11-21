@@ -65,6 +65,14 @@ func (h *streamHandle) Approve(ctx context.Context, approvalToken string, status
 	return h.rt.approve(ctx, approvalToken, status)
 }
 
+// Resolve completes an action-policy pause. The token must start with the action-policy prefix.
+func (h *streamHandle) Resolve(ctx context.Context, approvalToken string, resolution types.ActionResolution) error {
+	if h.rt == nil {
+		return fmt.Errorf("temporal: stream handle %q is not configured", h.id)
+	}
+	return h.rt.resolve(ctx, approvalToken, resolution)
+}
+
 // Events subscribes to this run's event stream starting at fromOffset.
 // fromOffset == 0 emits synthetic RUN_STARTED; fromOffset > 0 resumes after reconnect.
 // Returns [types.ErrRunNotFound] / [types.ErrRunAlreadyCompleted] from the

@@ -52,6 +52,7 @@ type RuntimeParams struct {
 	RetrieverFingerprint     string
 	HooksFingerprint         string
 	GuardrailsFingerprint    string
+	ActionPolicyFingerprint  string
 	NamedLLMFingerprint      string
 	ErrorControlFingerprint  string
 	AgentMode                string

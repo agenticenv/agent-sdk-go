@@ -873,7 +873,7 @@ func TestExecuteSingleTool_Approved(t *testing.T) {
 
 	emit, evs := captureEmit()
 	msg, err := rt.executeSingleTool(context.Background(), loopToolsInput(tools), "msg-1", 0, 0,
-		testToolCall("c1", "my-tool"), rt.executionPolicies(), emit)
+		testToolCall("c1", "my-tool"), rt.executionPolicies(), emit, nil)
 
 	require.NoError(t, err)
 	require.Equal(t, "hello", msg.message.Content)
@@ -891,7 +891,7 @@ func TestExecuteSingleTool_ToolExecError(t *testing.T) {
 	rt, tools := newLoopRT(t, 5, &seqLLMClient{}, tool)
 
 	msg, err := rt.executeSingleTool(context.Background(), loopToolsInput(tools), "msg", 0, 0,
-		testToolCall("c1", "boom"), rt.executionPolicies(), noopEmit)
+		testToolCall("c1", "boom"), rt.executionPolicies(), noopEmit, nil)
 	require.NoError(t, err) // tool errors become a content message, not a hard error
 	require.Contains(t, msg.message.Content, "exec failed")
 	require.True(t, msg.failed)
@@ -901,7 +901,7 @@ func TestExecuteSingleTool_UnknownToolContinues(t *testing.T) {
 	rt, _ := newLoopRT(t, 5, &seqLLMClient{}) // no tools registered
 
 	msg, err := rt.executeSingleTool(context.Background(), AgentLoopInput{}, "msg", 0, 0,
-		testToolCall("c1", "ghost"), rt.executionPolicies(), noopEmit)
+		testToolCall("c1", "ghost"), rt.executionPolicies(), noopEmit, nil)
 	require.NoError(t, err)
 	require.Equal(t, base.UnknownToolMessage("ghost"), msg.message.Content)
 	require.False(t, msg.failed)
@@ -926,7 +926,7 @@ func TestExecuteSingleTool_AuthorizationDenied(t *testing.T) {
 	rt, tools := newLoopRT(t, 5, &seqLLMClient{}, authTool)
 
 	msg, err := rt.executeSingleTool(context.Background(), loopToolsInput(tools), "msg", 0, 0,
-		testToolCall("c1", "restricted"), rt.executionPolicies(), noopEmit)
+		testToolCall("c1", "restricted"), rt.executionPolicies(), noopEmit, nil)
 	require.NoError(t, err)
 	require.Contains(t, msg.message.Content, msgToolUnauthorized)
 	require.False(t, msg.failed)
@@ -938,7 +938,7 @@ func TestExecuteSingleTool_AuthorizationError(t *testing.T) {
 	rt, tools := newLoopRT(t, 5, &seqLLMClient{}, authTool)
 
 	_, err := rt.executeSingleTool(context.Background(), loopToolsInput(tools), "msg", 0, 0,
-		testToolCall("c1", "err-tool"), rt.executionPolicies(), noopEmit)
+		testToolCall("c1", "err-tool"), rt.executionPolicies(), noopEmit, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "auth backend down")
 }
@@ -950,7 +950,7 @@ func TestExecuteSingleTool_ApprovalUnavailable(t *testing.T) {
 
 	msg, err := rt.executeSingleTool(context.Background(),
 		AgentLoopInput{ChannelName: "", ApprovalHandler: nil, Tools: tools}, "msg", 0, 0,
-		testToolCallNeedsApproval("c1", "guarded"), rt.executionPolicies(), noopEmit)
+		testToolCallNeedsApproval("c1", "guarded"), rt.executionPolicies(), noopEmit, nil)
 	require.NoError(t, err)
 	require.Contains(t, msg.message.Content, msgToolApprovalUnavailable)
 }
@@ -965,7 +965,7 @@ func TestExecuteSingleTool_ApprovalHandlerApproves(t *testing.T) {
 
 	msg, err := rt.executeSingleTool(context.Background(),
 		AgentLoopInput{ApprovalHandler: handler, Tools: tools}, "msg", 0, 0,
-		testToolCallNeedsApproval("c1", "guarded"), rt.executionPolicies(), noopEmit)
+		testToolCallNeedsApproval("c1", "guarded"), rt.executionPolicies(), noopEmit, nil)
 	require.NoError(t, err)
 	require.Equal(t, "ok", msg.message.Content)
 }
@@ -980,7 +980,7 @@ func TestExecuteSingleTool_ApprovalHandlerRejects(t *testing.T) {
 
 	msg, err := rt.executeSingleTool(context.Background(),
 		AgentLoopInput{ApprovalHandler: handler, Tools: tools}, "msg", 0, 0,
-		testToolCallNeedsApproval("c1", "guarded"), rt.executionPolicies(), noopEmit)
+		testToolCallNeedsApproval("c1", "guarded"), rt.executionPolicies(), noopEmit, nil)
 	require.NoError(t, err)
 	require.Equal(t, msgToolRejected, msg.message.Content)
 }
@@ -1032,6 +1032,7 @@ func TestExecuteSingleTool_StreamingApproveUnblocks(t *testing.T) {
 			testToolCallNeedsApproval("c1", "guarded"),
 			rt.executionPolicies(),
 			emit,
+			nil,
 		)
 	}()
 
@@ -1068,7 +1069,7 @@ func TestExecuteSingleTool_ApprovalTimeout(t *testing.T) {
 
 	_, err = rt.executeSingleTool(context.Background(),
 		AgentLoopInput{ChannelName: "some-channel", Tools: tools}, "msg", 0, 0,
-		testToolCallNeedsApproval("c1", "guarded"), rt.executionPolicies(), noopEmit)
+		testToolCallNeedsApproval("c1", "guarded"), rt.executionPolicies(), noopEmit, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "tool approval timed out")
 }
@@ -1088,7 +1089,7 @@ func TestExecuteSingleTool_ApprovalContextCancel(t *testing.T) {
 
 	_, err := rt.executeSingleTool(ctx,
 		AgentLoopInput{ChannelName: "some-channel", Tools: tools}, "msg", 0, 0,
-		testToolCallNeedsApproval("c1", "guarded"), rt.executionPolicies(), noopEmit)
+		testToolCallNeedsApproval("c1", "guarded"), rt.executionPolicies(), noopEmit, nil)
 
 	<-done
 	require.Error(t, err)

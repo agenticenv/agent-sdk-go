@@ -1,0 +1,17 @@
+---
+title: "Action policy"
+description: "Deny a tool, step up on a label, and verify the signed receipts"
+---
+
+`agent_with_action_policy` registers three rules and writes receipts as JSON lines.
+
+- A forbidden rule denies `shell`.
+- A contextual rule steps up when `refund` carries the `restricted` label.
+- Anything else is allowed.
+
+```bash
+go run ./agent_with_action_policy
+go run ./agent_with_action_policy verify receipts.jsonl
+```
+
+`verify` checks the signature and the hash chain with the public key printed at startup. On Temporal, register the same policy id, version, agent id, and key id on the starter and the worker.

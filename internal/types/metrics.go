@@ -132,4 +132,13 @@ const (
 	MetricAttrGuardrailStage = "guardrail.stage"
 	// MetricAttrGuardrailAction is allow, deny, modify, or error.
 	MetricAttrGuardrailAction = "guardrail.action"
+
+	// Runtime — one sample per action-policy decision. Attributes are result, tool, and rule.
+	MetricActionPolicyDecision    = "agent.action_policy.decision"
+	MetricActionPolicyDeferral    = "agent.action_policy.deferral"
+	MetricActionPolicyUnavailable = "agent.action_policy.unavailable"
+	MetricActionPolicyGateMs      = "agent.action_policy.gate_ms"
+
+	MetricAttrActionResult = "result"
+	MetricAttrActionRule   = "rule"
 )

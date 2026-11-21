@@ -9,6 +9,7 @@ import (
 
 	sdkruntime "github.com/agenticenv/agent-sdk-go/internal/runtime"
 	"github.com/agenticenv/agent-sdk-go/internal/types"
+	"github.com/agenticenv/agent-sdk-go/pkg/actionpolicy"
 )
 
 var _ sdkruntime.RunHandle = (*runHandle)(nil)
@@ -191,7 +192,7 @@ func (h *runHandle) awaitCompletion() {
 // isApplicationWorkflowError reports run-complete failures that Temporal
 // serializes as ApplicationError (Go error chain dropped).
 func isApplicationWorkflowError(err error) bool {
-	return errors.Is(err, types.ErrBudgetExceeded) || errors.Is(err, types.ErrBudgetApprovalUnavailable) || errors.Is(err, types.ErrGuardrailBlocked)
+	return errors.Is(err, types.ErrBudgetExceeded) || errors.Is(err, types.ErrBudgetApprovalUnavailable) || errors.Is(err, types.ErrGuardrailBlocked) || errors.Is(err, types.ErrActionPolicyUnavailable) || errors.Is(err, actionpolicy.ErrSessionConflict) || errors.Is(err, types.ErrIdentityUnverified)
 }
 
 // mapWorkflowError restores SDK sentinels lost when Temporal serializes workflow
@@ -208,6 +209,12 @@ func mapWorkflowError(err error) error {
 		return fmt.Errorf("%w: %v", types.ErrBudgetApprovalUnavailable, err)
 	case strings.Contains(msg, types.ErrGuardrailBlocked.Error()):
 		return types.RestoreGuardrailBlocked(err)
+	case strings.Contains(msg, types.ErrActionPolicyUnavailable.Error()):
+		return types.RestoreActionPolicyUnavailable(err)
+	case strings.Contains(msg, actionpolicy.ErrSessionConflict.Error()):
+		return actionpolicy.RestoreSessionConflict(err)
+	case strings.Contains(msg, types.ErrIdentityUnverified.Error()):
+		return types.RestoreIdentityUnverified(err)
 	}
 	return err
 }
