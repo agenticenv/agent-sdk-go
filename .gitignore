@@ -1,5 +1,7 @@
 dist/
 examples/.env
+examples/action-policy.pub
+examples/receipts.jsonl
 cli/config.yaml
 cli/bin/
 logs/
