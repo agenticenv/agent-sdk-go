@@ -1,13 +1,16 @@
 // Action policy example.
 //
 // shell is denied. refund is stepped up when it is labeled restricted.
-// Every other tool call is allowed. Receipts are appended to receipts.jsonl.
+// Every other tool call is allowed. Each run writes a fresh receipts.jsonl.
+// AutoToolApprovalPolicy disables the default require-all tool gate so Run
+// only pauses for action-policy step-up (via WithApprovalHandler).
 //
 //	go run ./agent_with_action_policy
 //	go run ./agent_with_action_policy verify receipts.jsonl
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto"
 	"crypto/ed25519"
@@ -75,7 +78,8 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	receipts, err := os.OpenFile("receipts.jsonl", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	// Truncate so each run's key matches a fresh ledger (verify fails on mixed keys).
+	receipts, err := os.OpenFile("receipts.jsonl", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}
@@ -86,6 +90,9 @@ func run() error {
 		agent.WithSystemPrompt("You can refund an order or refuse a shell command. Be concise."),
 		agent.WithLLMClient(llmClient),
 		agent.WithTools(tool{name: "shell"}, tool{name: "refund"}),
+		// Default is RequireAllToolApprovalPolicy; auto-approve so only StepUp pauses.
+		agent.WithToolApprovalPolicy(agent.AutoToolApprovalPolicy()),
+		agent.WithApprovalHandler(makeApprovalHandler()),
 		agent.WithActionPolicy(actionpolicy.Config{
 			Policy:  policy,
 			AgentID: "shop-agent",
@@ -152,6 +159,38 @@ func verify(path string) error {
 	}
 	fmt.Printf("verified %d receipts, head %s\n", len(receipts), head)
 	return nil
+}
+
+func makeApprovalHandler() agent.ApprovalHandler {
+	autoApprove := strings.EqualFold(strings.TrimSpace(os.Getenv("EXAMPLES_AUTO_APPROVE")), "true")
+	return func(_ context.Context, req *agent.ApprovalRequest) {
+		v, err := agent.ParseToolApproval(req)
+		if err != nil {
+			_ = req.Respond(agent.ApprovalStatusRejected)
+			return
+		}
+		label := v.ToolDisplayName
+		if label == "" {
+			label = v.ToolName
+		}
+		fmt.Printf("[action-policy] step-up for %s\n", label)
+		if autoApprove {
+			fmt.Println("[action-policy] EXAMPLES_AUTO_APPROVE=true — approving")
+			_ = req.Respond(agent.ApprovalStatusApproved)
+			return
+		}
+		fmt.Print("[action-policy] approve? (y/n): ")
+		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+		if err != nil {
+			_ = req.Respond(agent.ApprovalStatusRejected)
+			return
+		}
+		if strings.TrimSpace(strings.ToLower(line)) == "y" {
+			_ = req.Respond(agent.ApprovalStatusApproved)
+			return
+		}
+		_ = req.Respond(agent.ApprovalStatusRejected)
+	}
 }
 
 type tool struct{ name string }

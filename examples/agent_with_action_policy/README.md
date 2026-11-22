@@ -1,6 +1,8 @@
 # Action policy
 
-Denies `shell`. Steps up when `refund` is labeled `restricted`. Other tool calls are allowed. Receipts are appended to `receipts.jsonl`, and the public key is written to `action-policy.pub`.
+Denies `shell`. Steps up when `refund` is labeled `restricted` (prompts for approval). Other tool calls are allowed. Each run writes a fresh `receipts.jsonl` and `action-policy.pub`.
+
+`verify` only checks an existing ledger — it does not run the agent.
 
 ```bash
 go run ./agent_with_action_policy
